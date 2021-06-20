@@ -3,7 +3,7 @@ package user
 import (
 	"fmt"
 
-	"github.com/zond/juicemud/io"
+	"github.com/zond/juicemud/termio"
 	"golang.org/x/crypto/ssh/terminal"
 )
 
@@ -19,7 +19,7 @@ func CreateUser(term *terminal.Terminal) (*User, error) {
 		if err != nil {
 			return nil, err
 		}
-		selection, err = io.TerminalSelect(term, fmt.Sprintf("Username %q, correct?", username), []string{"y", "n", "abort"})
+		selection, err = termio.TerminalSelect(term, fmt.Sprintf("Username %q, correct?", username), []string{"y", "n", "abort"})
 		if err != nil {
 			return nil, err
 		}
