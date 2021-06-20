@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/asdine/storm"
 	"github.com/gliderlabs/ssh"
 	"github.com/zond/juicemud/game"
 	"github.com/zond/juicemud/pemfile"
@@ -55,7 +56,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	g := &game.Game{}
+	dbPath := filepath.Join(*dir, "storm.db")
+	db, err := storm.Open(dbPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g := &game.Game{
+		DB: db,
+	}
 
 	s := &ssh.Server{
 		Addr:    *iface,
@@ -63,6 +72,6 @@ func main() {
 	}
 	s.AddHostKey(signer)
 
-	log.Printf("Listening on %q with public key %q", *iface, gossh.FingerprintSHA256(signer.PublicKey()))
+	log.Printf("Serving %q on %q with public key %q", dbPath, *iface, gossh.FingerprintSHA256(signer.PublicKey()))
 	log.Fatal(s.ListenAndServe())
 }

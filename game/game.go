@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 
+	"github.com/asdine/storm"
 	"github.com/gliderlabs/ssh"
 	"github.com/zond/juicemud/termio"
 	"github.com/zond/juicemud/user"
@@ -12,19 +13,28 @@ import (
 )
 
 type Game struct {
+	DB *storm.DB
 }
 
 func (g *Game) loginUser(term *terminal.Terminal) error {
+	u, err := user.LoginUser(g.DB, term)
+	if err == user.UserLoginAborted {
+		return g.connect(term)
+	} else if err != nil {
+		return err
+	}
+	log.Printf("logged in %+v", u)
 	return nil
 }
 
 func (g *Game) createUser(term *terminal.Terminal) error {
-	_, err := user.CreateUser(term)
+	u, err := user.CreateUser(g.DB, term)
 	if err == user.UserCreationAborted {
 		return g.connect(term)
 	} else if err != nil {
 		return err
 	}
+	log.Printf("created %+v", u)
 	return nil
 }
 
