@@ -57,6 +57,12 @@ func main() {
 
 	g := &game.Game{}
 
+	s := &ssh.Server{
+		Addr:    *iface,
+		Handler: g.HandleSession,
+	}
+	s.AddHostKey(signer)
+
 	log.Printf("Listening on %q with public key %q", *iface, gossh.FingerprintSHA256(signer.PublicKey()))
-	log.Fatal(ssh.ListenAndServe(*iface, g.HandleSession), ssh.HostKeyPEM(pemBytes))
+	log.Fatal(s.ListenAndServe())
 }
