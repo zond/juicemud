@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 
 	"github.com/gliderlabs/ssh"
-	"github.com/timshannon/badgerhold"
+	"github.com/timshannon/badgerhold/v2"
 	"github.com/zond/juicemud/game"
 	"github.com/zond/juicemud/pemfile"
+	"github.com/zond/juicemud/storage"
 
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -73,7 +74,12 @@ func main() {
 	}
 	defer db.Close()
 
-	g := game.New(db)
+	storage, err := storage.New(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g := game.New(storage)
 
 	s := &ssh.Server{
 		Addr:    *iface,

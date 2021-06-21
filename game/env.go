@@ -6,8 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/timshannon/badgerhold"
+	"github.com/timshannon/badgerhold/v2"
 	"github.com/zond/juicemud/lang"
+	"github.com/zond/juicemud/storage"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ssh/terminal"
 )
@@ -19,11 +20,10 @@ var (
 
 // Represents the environment of a connected user.
 type Env struct {
-	Game     *Game
-	User     *User
-	Object   *Object
-	Term     *terminal.Terminal
-	Location *Object
+	Game   *Game
+	User   *storage.User
+	Object storage.Object
+	Term   *terminal.Terminal
 }
 
 func (e *Env) SelectExec(options map[string]func() error) error {
@@ -77,19 +77,20 @@ func (e *Env) Connect() error {
 			return err
 		}
 	}
-	e.Location = e.Game.Objects[e.Object.LocationID]
 	return e.Process()
 }
 
 func (e *Env) Process() error {
-	desc, err := e.Location.ShortDescription()
+	loc, err := e.Object.Location()
 	if err != nil {
-		fmt.Fprintln(e.Term, err.Error())
+		return err
 	}
-	if err := e.listLocationContent(); err != nil {
-		fmt.Fprintln(e.Term, err.Error())
+	sd, err := loc.ShortDescription()
+	if err != nil {
+		return err
 	}
-	fmt.Fprintf(e.Term, "%s\n\n", desc)
+	fmt.Fprintln(e.Term, sd)
+	e.listLocationContent()
 	for {
 		line, err := e.Term.ReadLine()
 		if err != nil {
@@ -123,7 +124,11 @@ func (e *Env) create([]string) error {
 }
 
 func (e *Env) listLocationContent() error {
-	content, err := e.Location.Content(e.Game.DB)
+	loc, err := e.Object.Location()
+	if err != nil {
+		return err
+	}
+	content, err := loc.Content()
 	if err != nil {
 		return err
 	}
@@ -142,21 +147,25 @@ func (e *Env) listLocationContent() error {
 }
 
 func (e *Env) look([]string) error {
-	shortDesc, err := e.Location.ShortDescription()
+	loc, err := e.Object.Location()
 	if err != nil {
-		fmt.Fprintln(e.Term, err.Error())
+		return err
 	}
-	longDesc, err := e.Location.LongDescription()
+	sd, err := loc.ShortDescription()
 	if err != nil {
-		fmt.Fprintln(e.Term, err.Error())
+		return err
 	}
-	fmt.Fprintf(e.Term, "%s\n\n%s\n\n", shortDesc, longDesc)
+	ld, err := loc.LongDescription()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(e.Term, "%s\n\n%s\n\n", sd, ld)
 	return e.listLocationContent()
 }
 
 func (e *Env) loginUser() error {
 	fmt.Fprint(e.Term, "** Login user **\n\n")
-	user := &User{}
+	var user *storage.User
 	for {
 		fmt.Fprint(e.Term, "Enter username or [abort]:\n")
 		username, err := e.Term.ReadLine()
@@ -166,7 +175,7 @@ func (e *Env) loginUser() error {
 		if username == "abort" {
 			return OperationAborted
 		}
-		if err = e.Game.DB.Get(username, user); err == badgerhold.ErrNotFound {
+		if user, err = e.Game.Storage.LoadUser(username); err == badgerhold.ErrNotFound {
 			fmt.Fprint(e.Term, "Username not found!\n")
 		} else if err == nil {
 			break
@@ -182,8 +191,7 @@ func (e *Env) loginUser() error {
 		}
 		if err = bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(password)); err == nil {
 			e.User = user
-			e.Object = &Object{}
-			if err = e.Game.DB.Get(e.User.ObjectID, e.Object); err != nil {
+			if e.Object, err = e.Game.Storage.GetObject(e.User.ObjectID); err != nil {
 				return err
 			}
 			break
@@ -196,7 +204,7 @@ func (e *Env) loginUser() error {
 
 func (e *Env) createUser() error {
 	fmt.Fprint(e.Term, "** Create user **\n\n")
-	user := &User{}
+	var user *storage.User
 	for {
 		fmt.Fprint(e.Term, "Enter new username or [abort]:\n")
 		username, err := e.Term.ReadLine()
@@ -206,10 +214,12 @@ func (e *Env) createUser() error {
 		if username == "abort" {
 			return OperationAborted
 		}
-		if err = e.Game.DB.Get(username, user); err == nil {
+		if user, err = e.Game.Storage.LoadUser(username); err == nil {
 			fmt.Fprint(e.Term, "Username already exists!\n")
 		} else if err == badgerhold.ErrNotFound {
-			user.Username = username
+			user = &storage.User{
+				Username: username,
+			}
 			break
 		} else {
 			return err
@@ -244,16 +254,12 @@ func (e *Env) createUser() error {
 			fmt.Fprint(e.Term, "Passwords don't match!\n")
 		}
 	}
-	txn := e.Game.DB.Badger().NewTransaction(true)
-	defer txn.Discard()
-
-	e.Object = &Object{}
-	if err := e.Game.DB.TxInsert(txn, badgerhold.NextSequence(), e.Object); err != nil {
+	err := e.Game.Storage.CreateUser(user)
+	if err != nil {
 		return err
 	}
-	e.User.ObjectID = e.Object.ID
-	if err := e.Game.DB.TxInsert(txn, e.User.Username, e.User); err != nil {
+	if e.Object, err = e.Game.Storage.GetObject(user.ObjectID); err != nil {
 		return err
 	}
-	return txn.Commit()
+	return nil
 }

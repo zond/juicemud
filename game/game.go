@@ -6,20 +6,18 @@ import (
 	"log"
 
 	"github.com/gliderlabs/ssh"
-	"github.com/timshannon/badgerhold"
+	"github.com/zond/juicemud/storage"
 	"golang.org/x/crypto/ssh/terminal"
 )
 
 // Represents the game world.
 type Game struct {
-	DB      *badgerhold.Store
-	Objects map[uint64]*Object
+	Storage *storage.Storage
 }
 
-func New(db *badgerhold.Store) *Game {
+func New(storage *storage.Storage) *Game {
 	return &Game{
-		DB:      db,
-		Objects: map[uint64]*Object{},
+		Storage: storage,
 	}
 }
 

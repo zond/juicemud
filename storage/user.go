@@ -1,4 +1,4 @@
-package game
+package storage
 
 // Represents a user.
 type User struct {
