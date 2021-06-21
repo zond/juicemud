@@ -13,13 +13,13 @@ import (
 // Represents the game world.
 type Game struct {
 	DB      *badgerhold.Store
-	Objects map[string]*Object
+	Objects map[uint64]*Object
 }
 
 func New(db *badgerhold.Store) *Game {
 	return &Game{
 		DB:      db,
-		Objects: map[string]*Object{},
+		Objects: map[uint64]*Object{},
 	}
 }
 

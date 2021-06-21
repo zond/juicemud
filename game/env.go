@@ -21,6 +21,7 @@ var (
 type Env struct {
 	Game     *Game
 	User     *User
+	Object   *Object
 	Term     *terminal.Terminal
 	Location *Object
 }
@@ -76,13 +77,16 @@ func (e *Env) Connect() error {
 			return err
 		}
 	}
-	e.Location = e.Game.Objects[e.User.LocationID]
+	e.Location = e.Game.Objects[e.Object.LocationID]
 	return e.Process()
 }
 
 func (e *Env) Process() error {
 	desc, err := e.Location.ShortDescription()
 	if err != nil {
+		fmt.Fprintln(e.Term, err.Error())
+	}
+	if err := e.listLocationContent(); err != nil {
 		fmt.Fprintln(e.Term, err.Error())
 	}
 	fmt.Fprintf(e.Term, "%s\n\n", desc)
@@ -118,6 +122,25 @@ func (e *Env) create([]string) error {
 	return nil
 }
 
+func (e *Env) listLocationContent() error {
+	content, err := e.Location.Content(e.Game.DB)
+	if err != nil {
+		return err
+	}
+	if len(content) == 0 {
+		return nil
+	}
+	names := make(sort.StringSlice, len(content))
+	for idx := range content {
+		if names[idx], err = content[idx].Name(); err != nil {
+			return err
+		}
+	}
+	sort.Sort(names)
+	fmt.Fprintf(e.Term, "There are %s here.\n\n", lang.Enumerator{}.Do(names...))
+	return nil
+}
+
 func (e *Env) look([]string) error {
 	shortDesc, err := e.Location.ShortDescription()
 	if err != nil {
@@ -128,7 +151,7 @@ func (e *Env) look([]string) error {
 		fmt.Fprintln(e.Term, err.Error())
 	}
 	fmt.Fprintf(e.Term, "%s\n\n%s\n\n", shortDesc, longDesc)
-	return nil
+	return e.listLocationContent()
 }
 
 func (e *Env) loginUser() error {
@@ -153,12 +176,16 @@ func (e *Env) loginUser() error {
 	}
 	for {
 		fmt.Fprint(e.Term, "Enter password or [abort]:\n")
-		password, err := e.Term.ReadPassword("")
+		password, err := e.Term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
 		if err = bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(password)); err == nil {
 			e.User = user
+			e.Object = &Object{}
+			if err = e.Game.DB.Get(e.User.ObjectID, e.Object); err != nil {
+				return err
+			}
 			break
 		} else {
 			fmt.Fprint(e.Term, "Incorrect password!\n")
@@ -190,12 +217,12 @@ func (e *Env) createUser() error {
 	}
 	for {
 		fmt.Fprint(e.Term, "Enter new password:\n")
-		password, err := e.Term.ReadPassword("")
+		password, err := e.Term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
 		fmt.Fprint(e.Term, "Repeat new password:\n")
-		verification, err := e.Term.ReadPassword("")
+		verification, err := e.Term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
@@ -217,5 +244,16 @@ func (e *Env) createUser() error {
 			fmt.Fprint(e.Term, "Passwords don't match!\n")
 		}
 	}
-	return e.Game.DB.Insert(user.Username, user)
+	txn := e.Game.DB.Badger().NewTransaction(true)
+	defer txn.Discard()
+
+	e.Object = &Object{}
+	if err := e.Game.DB.TxInsert(txn, badgerhold.NextSequence(), e.Object); err != nil {
+		return err
+	}
+	e.User.ObjectID = e.Object.ID
+	if err := e.Game.DB.TxInsert(txn, e.User.Username, e.User); err != nil {
+		return err
+	}
+	return txn.Commit()
 }

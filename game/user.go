@@ -4,5 +4,5 @@ package game
 type User struct {
 	Username     string `badgerhold:"key"`
 	PasswordHash []byte
-	LocationID   string
+	ObjectID     uint64
 }
