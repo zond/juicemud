@@ -1,8 +1,6 @@
 package storage
 
 import (
-	"log"
-
 	"github.com/timshannon/badgerhold/v2"
 )
 
@@ -83,7 +81,6 @@ function longDescription() {
 		if err := s.db.TxInsert(txn, badgerhold.NextSequence(), voidCode); err != nil {
 			return err
 		}
-		log.Printf("Initialized %+v", voidCode)
 	} else if err != nil {
 		return err
 	}
@@ -93,7 +90,6 @@ function longDescription() {
 		if err := s.db.TxInsert(txn, badgerhold.NextSequence(), void); err != nil {
 			return err
 		}
-		log.Printf("Initialized %+v", void)
 	}
 	return txn.Commit()
 }
