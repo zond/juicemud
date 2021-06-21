@@ -2,25 +2,27 @@ package game
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
-	"github.com/asdine/storm"
+	"github.com/timshannon/badgerhold"
 	"github.com/zond/juicemud/lang"
-	"github.com/zond/juicemud/user"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ssh/terminal"
 )
 
 var (
-	OperationAborted = fmt.Errorf("operation aborted")
+	OperationAborted  = fmt.Errorf("operation aborted")
+	WhitespacePattern = regexp.MustCompile("\\s+")
 )
 
 // Represents the environment of a connected user.
 type Env struct {
-	DB   *storm.DB
-	User *user.User
-	Term *terminal.Terminal
+	Game     *Game
+	User     *User
+	Term     *terminal.Terminal
+	Location *Object
 }
 
 func (e *Env) SelectExec(options map[string]func() error) error {
@@ -62,7 +64,7 @@ func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
 }
 
 func (e *Env) Connect() error {
-	fmt.Fprintf(e.Term, "Welcome!\n\n")
+	fmt.Fprint(e.Term, "Welcome!\n\n")
 	for {
 		err := e.SelectExec(map[string]func() error{
 			"login user":  e.loginUser,
@@ -74,14 +76,66 @@ func (e *Env) Connect() error {
 			return err
 		}
 	}
+	e.Location = e.Game.Objects[e.User.LocationID]
+	return e.Process()
+}
+
+func (e *Env) Process() error {
+	desc, err := e.Location.ShortDescription()
+	if err != nil {
+		fmt.Fprintln(e.Term, err.Error())
+	}
+	fmt.Fprintf(e.Term, "%s\n\n", desc)
+	for {
+		line, err := e.Term.ReadLine()
+		if err != nil {
+			return err
+		}
+		words := WhitespacePattern.Split(line, -1)
+		if len(words) == 0 {
+			continue
+		}
+		if cmd, found := map[string]func(params []string) error{
+			"l":      e.look,
+			"look":   e.look,
+			"help":   e.help,
+			"create": e.create,
+		}[words[0]]; found {
+			if err := cmd(words); err != nil {
+				fmt.Fprintln(e.Term, err.Error())
+			}
+		}
+	}
+	return nil
+}
+
+func (e *Env) help([]string) error {
+	fmt.Fprint(e.Term, "Try [look] or [create 'name'].\n\n")
+	return nil
+}
+
+func (e *Env) create([]string) error {
+	return nil
+}
+
+func (e *Env) look([]string) error {
+	shortDesc, err := e.Location.ShortDescription()
+	if err != nil {
+		fmt.Fprintln(e.Term, err.Error())
+	}
+	longDesc, err := e.Location.LongDescription()
+	if err != nil {
+		fmt.Fprintln(e.Term, err.Error())
+	}
+	fmt.Fprintf(e.Term, "%s\n\n%s\n\n", shortDesc, longDesc)
 	return nil
 }
 
 func (e *Env) loginUser() error {
-	fmt.Fprintf(e.Term, "** Login user **\n\n")
-	user := &user.User{}
+	fmt.Fprint(e.Term, "** Login user **\n\n")
+	user := &User{}
 	for {
-		fmt.Fprintf(e.Term, "Enter username or [abort]:\n")
+		fmt.Fprint(e.Term, "Enter username or [abort]:\n")
 		username, err := e.Term.ReadLine()
 		if err != nil {
 			return err
@@ -89,7 +143,7 @@ func (e *Env) loginUser() error {
 		if username == "abort" {
 			return OperationAborted
 		}
-		if err = e.DB.One("Username", username, user); err == storm.ErrNotFound {
+		if err = e.Game.DB.Get(username, user); err == badgerhold.ErrNotFound {
 			fmt.Fprint(e.Term, "Username not found!\n")
 		} else if err == nil {
 			break
@@ -115,7 +169,7 @@ func (e *Env) loginUser() error {
 
 func (e *Env) createUser() error {
 	fmt.Fprint(e.Term, "** Create user **\n\n")
-	user := &user.User{}
+	user := &User{}
 	for {
 		fmt.Fprint(e.Term, "Enter new username or [abort]:\n")
 		username, err := e.Term.ReadLine()
@@ -125,9 +179,9 @@ func (e *Env) createUser() error {
 		if username == "abort" {
 			return OperationAborted
 		}
-		if err = e.DB.One("Username", username, user); err == nil {
+		if err = e.Game.DB.Get(username, user); err == nil {
 			fmt.Fprint(e.Term, "Username already exists!\n")
-		} else if err == storm.ErrNotFound {
+		} else if err == badgerhold.ErrNotFound {
 			user.Username = username
 			break
 		} else {
@@ -163,5 +217,5 @@ func (e *Env) createUser() error {
 			fmt.Fprint(e.Term, "Passwords don't match!\n")
 		}
 	}
-	return e.DB.Save(user)
+	return e.Game.DB.Insert(user.Username, user)
 }

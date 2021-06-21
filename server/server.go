@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/asdine/storm"
 	"github.com/gliderlabs/ssh"
+	"github.com/timshannon/badgerhold"
 	"github.com/zond/juicemud/game"
 	"github.com/zond/juicemud/pemfile"
 
@@ -56,15 +56,24 @@ func main() {
 		log.Fatal(err)
 	}
 
-	dbPath := filepath.Join(*dir, "storm.db")
-	db, err := storm.Open(dbPath)
-	if err != nil {
+	dbPath := filepath.Join(*dir, "badgerhold")
+	dbOptions := badgerhold.DefaultOptions
+	dbOptions.Dir = filepath.Join(dbPath, "dir")
+	if err := os.MkdirAll(dbOptions.Dir, 0700); err != nil {
+		log.Fatal(err)
+	}
+	dbOptions.ValueDir = filepath.Join(dbPath, "valueDir")
+	if err := os.MkdirAll(dbOptions.ValueDir, 0700); err != nil {
 		log.Fatal(err)
 	}
 
-	g := &game.Game{
-		DB: db,
+	db, err := badgerhold.Open(dbOptions)
+	if err != nil {
+		log.Fatal(err)
 	}
+	defer db.Close()
+
+	g := game.New(db)
 
 	s := &ssh.Server{
 		Addr:    *iface,

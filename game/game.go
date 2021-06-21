@@ -5,19 +5,27 @@ import (
 	"io"
 	"log"
 
-	"github.com/asdine/storm"
 	"github.com/gliderlabs/ssh"
+	"github.com/timshannon/badgerhold"
 	"golang.org/x/crypto/ssh/terminal"
 )
 
 // Represents the game world.
 type Game struct {
-	DB *storm.DB
+	DB      *badgerhold.Store
+	Objects map[string]*Object
+}
+
+func New(db *badgerhold.Store) *Game {
+	return &Game{
+		DB:      db,
+		Objects: map[string]*Object{},
+	}
 }
 
 func (g *Game) HandleSession(sess ssh.Session) {
 	env := &Env{
-		DB:   g.DB,
+		Game: g,
 		Term: terminal.NewTerminal(sess, "> "),
 	}
 	if err := env.Connect(); err != nil {
