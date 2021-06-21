@@ -31,7 +31,18 @@ func (s *Storage) CreateUser(user *User) error {
 	txn := s.db.Badger().NewTransaction(true)
 	defer txn.Discard()
 
-	code := &Code{}
+	code := &Code{
+		Text: `
+function name() {
+  return 'user';
+}
+function shortDescription() {
+  return 'a user';
+}
+function longDescription() {
+  return 'a real user';
+}`,
+	}
 	if err := s.db.TxInsert(txn, badgerhold.NextSequence(), code); err != nil {
 		return err
 	}
