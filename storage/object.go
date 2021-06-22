@@ -70,8 +70,8 @@ func (o *object) Content() (Objects, error) {
 	return res, nil
 }
 
-func (o *object) Name() (string, error) {
-	res, err := o.call("name")
+func (o *object) Name(definite bool) (string, error) {
+	res, err := o.call("name", definite)
 	if err != nil {
 		return "", err
 	}

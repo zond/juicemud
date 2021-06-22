@@ -1,12 +1,14 @@
 package storage
 
 import (
+	"math"
+
 	"github.com/timshannon/badgerhold/v2"
 )
 
 type Object interface {
 	Location() (Object, error)
-	Name() (string, error)
+	Name(definite bool) (string, error)
 	ShortDescription() (string, error)
 	LongDescription() (string, error)
 	Content() (Objects, error)
@@ -33,14 +35,18 @@ func (s *Storage) CreateUser(user *User) error {
 
 	code := &Code{
 		Text: `
-function name() {
-  return 'user';
+function name(definite) {
+  if (definite) {
+    return 'the spark of light';
+  } else {
+    return 'a spark of light';
+  }
 }
 function shortDescription() {
-  return 'a user';
+  return 'A spark of divine light';
 }
 function longDescription() {
-  return 'a real user';
+  return 'This spark of divine light represents the essense of a god of this world.';
 }`,
 	}
 	if err := s.db.TxInsert(txn, badgerhold.NextSequence(), code); err != nil {
@@ -80,8 +86,12 @@ func (s *Storage) initialize() error {
 	voidCode := &Code{}
 	if err := s.db.Get(0, voidCode); err == badgerhold.ErrNotFound {
 		voidCode.Text = `
-function name() {
-  return 'void';
+function name(definite) {
+  if (definite) {
+    return 'the void';
+  } else {
+    return 'a void';
+  };
 }
 function shortDescription() {
   return 'The infinite void';
@@ -95,7 +105,9 @@ function longDescription() {
 	} else if err != nil {
 		return err
 	}
-	void := &object{}
+	void := &object{
+		LocationID: math.MaxUint64,
+	}
 	if err := s.db.Get(0, void); err == badgerhold.ErrNotFound {
 		void.CodeID = voidCode.ID
 		if err := s.db.TxInsert(txn, badgerhold.NextSequence(), void); err != nil {

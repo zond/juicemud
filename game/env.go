@@ -89,7 +89,7 @@ func (e *Env) Process() error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(e.Term, sd)
+	fmt.Fprintf(e.Term, "%s\n\n", sd)
 	e.listLocationContent()
 	for {
 		line, err := e.Term.ReadLine()
@@ -137,12 +137,12 @@ func (e *Env) listLocationContent() error {
 	}
 	names := make(sort.StringSlice, len(content))
 	for idx := range content {
-		if names[idx], err = content[idx].Name(); err != nil {
+		if names[idx], err = content[idx].Name(false); err != nil {
 			return err
 		}
 	}
 	sort.Sort(names)
-	fmt.Fprintf(e.Term, "There are %s here.\n\n", lang.Enumerator{}.Do(names...))
+	fmt.Fprintf(e.Term, "There %s here.\n\n", lang.Enumerator{}.IsAre(names...))
 	return nil
 }
 

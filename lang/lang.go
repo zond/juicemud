@@ -17,6 +17,16 @@ type Enumerator struct {
 	Operator  string
 }
 
+func (e Enumerator) IsAre(elements ...string) string {
+	if len(elements) == 0 {
+		return "is nothing"
+	} else if len(elements) == 1 {
+		return fmt.Sprintf("is %s", elements[0])
+	} else {
+		return fmt.Sprintf("are %s", e.Do(elements...))
+	}
+}
+
 func (e Enumerator) Do(elements ...string) string {
 	pattern, separator, operator := DefaultPattern, DefaultSeparator, DefaultOperator
 	if e.Pattern != "" {
