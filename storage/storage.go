@@ -12,9 +12,23 @@ type Object interface {
 	ShortDescription() (string, error)
 	LongDescription() (string, error)
 	Content() (Objects, error)
+	UID() uint64
+	Tags() ([]string, error)
 }
 
 type Objects []Object
+
+func (o Objects) Len() int {
+	return len(o)
+}
+
+func (o Objects) Less(i, j int) bool {
+	return o[i].UID() < o[j].UID()
+}
+
+func (o Objects) Swap(i, j int) {
+	o[i], o[j] = o[j], o[i]
+}
 
 type Storage struct {
 	db      *badgerhold.Store
@@ -41,6 +55,9 @@ function name(definite) {
   } else {
     return 'a spark of light';
   }
+}
+function tags() {
+  return ['spark', 'light'];
 }
 function shortDescription() {
   return 'A spark of divine light';
@@ -92,6 +109,9 @@ function name(definite) {
   } else {
     return 'a void';
   };
+}
+function tags() {
+  return ['void', 'space'];
 }
 function shortDescription() {
   return 'The infinite void';

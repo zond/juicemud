@@ -41,6 +41,10 @@ func (o *object) reload() error {
 	return o.runtime.Run(ast)
 }
 
+func (o *object) UID() uint64 {
+	return o.ID
+}
+
 func (o *object) call(name string, args ...interface{}) (interface{}, error) {
 	if o == nil {
 		return nil, fmt.Errorf("void is uncallable")
@@ -68,6 +72,22 @@ func (o *object) Content() (Objects, error) {
 		}
 	}
 	return res, nil
+}
+
+func (o *object) Tags() ([]string, error) {
+	tags, err := o.call("tags")
+	if err != nil {
+		return nil, err
+	}
+	switch v := tags.(type) {
+	case []interface{}:
+		res := make([]string, len(v))
+		for idx := range res {
+			res[idx] = fmt.Sprint(v[idx])
+		}
+		return res, nil
+	}
+	return nil, fmt.Errorf("%#v.tags() didn't return an array, it returned %#v", o, tags)
 }
 
 func (o *object) Name(definite bool) (string, error) {

@@ -90,7 +90,7 @@ func (e *Env) Process() error {
 		return err
 	}
 	fmt.Fprintf(e.Term, "%s\n\n", sd)
-	e.listLocationContent()
+	e.listContent(loc)
 	for {
 		line, err := e.Term.ReadLine()
 		if err != nil {
@@ -101,10 +101,11 @@ func (e *Env) Process() error {
 			continue
 		}
 		if cmd, found := map[string]func(params []string) error{
-			"l":      e.look,
-			"look":   e.look,
-			"help":   e.help,
-			"create": e.create,
+			"l":           e.look,
+			"look":        e.look,
+			"help":        e.help,
+			"create":      e.create,
+			"inventorize": e.inventorize,
 		}[words[0]]; found {
 			if err := cmd(words); err != nil {
 				fmt.Fprintln(e.Term, err.Error())
@@ -123,12 +124,8 @@ func (e *Env) create([]string) error {
 	return nil
 }
 
-func (e *Env) listLocationContent() error {
-	loc, err := e.Object.Location()
-	if err != nil {
-		return err
-	}
-	content, err := loc.Content()
+func (e *Env) listContent(obj storage.Object) error {
+	content, err := obj.Content()
 	if err != nil {
 		return err
 	}
@@ -137,30 +134,192 @@ func (e *Env) listLocationContent() error {
 	}
 	names := make(sort.StringSlice, len(content))
 	for idx := range content {
-		if names[idx], err = content[idx].Name(false); err != nil {
-			return err
+		if e.Object.UID() == content[idx].UID() {
+			names[idx] = "you"
+		} else {
+			if names[idx], err = content[idx].Name(false); err != nil {
+				return err
+			}
 		}
 	}
 	sort.Sort(names)
-	fmt.Fprintf(e.Term, "There %s here.\n\n", lang.Enumerator{}.IsAre(names...))
+	fmt.Fprintf(e.Term, "There is %s here.\n\n", lang.Enumerator{}.Do(names...))
 	return nil
 }
 
-func (e *Env) look([]string) error {
-	loc, err := e.Object.Location()
+func (e *Env) lookAt(target storage.Object) error {
+	sd, err := target.ShortDescription()
 	if err != nil {
 		return err
 	}
-	sd, err := loc.ShortDescription()
-	if err != nil {
-		return err
-	}
-	ld, err := loc.LongDescription()
+	ld, err := target.LongDescription()
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(e.Term, "%s\n\n%s\n\n", sd, ld)
-	return e.listLocationContent()
+	return e.listContent(target)
+}
+
+type ambiguousIdentityError struct {
+	tag     string
+	matches []identifiableObject
+}
+
+func (a ambiguousIdentityError) Error() string {
+	return fmt.Sprintf("%q is ambiguous among %+v", a.tag, a.matches)
+}
+
+type notFoundError struct {
+	tag string
+}
+
+func (n notFoundError) Error() string {
+	return fmt.Sprintf("%q not found", n.tag)
+}
+
+type identifiableObject struct {
+	obj  storage.Object
+	tags []string
+}
+
+func (e *Env) listInventory(objs []identifiableObject) error {
+	for _, obj := range objs {
+		if len(obj.tags) == 1 {
+			fmt.Fprintf(e.Term, "%v\n", obj.tags[0])
+		} else {
+			fmt.Fprintf(e.Term, "%v, also known as %v\n", obj.tags[0], lang.Enumerator{Operator: "or"}.Do(obj.tags[1:]...))
+		}
+	}
+	return nil
+}
+
+func (e *Env) inventorize([]string) error {
+	loc, err := e.Object.Location()
+	if err != nil {
+		return err
+	}
+	objs, err := e.identifiableObjects(loc)
+	if err != nil {
+		return err
+	}
+	if err := e.listInventory(objs); err != nil {
+		return err
+	}
+	fmt.Fprintln(e.Term)
+	return nil
+}
+
+func (e *Env) identifiableObjects(loc storage.Object) ([]identifiableObject, error) {
+	candidates, err := loc.Content()
+	if err != nil {
+		return nil, err
+	}
+	candidates = append(candidates, loc)
+	sort.Sort(candidates)
+
+	res := []identifiableObject{}
+	candidatesByTag := map[string][]*identifiableObject{}
+	for _, c := range candidates {
+		tags, err := c.Tags()
+		if err != nil {
+			return nil, err
+		}
+		idObj := &identifiableObject{
+			obj:  c,
+			tags: tags,
+		}
+		res = append(res, *idObj)
+		for _, t := range tags {
+			candidatesByTag[t] = append(candidatesByTag[t], idObj)
+		}
+		idKeyword := fmt.Sprintf("#%v", c.UID())
+		candidatesByTag[idKeyword] = append(candidatesByTag[idKeyword], idObj)
+	}
+
+	for idx := range res {
+		cand := res[idx]
+		newTags := []string{}
+		for _, oldTag := range cand.tags {
+			tagHolders := candidatesByTag[oldTag]
+			if len(tagHolders) == 1 {
+				newTags = append(newTags, oldTag)
+			} else {
+				for tagIdx, tagHolder := range tagHolders {
+					if tagHolder.obj.UID() == cand.obj.UID() {
+						newTags = append(newTags, fmt.Sprintf("%v.%v", tagIdx, oldTag))
+						break
+					}
+				}
+			}
+		}
+		res[idx].tags = newTags
+	}
+
+	return res, nil
+}
+
+func (e *Env) identify(searchTag string) (storage.Object, error) {
+	// Quick check for common alternatives.
+	loc, err := e.Object.Location()
+	if err != nil {
+		return nil, err
+	}
+	switch searchTag {
+	case "me":
+		fallthrough
+	case "self":
+		return e.Object, nil
+	case "here":
+		return loc, nil
+	}
+
+	idObjs, err := e.identifiableObjects(loc)
+	if err != nil {
+		return nil, err
+	}
+
+	nameTag := ""
+	if parts := strings.Split(searchTag, ","); len(parts) == 2 {
+		nameTag = parts[1]
+	}
+
+	matches := []identifiableObject{}
+	for _, idObj := range idObjs {
+		for _, tag := range idObj.tags {
+			if tag == searchTag {
+				return idObj.obj, nil
+			} else if parts := strings.Split(tag, ","); len(parts) == 2 && parts[1] == nameTag {
+				matches = append(matches, idObj)
+			}
+		}
+	}
+
+	if len(matches) == 0 {
+		return nil, notFoundError{tag: searchTag}
+	}
+
+	return nil, ambiguousIdentityError{tag: searchTag, matches: matches}
+}
+
+func (e *Env) look(args []string) error {
+	target, err := e.Object.Location()
+	if err != nil {
+		return err
+	}
+	if len(args) > 1 {
+		if target, err = e.identify(args[1]); err != nil {
+			switch verr := err.(type) {
+			case ambiguousIdentityError:
+				fmt.Fprintf(e.Term, "Multiple %q here:\n", verr.tag)
+				return e.listInventory(verr.matches)
+			case notFoundError:
+				fmt.Fprintf(e.Term, "No %q here\n", verr.tag)
+				return nil
+			}
+			return err
+		}
+	}
+	return e.lookAt(target)
 }
 
 func (e *Env) loginUser() error {
