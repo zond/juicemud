@@ -156,7 +156,7 @@ func (e *Env) lookAt(target storage.Object) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(e.Term, "%s\n\n%s\n\n", sd, ld)
+	fmt.Fprintf(e.Term, "#%v: %s\n\n%s\n\n", target.UID(), sd, ld)
 	return e.listContent(target)
 }
 
@@ -224,6 +224,8 @@ func (e *Env) identifiableObjects(loc storage.Object) ([]identifiableObject, err
 		if err != nil {
 			return nil, err
 		}
+		idKeyword := fmt.Sprintf("#%v", c.UID())
+		tags = append(tags, idKeyword)
 		idObj := &identifiableObject{
 			obj:  c,
 			tags: tags,
@@ -232,8 +234,6 @@ func (e *Env) identifiableObjects(loc storage.Object) ([]identifiableObject, err
 		for _, t := range tags {
 			candidatesByTag[t] = append(candidatesByTag[t], idObj)
 		}
-		idKeyword := fmt.Sprintf("#%v", c.UID())
-		candidatesByTag[idKeyword] = append(candidatesByTag[idKeyword], idObj)
 	}
 
 	for idx := range res {
@@ -278,8 +278,8 @@ func (e *Env) identify(searchTag string) (storage.Object, error) {
 		return nil, err
 	}
 
-	nameTag := ""
-	if parts := strings.Split(searchTag, ","); len(parts) == 2 {
+	nameTag := searchTag
+	if parts := strings.Split(searchTag, "."); len(parts) == 2 {
 		nameTag = parts[1]
 	}
 
@@ -288,7 +288,7 @@ func (e *Env) identify(searchTag string) (storage.Object, error) {
 		for _, tag := range idObj.tags {
 			if tag == searchTag {
 				return idObj.obj, nil
-			} else if parts := strings.Split(tag, ","); len(parts) == 2 && parts[1] == nameTag {
+			} else if parts := strings.Split(tag, "."); len(parts) == 2 && parts[1] == nameTag {
 				matches = append(matches, idObj)
 			}
 		}
@@ -310,10 +310,17 @@ func (e *Env) look(args []string) error {
 		if target, err = e.identify(args[1]); err != nil {
 			switch verr := err.(type) {
 			case ambiguousIdentityError:
-				fmt.Fprintf(e.Term, "Multiple %q here:\n", verr.tag)
-				return e.listInventory(verr.matches)
+				if parts := strings.Split(verr.tag, "."); len(parts) == 2 {
+					fmt.Fprintf(e.Term, "No %q here, but some close matches:\n", verr.tag)
+				} else {
+					fmt.Fprintf(e.Term, "Multiple %q here:\n", verr.tag)
+				}
+				if err := e.listInventory(verr.matches); err != nil {
+					return err
+				}
+				fmt.Fprintln(e.Term)
 			case notFoundError:
-				fmt.Fprintf(e.Term, "No %q here\n", verr.tag)
+				fmt.Fprintf(e.Term, "No %q here.\n", verr.tag)
 				return nil
 			}
 			return err
