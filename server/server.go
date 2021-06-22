@@ -84,6 +84,9 @@ func main() {
 	s := &ssh.Server{
 		Addr:    *iface,
 		Handler: g.HandleSession,
+		PtyCallback: func(ssh.Context, ssh.Pty) bool {
+			return true
+		},
 	}
 	s.AddHostKey(signer)
 

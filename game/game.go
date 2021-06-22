@@ -25,6 +25,7 @@ func (g *Game) HandleSession(sess ssh.Session) {
 	env := &Env{
 		Game: g,
 		Term: terminal.NewTerminal(sess, "> "),
+		Sess: sess,
 	}
 	if err := env.Connect(); err != nil {
 		if err != io.EOF {

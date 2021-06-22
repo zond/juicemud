@@ -1,11 +1,18 @@
 package game
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
+	"unsafe"
 
+	"github.com/creack/pty"
+	"github.com/gliderlabs/ssh"
 	"github.com/timshannon/badgerhold/v2"
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
@@ -23,7 +30,45 @@ type Env struct {
 	Game   *Game
 	User   *storage.User
 	Object storage.Object
+	Sess   ssh.Session
 	Term   *terminal.Terminal
+}
+
+func (e *Env) Run(name string, args ...string) error {
+	ptyReq, winCh, isPty := e.Sess.Pty()
+	if !isPty {
+		return fmt.Errorf("ssh session is non-interactive")
+	}
+
+	cmdCtx, cancelCmd := context.WithCancel(e.Sess.Context())
+	defer cancelCmd()
+	cmd := exec.CommandContext(cmdCtx, name, args...)
+	cmd.Env = append(e.Sess.Environ(), fmt.Sprintf("TERM=%s", ptyReq.Term))
+
+	f, err := pty.Start(cmd)
+	if err != nil {
+		return fmt.Errorf("unable to initialize pseudo-terminal for ssh session: %v", err)
+	}
+	defer f.Close()
+
+	go func() {
+		for win := range winCh {
+			w := win.Width
+			h := win.Height
+			syscall.Syscall(syscall.SYS_IOCTL,
+				f.Fd(),
+				uintptr(syscall.TIOCSWINSZ),
+				uintptr(unsafe.Pointer(&struct{ h, w, x, y uint16 }{uint16(h), uint16(w), 0, 0})))
+		}
+	}()
+
+	go func() {
+		io.Copy(f, e.Sess)
+	}()
+	io.Copy(e.Sess, f)
+
+	f.Close()
+	return cmd.Wait()
 }
 
 func (e *Env) SelectExec(options map[string]func() error) error {
@@ -319,6 +364,7 @@ func (e *Env) look(args []string) error {
 					return err
 				}
 				fmt.Fprintln(e.Term)
+				return nil
 			case notFoundError:
 				fmt.Fprintf(e.Term, "No %q here.\n", verr.tag)
 				return nil
