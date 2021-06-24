@@ -3,6 +3,7 @@ package editor
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -429,10 +430,25 @@ func NewEditView() *EditView {
 		scrollable:    true,
 		align:         tview.AlignLeft,
 		wrap:          true,
-		textColor:     tview.Styles.PrimaryTextColor,
+		textColor:     tview.Styles.PrimitiveBackgroundColor,
 		regions:       false,
 		dynamicColors: false,
 	}
+}
+
+func (t *EditView) WriteAt(r rune, x, y int) {
+	_, _, width, _ := t.GetInnerRect()
+	if scrollY, scrollX := t.GetScrollOffset(); scrollY > -1 && scrollX > -1 {
+		y += scrollY
+		x += scrollX
+	}
+	for y > len(t.index) {
+		t.buffer = append(t.buffer, "")
+		t.reindexBuffer(width)
+	}
+	idx := t.index[y]
+	line := t.buffer[idx.Line][idx.Pos:idx.NextPos]
+	log.Print(decomposeString(line, true, true))
 }
 
 func (t *EditView) ByteAt(x, y int) (byte, bool) {
