@@ -9,7 +9,8 @@ import (
 )
 
 type SSHTTY struct {
-	Sess ssh.Session
+	Sess           ssh.Session
+	ResizeCallback func()
 
 	resizeCallback func()
 	stop           chan bool
@@ -58,14 +59,18 @@ func (s *SSHTTY) Start() error {
 		for {
 			select {
 			case ev := <-winCh:
-				if cb := func() func() {
+				cb1, cb2 := func() (func(), func()) {
 					s.mutex.Lock()
 					defer s.mutex.Unlock()
 					s.width = ev.Width
 					s.height = ev.Height
-					return s.resizeCallback
-				}(); cb != nil {
-					s.resizeCallback()
+					return s.ResizeCallback, s.resizeCallback
+				}()
+				if cb2 != nil {
+					cb2()
+				}
+				if cb1 != nil {
+					cb1()
 				}
 			case <-s.stop:
 				return
