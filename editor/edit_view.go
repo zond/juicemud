@@ -1590,6 +1590,7 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 
 		key := event.Key()
 
+		_, _, _, height := t.GetInnerRect()
 		switch key {
 		case tcell.KeyDelete:
 			t.deleteAt(t.cursor.x, t.cursor.y)
@@ -1597,8 +1598,19 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			t.lineOffset = 0
 			t.cursor.x = 0
 			t.cursor.y = 0
+		case tcell.KeyPgUp:
+			for i := 0; i < height; i++ {
+				if !t.cursorUp() {
+					break
+				}
+			}
+		case tcell.KeyPgDn:
+			for i := 0; i < height; i++ {
+				if !t.cursorDown() {
+					break
+				}
+			}
 		case tcell.KeyEnd:
-			_, _, _, height := t.GetInnerRect()
 			t.lineOffset = len(t.index) - height/2
 			t.cursor.y = len(t.index) - t.lineOffset - 1
 			t.cursor.x = t.practicalWidth(t.cursor.y)
@@ -1650,8 +1662,6 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			} else {
 				t.cursorRight()
 			}
-		case tcell.KeyPgDn, tcell.KeyCtrlF:
-		case tcell.KeyPgUp, tcell.KeyCtrlB:
 		default:
 			t.writeAt(string([]rune{event.Rune()}), t.cursor.x, t.cursor.y)
 			t.cursorRight()
