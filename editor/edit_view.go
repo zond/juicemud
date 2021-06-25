@@ -1588,9 +1588,9 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			return
 		}
 
-		key := event.Key()
-
 		_, _, _, height := t.GetInnerRect()
+
+		key := event.Key()
 		switch key {
 		case tcell.KeyDelete:
 			t.deleteAt(t.cursor.x, t.cursor.y)
