@@ -678,17 +678,56 @@ func (t *EditView) indentAt(y int) int {
 	return pw
 }
 
-func (t *EditView) runeAt(x, y int) (rune, bool) {
+func (t *EditView) indexAt(x, y int) (*textViewIndex, bool) {
 	y += t.lineOffset
 	if y+1 > len(t.index) {
-		return 0, false
+		return nil, false
 	}
 	idx := t.index[y]
 	if x+1 > idx.Width {
+		return nil, false
+	}
+
+	practicalLine := t.buffer[idx.Line][idx.Pos:idx.NextPos]
+	colorIndices, _, regionIndices, _, escapeIndices, _, _ := decomposeString(string(practicalLine), true, true)
+
+	peekIndex := 0
+	consumedLength := 0
+	for {
+		for _, colorIndex := range colorIndices {
+			if colorIndex[0] == peekIndex {
+				peekIndex = colorIndex[1]
+			}
+		}
+		for _, regionIndex := range regionIndices {
+			if regionIndex[0] == peekIndex {
+				peekIndex = regionIndex[1]
+			}
+		}
+		for _, escapeIndex := range escapeIndices {
+			if escapeIndex[0] == peekIndex {
+				peekIndex = escapeIndex[1]
+			}
+		}
+		if consumedLength == x {
+			break
+		}
+		peekIndex++
+		consumedLength++
+	}
+
+	return &textViewIndex{
+		Line: idx.Line,
+		Pos:  peekIndex,
+	}, true
+}
+
+func (t *EditView) runeAt(x, y int) (rune, bool) {
+	idx, found := t.indexAt(x, y)
+	if !found {
 		return 0, false
 	}
-	line := []rune(stripTags(t.buffer[idx.Line][idx.Pos:idx.NextPos]))
-	return line[x], true
+	return []rune(t.buffer[idx.Line])[idx.Pos], true
 }
 
 // SetWordWrap sets the flag that, if true and if the "wrap" flag is also true
