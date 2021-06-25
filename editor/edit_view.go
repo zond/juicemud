@@ -3,7 +3,6 @@ package editor
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -325,6 +324,12 @@ type EditView struct {
 	sync.Mutex
 	*tview.Box
 
+	cursor struct {
+		x int
+		y int
+	}
+	screen tcell.Screen
+
 	hasFocus bool
 
 	// The text buffer.
@@ -364,27 +369,12 @@ type EditView struct {
 	// The index of the first line shown in the text view.
 	lineOffset int
 
-	// If set to true, the text view will always remain at the end of the content.
-	trackEnd bool
-
-	// The number of characters to be skipped on each line (not in wrap mode).
-	columnOffset int
-
 	// The maximum number of lines kept in the line index, effectively the
 	// latest word-wrapped lines. Ignored if 0.
 	maxLines int
 
 	// The height of the content the last time the text view was drawn.
 	pageSize int
-
-	// If set to true, the text view will keep a buffer of text which can be
-	// navigated when the text is longer than what fits into the box.
-	scrollable bool
-
-	// If set to true, lines that are longer than the available width are wrapped
-	// onto the next line. If set to false, any characters beyond the available
-	// width are discarded.
-	wrap bool
 
 	// If set to true and if wrap is also true, lines are split at spaces or
 	// after punctuation characters.
@@ -426,36 +416,169 @@ func NewEditView() *EditView {
 	return &EditView{
 		Box:           tview.NewBox(),
 		highlights:    make(map[string]struct{}),
-		lineOffset:    -1,
-		scrollable:    true,
+		lineOffset:    0,
 		align:         tview.AlignLeft,
-		wrap:          true,
-		textColor:     tview.Styles.PrimitiveBackgroundColor,
+		textColor:     tview.Styles.PrimaryTextColor,
 		regions:       false,
 		dynamicColors: false,
 	}
 }
 
-func (t *EditView) WriteAt(r rune, x, y int) {
-	_, _, width, _ := t.GetInnerRect()
-	if scrollY, scrollX := t.GetScrollOffset(); scrollY > -1 && scrollX > -1 {
-		y += scrollY
-		x += scrollX
-	}
+func (t *EditView) writeAt(r rune, x, y int) {
+	defer func() {
+		if changed := func() func() {
+			_, _, width, _ := t.GetInnerRect()
+			t.Lock()
+			defer t.Unlock()
+			t.index = nil
+			t.reindexBuffer(width)
+			return t.changed
+		}(); changed != nil {
+			go changed()
+		}
+	}()
+
+	y += t.lineOffset
 	for y > len(t.index) {
 		t.buffer = append(t.buffer, "")
-		t.reindexBuffer(width)
+		return
 	}
 	idx := t.index[y]
-	line := t.buffer[idx.Line][idx.Pos:idx.NextPos]
-	log.Print(decomposeString(line, true, true))
+	line := []rune(t.buffer[idx.Line])
+
+	before := []rune{}
+	if idx.Pos > 0 {
+		before = line[:idx.Pos]
+	}
+	after := []rune{}
+	if idx.NextPos < len(line) {
+		after = line[idx.NextPos:]
+	}
+	practicalLine := line[idx.Pos:idx.NextPos]
+	colorIndices, _, regionIndices, _, escapeIndices, _, lineWidth := decomposeString(string(practicalLine), true, true)
+
+	if x+1 > lineWidth {
+		if r == rune('\r') {
+			t.buffer = append(
+				t.buffer[:idx.Line+1],
+				append(
+					[]string{""},
+					t.buffer[idx.Line+1:]...)...)
+		} else {
+			t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s", string(before), string(practicalLine), string([]rune{r}), string(after))
+		}
+		return
+	}
+
+	peekIndex := 0
+	consumedLength := 0
+	for {
+		for _, colorIndex := range colorIndices {
+			if colorIndex[0] == peekIndex {
+				peekIndex = colorIndex[1] + 1
+			}
+		}
+		for _, regionIndex := range regionIndices {
+			if regionIndex[0] == peekIndex {
+				peekIndex = regionIndex[1] + 1
+			}
+		}
+		for _, escapeIndex := range escapeIndices {
+			if escapeIndex[0] == peekIndex {
+				peekIndex = escapeIndex[1] + 1
+			}
+		}
+		if consumedLength == x {
+			break
+		}
+		peekIndex++
+		consumedLength++
+	}
+
+	if r == rune('\r') {
+		t.buffer = append(
+			t.buffer[:idx.Line],
+			append(
+				[]string{fmt.Sprintf("%s%s", string(before), string(practicalLine[:peekIndex]))},
+				append(
+					[]string{fmt.Sprintf("%s%s", string(practicalLine[peekIndex:]), string(after))},
+					t.buffer[idx.Line+1:]...)...)...)
+	} else {
+		t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s%s", string(before), string(practicalLine[:peekIndex]), string([]rune{r}), string(practicalLine[peekIndex:]), string(after))
+	}
 }
 
-func (t *EditView) ByteAt(x, y int) (byte, bool) {
-	if scrollY, scrollX := t.GetScrollOffset(); scrollY > -1 && scrollX > -1 {
-		y += scrollY
-		x += scrollX
+func (t *EditView) cursorDown() bool {
+	_, _, _, height := t.GetInnerRect()
+	if lines := len(t.index); t.cursor.y+1 < lines && t.cursor.y+1 < height {
+		t.cursor.y++
+		return true
+	} else if t.cursor.y+t.lineOffset+1 < len(t.index) {
+		t.lineOffset++
+		return true
 	}
+	return false
+}
+
+func (t *EditView) cursorUp() bool {
+	if t.cursor.y > 0 {
+		t.cursor.y--
+		return true
+	} else if t.lineOffset > 0 {
+		t.lineOffset--
+		return true
+	}
+	return false
+}
+
+func (t *EditView) cursorRight() bool {
+	_, _, width, height := t.GetInnerRect()
+	if pw := t.practicalWidth(t.cursor.y); t.cursor.x < pw && t.cursor.x+1 < width {
+		t.cursor.x++
+		return true
+	} else if lines := len(t.index); t.cursor.y+1 < lines && t.cursor.y+1 < height {
+		t.cursor.y++
+		t.cursor.x = 0
+		return true
+	} else if t.cursor.y+t.lineOffset+1 < len(t.index) {
+		t.lineOffset++
+		return true
+	}
+	return false
+}
+
+func (t *EditView) cursorLeft() bool {
+	_, _, width, _ := t.GetInnerRect()
+	if t.cursor.x > 0 {
+		t.cursor.x--
+		return true
+	} else if t.cursor.y > 0 {
+		t.cursor.y--
+		t.cursor.x = t.practicalWidth(t.cursor.y)
+		if t.cursor.x+2 > width {
+			t.cursor.x = width - 1
+		}
+		return true
+	} else if t.lineOffset > 0 {
+		t.lineOffset--
+		return true
+	}
+	return false
+}
+
+func (t *EditView) indentAt(y int) int {
+	pw := t.practicalWidth(y)
+	for x := 0; x < pw; x++ {
+		r, found := t.runeAt(x, y)
+		if !found || spacePattern.MatchString(string([]rune{r})) {
+			return x
+		}
+	}
+	return pw
+}
+
+func (t *EditView) runeAt(x, y int) (rune, bool) {
+	y += t.lineOffset
 	if y+1 > len(t.index) {
 		return 0, false
 	}
@@ -463,34 +586,12 @@ func (t *EditView) ByteAt(x, y int) (byte, bool) {
 	if x+1 > idx.Width {
 		return 0, false
 	}
-	line := stripTags(t.buffer[idx.Line][idx.Pos:idx.NextPos])
+	line := []rune(stripTags(t.buffer[idx.Line][idx.Pos:idx.NextPos]))
 	return line[x], true
 }
 
 func (t *EditView) Lines() int {
 	return len(t.index)
-}
-
-// SetScrollable sets the flag that decides whether or not the text view is
-// scrollable. If true, text is kept in a buffer and can be navigated. If false,
-// the last line will always be visible.
-func (t *EditView) SetScrollable(scrollable bool) *EditView {
-	t.scrollable = scrollable
-	if !scrollable {
-		t.trackEnd = true
-	}
-	return t
-}
-
-// SetWrap sets the flag that, if true, leads to lines that are longer than the
-// available width being wrapped onto the next line. If false, any characters
-// beyond the available width are not displayed.
-func (t *EditView) SetWrap(wrap bool) *EditView {
-	if t.wrap != wrap {
-		t.index = nil
-	}
-	t.wrap = wrap
-	return t
 }
 
 // SetWordWrap sets the flag that, if true and if the "wrap" flag is also true
@@ -637,25 +738,15 @@ func (t *EditView) SetHighlightedFunc(handler func(added, removed, remaining []s
 }
 
 // ScrollTo scrolls to the specified row and column (both starting with 0).
-func (t *EditView) ScrollTo(row, column int) *EditView {
-	if !t.scrollable {
-		return t
-	}
+func (t *EditView) ScrollTo(row int) *EditView {
 	t.lineOffset = row
-	t.columnOffset = column
-	t.trackEnd = false
 	return t
 }
 
 // ScrollToBeginning scrolls to the top left corner of the text if the text view
 // is scrollable.
 func (t *EditView) ScrollToBeginning() *EditView {
-	if !t.scrollable {
-		return t
-	}
-	t.trackEnd = false
 	t.lineOffset = 0
-	t.columnOffset = 0
 	return t
 }
 
@@ -663,18 +754,15 @@ func (t *EditView) ScrollToBeginning() *EditView {
 // is scrollable. Adding new rows to the end of the text view will cause it to
 // scroll with the new data.
 func (t *EditView) ScrollToEnd() *EditView {
-	if !t.scrollable {
-		return t
-	}
-	t.trackEnd = true
-	t.columnOffset = 0
+	_, _, _, height := t.GetInnerRect()
+	t.lineOffset = len(t.index) - height
 	return t
 }
 
 // GetScrollOffset returns the number of rows and columns that are skipped at
 // the top left corner when the text view has been scrolled.
-func (t *EditView) GetScrollOffset() (row, column int) {
-	return t.lineOffset, t.columnOffset
+func (t *EditView) GetScrollOffset() int {
+	return t.lineOffset
 }
 
 // Clear removes all text from the buffer.
@@ -778,12 +866,11 @@ func (t *EditView) SetToggleHighlights(toggle bool) *EditView {
 // Nothing happens if there are no highlighted regions or if the text view is
 // not scrollable.
 func (t *EditView) ScrollToHighlight() *EditView {
-	if len(t.highlights) == 0 || !t.scrollable || !t.regions {
+	if len(t.highlights) == 0 || !t.regions {
 		return t
 	}
 	t.index = nil
 	t.scrollToHighlights = true
-	t.trackEnd = false
 	return t
 }
 
@@ -984,7 +1071,7 @@ func (t *EditView) reindexBuffer(width int) {
 		// Split the line if required.
 		var splitLines []string
 		str = strippedStr
-		if t.wrap && len(str) > 0 {
+		if len(str) > 0 {
 			for len(str) > 0 {
 				extract := runewidth.Truncate(str, width, "")
 				if len(extract) == 0 {
@@ -1107,7 +1194,7 @@ func (t *EditView) reindexBuffer(width int) {
 		}
 
 		// Word-wrapped lines may have trailing whitespace. Remove it.
-		if t.wrap && t.wordWrap {
+		if t.wordWrap {
 			for _, line := range t.index {
 				str := t.buffer[line.Line][line.Pos:line.NextPos]
 				spaces := spacePattern.FindAllStringIndex(str, -1)
@@ -1184,6 +1271,7 @@ func (t *EditView) Draw(screen tcell.Screen) {
 	t.Box.DrawForSubclass(screen, t)
 	t.Lock()
 	defer t.Unlock()
+	t.screen = screen
 	totalWidth, totalHeight := screen.Size()
 
 	// Get the available size.
@@ -1191,7 +1279,7 @@ func (t *EditView) Draw(screen tcell.Screen) {
 	t.pageSize = height
 
 	// If the width has changed, we need to reindex.
-	if width != t.lastWidth && t.wrap {
+	if width != t.lastWidth {
 		t.index = nil
 	}
 	t.lastWidth = width
@@ -1217,57 +1305,11 @@ func (t *EditView) Draw(screen tcell.Screen) {
 			// No, let's move to the start of the highlights.
 			t.lineOffset = t.fromHighlight
 		}
-
-		// If the highlight is too far to the right, move it to the middle.
-		if t.posHighlight-t.columnOffset > 3*width/4 {
-			t.columnOffset = t.posHighlight - width/2
-		}
-
-		// If the highlight is off-screen on the left, move it on-screen.
-		if t.posHighlight-t.columnOffset < 0 {
-			t.columnOffset = t.posHighlight - width/4
-		}
 	}
 	t.scrollToHighlights = false
 
-	// Adjust line offset.
-	if t.lineOffset+height > len(t.index) {
-		t.trackEnd = true
-	}
-	if t.trackEnd {
-		t.lineOffset = len(t.index) - height
-	}
 	if t.lineOffset < 0 {
 		t.lineOffset = 0
-	}
-
-	// Adjust column offset.
-	if t.align == tview.AlignLeft {
-		if t.columnOffset+width > t.longestLine {
-			t.columnOffset = t.longestLine - width
-		}
-		if t.columnOffset < 0 {
-			t.columnOffset = 0
-		}
-	} else if t.align == AlignRight {
-		if t.columnOffset-width < -t.longestLine {
-			t.columnOffset = width - t.longestLine
-		}
-		if t.columnOffset > 0 {
-			t.columnOffset = 0
-		}
-	} else { // AlignCenter.
-		half := (t.longestLine - width) / 2
-		if half > 0 {
-			if t.columnOffset > half {
-				t.columnOffset = half
-			}
-			if t.columnOffset < -half {
-				t.columnOffset = -half
-			}
-		} else {
-			t.columnOffset = 0
-		}
 	}
 
 	// Draw the buffer.
@@ -1307,22 +1349,11 @@ func (t *EditView) Draw(screen tcell.Screen) {
 		colorTagIndices, colorTags, regionIndices, regions, escapeIndices, strippedText, _ := decomposeString(text, t.dynamicColors, t.regions)
 
 		// Calculate the position of the line.
-		var skip, posX int
-		if t.align == tview.AlignLeft {
-			posX = -t.columnOffset
-		} else if t.align == AlignRight {
-			posX = width - index.Width - t.columnOffset
-		} else { // AlignCenter.
-			posX = (width-index.Width)/2 - t.columnOffset
-		}
-		if posX < 0 {
-			skip = -posX
-			posX = 0
-		}
+		var posX int
 
 		// Print the line.
 		if y+line-t.lineOffset >= 0 {
-			var colorPos, regionPos, escapePos, tagOffset, skipped int
+			var colorPos, regionPos, escapePos, tagOffset int
 			iterateString(strippedText, func(main rune, comb []rune, textPos, textWidth, screenPos, screenWidth int) bool {
 				// Process tags.
 				for {
@@ -1387,12 +1418,6 @@ func (t *EditView) Draw(screen tcell.Screen) {
 					style = style.Background(fg).Foreground(bg)
 				}
 
-				// Skip to the right.
-				if !t.wrap && skipped < skip {
-					skipped += screenWidth
-					return false
-				}
-
 				// Stop at the right border.
 				if posX+screenWidth > width || x+posX >= totalWidth {
 					return true
@@ -1414,17 +1439,35 @@ func (t *EditView) Draw(screen tcell.Screen) {
 		}
 	}
 
-	// If this view is not scrollable, we'll purge the buffer of lines that have
-	// scrolled out of view.
-	if !t.scrollable && t.lineOffset > 0 {
-		if t.lineOffset >= len(t.index) {
-			t.buffer = nil
-		} else {
-			t.buffer = t.buffer[t.index[t.lineOffset].Line:]
+	// update cursor
+	if len(t.index) > 0 {
+		if ph := len(t.index); t.cursor.y > ph-1 {
+			t.cursor.y = ph - 1
 		}
-		t.index = nil
-		t.lineOffset = 0
+		if t.cursor.y > height-1 {
+			t.cursor.y = height - 1
+		}
+		if pw := t.practicalWidth(t.cursor.y); t.cursor.x > pw {
+			t.cursor.x = pw
+		}
+		if t.cursor.x > width-1 {
+			t.cursor.x = width - 1
+		}
+		screen.ShowCursor(x+t.cursor.x, y+t.cursor.y)
 	}
+
+}
+
+func (t *EditView) practicalWidth(y int) int {
+	_, _, width, _ := t.GetInnerRect()
+	for width > 0 {
+		_, hasByte := t.runeAt(width-1, y)
+		if hasByte {
+			return width
+		}
+		width--
+	}
+	return width
 }
 
 // InputHandler returns the handler for this primitive.
@@ -1439,51 +1482,69 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			return
 		}
 
-		if !t.scrollable {
-			return
-		}
-
 		switch key {
 		case tcell.KeyRune:
-			switch event.Rune() {
-			case 'g': // Home.
-				t.trackEnd = false
-				t.lineOffset = 0
-				t.columnOffset = 0
-			case 'G': // End.
-				t.trackEnd = true
-				t.columnOffset = 0
-			case 'j': // Down.
-				t.lineOffset++
-			case 'k': // Up.
-				t.trackEnd = false
-				t.lineOffset--
-			case 'h': // Left.
-				t.columnOffset--
-			case 'l': // Right.
-				t.columnOffset++
-			}
+			t.writeAt(event.Rune(), t.cursor.x, t.cursor.y)
+			t.cursorRight()
 		case tcell.KeyHome:
-			t.trackEnd = false
 			t.lineOffset = 0
-			t.columnOffset = 0
+			t.cursor.x = 0
+			t.cursor.y = 0
 		case tcell.KeyEnd:
-			t.trackEnd = true
-			t.columnOffset = 0
+			_, _, _, height := t.GetInnerRect()
+			t.lineOffset = len(t.index) - height
+			t.cursor.y = height - 1
+			t.cursor.x = t.practicalWidth(t.cursor.y)
 		case tcell.KeyUp:
-			t.trackEnd = false
-			t.lineOffset--
+			if event.Modifiers()&tcell.ModCtrl != 0 {
+				indent := t.indentAt(t.cursor.y)
+				for t.cursorUp() {
+					if t.indentAt(t.cursor.y) != indent {
+						break
+					}
+				}
+			} else {
+				t.cursorUp()
+			}
 		case tcell.KeyDown:
-			t.lineOffset++
+			if event.Modifiers()&tcell.ModCtrl != 0 {
+				indent := t.indentAt(t.cursor.y)
+				for t.cursorDown() {
+					if t.indentAt(t.cursor.y) != indent {
+						break
+					}
+				}
+			} else {
+				t.cursorDown()
+			}
 		case tcell.KeyLeft:
-			t.columnOffset--
+			if event.Modifiers()&tcell.ModCtrl != 0 {
+				r, _ := t.runeAt(t.cursor.x, t.cursor.y)
+				isWhite := spacePattern.MatchString(string([]rune{r}))
+				for t.cursorLeft() {
+					r, _ = t.runeAt(t.cursor.x, t.cursor.y)
+					if isWhite != spacePattern.MatchString(string([]rune{r})) {
+						break
+					}
+				}
+			} else {
+				t.cursorLeft()
+			}
 		case tcell.KeyRight:
-			t.columnOffset++
+			if event.Modifiers()&tcell.ModCtrl != 0 {
+				r, _ := t.runeAt(t.cursor.x, t.cursor.y)
+				isWhite := spacePattern.MatchString(string([]rune{r}))
+				for t.cursorRight() {
+					r, _ = t.runeAt(t.cursor.x, t.cursor.y)
+					if isWhite != spacePattern.MatchString(string([]rune{r})) {
+						break
+					}
+				}
+			} else {
+				t.cursorRight()
+			}
 		case tcell.KeyPgDn, tcell.KeyCtrlF:
-			t.lineOffset += t.pageSize
 		case tcell.KeyPgUp, tcell.KeyCtrlB:
-			t.trackEnd = false
-			t.lineOffset -= t.pageSize
 		}
 	})
 }
@@ -1514,7 +1575,6 @@ func (t *EditView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 			setFocus(t)
 			consumed = true
 		case tview.MouseScrollUp:
-			t.trackEnd = false
 			t.lineOffset--
 			consumed = true
 		case tview.MouseScrollDown:
