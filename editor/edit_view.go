@@ -506,7 +506,26 @@ func (t *EditView) deleteAt(x, y int) {
 	}
 }
 
-func (t *EditView) writeAt(r rune, x, y int) {
+func (t *EditView) writeAt(s string, x, y int) {
+	if len(s) == 0 {
+		return
+	}
+
+	// Abstract writing string with newlines as writing separate strings with newlines in between, backwards.
+	parts := strings.Split(s, "\n")
+	if len(s) > 1 && len(parts) > 1 {
+		for i := len(parts) - 1; i >= 0; i-- {
+			if len(parts[i]) == 0 {
+				continue
+			}
+			t.writeAt(parts[i], x, y)
+			if i > 0 {
+				t.writeAt("\n", x, y)
+			}
+		}
+		return
+	}
+
 	defer func() {
 		if changed := func() func() {
 			_, _, width, _ := t.GetInnerRect()
@@ -540,14 +559,14 @@ func (t *EditView) writeAt(r rune, x, y int) {
 	colorIndices, _, regionIndices, _, escapeIndices, _, lineWidth := decomposeString(string(practicalLine), true, true)
 
 	if x+1 > lineWidth {
-		if r == rune('\r') {
+		if s == "\n" {
 			t.buffer = append(
 				t.buffer[:idx.Line+1],
 				append(
 					[]string{""},
 					t.buffer[idx.Line+1:]...)...)
 		} else {
-			t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s", string(before), string(practicalLine), string([]rune{r}), string(after))
+			t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s", string(before), string(practicalLine), s, string(after))
 		}
 		return
 	}
@@ -577,7 +596,7 @@ func (t *EditView) writeAt(r rune, x, y int) {
 		consumedLength++
 	}
 
-	if r == rune('\r') {
+	if s == "\n" {
 		t.buffer = append(
 			t.buffer[:idx.Line],
 			append(
@@ -586,7 +605,7 @@ func (t *EditView) writeAt(r rune, x, y int) {
 					[]string{fmt.Sprintf("%s%s", string(practicalLine[peekIndex:]), string(after))},
 					t.buffer[idx.Line+1:]...)...)...)
 	} else {
-		t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s%s", string(before), string(practicalLine[:peekIndex]), string([]rune{r}), string(practicalLine[peekIndex:]), string(after))
+		t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s%s", string(before), string(practicalLine[:peekIndex]), s, string(practicalLine[peekIndex:]), string(after))
 	}
 }
 
@@ -1634,7 +1653,7 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 		case tcell.KeyPgDn, tcell.KeyCtrlF:
 		case tcell.KeyPgUp, tcell.KeyCtrlB:
 		default:
-			t.writeAt(event.Rune(), t.cursor.x, t.cursor.y)
+			t.writeAt(string([]rune{event.Rune()}), t.cursor.x, t.cursor.y)
 			t.cursorRight()
 		}
 	})
