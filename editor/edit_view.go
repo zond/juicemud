@@ -3,6 +3,7 @@ package editor
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -402,10 +403,6 @@ type EditView struct {
 	// changed.
 	changed func()
 
-	// An optional function which is called when the user presses one of the
-	// following keys: Escape, Enter, Tab, Backtab.
-	done func(tcell.Key)
-
 	// An optional function which is called when one or more regions were
 	// highlighted.
 	highlighted func(added, removed, remaining []string)
@@ -421,6 +418,91 @@ func NewEditView() *EditView {
 		textColor:     tview.Styles.PrimaryTextColor,
 		regions:       false,
 		dynamicColors: false,
+	}
+}
+
+func (t *EditView) deleteAt(x, y int) {
+	defer func() {
+		if changed := func() func() {
+			_, _, width, _ := t.GetInnerRect()
+			t.Lock()
+			defer t.Unlock()
+			t.index = nil
+			t.reindexBuffer(width)
+			return t.changed
+		}(); changed != nil {
+			go changed()
+		}
+	}()
+
+	y += t.lineOffset
+	if y > len(t.index)-1 {
+		return
+	}
+
+	idx := t.index[y]
+	line := []rune(t.buffer[idx.Line])
+	if len(line) == 0 {
+		t.buffer = append(t.buffer[:idx.Line], t.buffer[idx.Line+1:]...)
+		return
+	}
+
+	before := []rune{}
+	if idx.Pos > 0 {
+		before = line[:idx.Pos]
+	}
+	after := []rune{}
+	if idx.NextPos < len(line) {
+		after = line[idx.NextPos:]
+	}
+	practicalLine := line[idx.Pos:idx.NextPos]
+	colorIndices, _, regionIndices, _, escapeIndices, _, lineWidth := decomposeString(string(practicalLine), true, true)
+
+	if x > lineWidth-1 {
+		if idx.Line < len(t.buffer)-2 {
+			t.buffer = append(
+				t.buffer[:idx.Line],
+				append(
+					[]string{fmt.Sprintf("%s%s", t.buffer[idx.Line], t.buffer[idx.Line+1])},
+					t.buffer[idx.Line+2:]...)...)
+			return
+		} else if idx.Line < len(t.buffer)-1 {
+			t.buffer = append(t.buffer[:idx.Line], fmt.Sprintf("%s%s", t.buffer[idx.Line], t.buffer[idx.Line+1]))
+			return
+		} else {
+			return
+		}
+	}
+
+	peekIndex := 0
+	consumedLength := 0
+	for {
+		for _, colorIndex := range colorIndices {
+			if colorIndex[0] == peekIndex {
+				peekIndex = colorIndex[1]
+			}
+		}
+		for _, regionIndex := range regionIndices {
+			if regionIndex[0] == peekIndex {
+				peekIndex = regionIndex[1]
+			}
+		}
+		for _, escapeIndex := range escapeIndices {
+			if escapeIndex[0] == peekIndex {
+				peekIndex = escapeIndex[1]
+			}
+		}
+		if consumedLength == x {
+			break
+		}
+		peekIndex++
+		consumedLength++
+	}
+
+	if peekIndex < len(practicalLine)-1 {
+		t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s", string(before), string(practicalLine[:peekIndex]), string(practicalLine[peekIndex+1:]), string(after))
+	} else {
+		t.buffer[idx.Line] = fmt.Sprintf("%s%s%s", string(before), string(practicalLine[:peekIndex]), string(after))
 	}
 }
 
@@ -510,10 +592,10 @@ func (t *EditView) writeAt(r rune, x, y int) {
 
 func (t *EditView) cursorDown() bool {
 	_, _, _, height := t.GetInnerRect()
-	if lines := len(t.index); t.cursor.y+1 < lines && t.cursor.y+1 < height {
+	if lines := len(t.index); t.cursor.y < lines-t.lineOffset-1 && t.cursor.y < height-1 {
 		t.cursor.y++
 		return true
-	} else if t.cursor.y+t.lineOffset+1 < len(t.index) {
+	} else if len(t.index)-t.lineOffset > height/2 {
 		t.lineOffset++
 		return true
 	}
@@ -533,10 +615,10 @@ func (t *EditView) cursorUp() bool {
 
 func (t *EditView) cursorRight() bool {
 	_, _, width, height := t.GetInnerRect()
-	if pw := t.practicalWidth(t.cursor.y); t.cursor.x < pw && t.cursor.x+1 < width {
+	if pw := t.practicalWidth(t.cursor.y); t.cursor.x < pw && t.cursor.x < width-1 {
 		t.cursor.x++
 		return true
-	} else if lines := len(t.index); t.cursor.y+1 < lines && t.cursor.y+1 < height {
+	} else if lines := len(t.index); t.cursor.y+1 < lines && t.cursor.y < height-1 {
 		t.cursor.y++
 		t.cursor.x = 0
 		return true
@@ -555,7 +637,7 @@ func (t *EditView) cursorLeft() bool {
 	} else if t.cursor.y > 0 {
 		t.cursor.y--
 		t.cursor.x = t.practicalWidth(t.cursor.y)
-		if t.cursor.x+2 > width {
+		if t.cursor.x > width-1 {
 			t.cursor.x = width - 1
 		}
 		return true
@@ -588,10 +670,6 @@ func (t *EditView) runeAt(x, y int) (rune, bool) {
 	}
 	line := []rune(stripTags(t.buffer[idx.Line][idx.Pos:idx.NextPos]))
 	return line[x], true
-}
-
-func (t *EditView) Lines() int {
-	return len(t.index)
 }
 
 // SetWordWrap sets the flag that, if true and if the "wrap" flag is also true
@@ -714,14 +792,6 @@ func (t *EditView) SetRegions(regions bool) *EditView {
 // See package description for details on dealing with concurrency.
 func (t *EditView) SetChangedFunc(handler func()) *EditView {
 	t.changed = handler
-	return t
-}
-
-// SetDoneFunc sets a handler which is called when the user presses on the
-// following keys: Escape, Enter, Tab, Backtab. The key is passed to the
-// handler.
-func (t *EditView) SetDoneFunc(handler func(key tcell.Key)) *EditView {
-	t.done = handler
 	return t
 }
 
@@ -1441,21 +1511,40 @@ func (t *EditView) Draw(screen tcell.Screen) {
 
 	// update cursor
 	if len(t.index) > 0 {
-		if ph := len(t.index); t.cursor.y > ph-1 {
-			t.cursor.y = ph - 1
-		}
-		if t.cursor.y > height-1 {
-			t.cursor.y = height - 1
-		}
-		if pw := t.practicalWidth(t.cursor.y); t.cursor.x > pw {
-			t.cursor.x = pw
-		}
-		if t.cursor.x > width-1 {
-			t.cursor.x = width - 1
-		}
+		limit(&t.cursor.y, 0, min(len(t.index)-t.lineOffset, height))
+		limit(&t.cursor.x, 0, min(t.practicalWidth(t.cursor.y)+1, width))
 		screen.ShowCursor(x+t.cursor.x, y+t.cursor.y)
 	}
 
+}
+
+func min(i ...int) int {
+	m := int(math.MaxInt64)
+	for _, v := range i {
+		if v < m {
+			m = v
+		}
+	}
+	return m
+}
+
+func max(i ...int) int {
+	m := int(math.MinInt64)
+	for _, v := range i {
+		if v > m {
+			m = v
+		}
+	}
+	return m
+}
+
+func limit(v *int, minInc, maxExc int) {
+	if *v < minInc {
+		*v = minInc
+	}
+	if *v > maxExc-1 {
+		*v = maxExc - 1
+	}
 }
 
 func (t *EditView) practicalWidth(y int) int {
@@ -1473,27 +1562,26 @@ func (t *EditView) practicalWidth(y int) int {
 // InputHandler returns the handler for this primitive.
 func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return t.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-		key := event.Key()
-
-		if key == tcell.KeyEscape || key == tcell.KeyEnter || key == tcell.KeyTab || key == tcell.KeyBacktab {
-			if t.done != nil {
-				t.done(key)
+		if event.Key() == 127 && event.Rune() == 127 {
+			if t.cursorLeft() {
+				t.deleteAt(t.cursor.x, t.cursor.y)
 			}
 			return
 		}
 
+		key := event.Key()
+
 		switch key {
-		case tcell.KeyRune:
-			t.writeAt(event.Rune(), t.cursor.x, t.cursor.y)
-			t.cursorRight()
+		case tcell.KeyDelete:
+			t.deleteAt(t.cursor.x, t.cursor.y)
 		case tcell.KeyHome:
 			t.lineOffset = 0
 			t.cursor.x = 0
 			t.cursor.y = 0
 		case tcell.KeyEnd:
 			_, _, _, height := t.GetInnerRect()
-			t.lineOffset = len(t.index) - height
-			t.cursor.y = height - 1
+			t.lineOffset = len(t.index) - height/2
+			t.cursor.y = len(t.index) - t.lineOffset - 1
 			t.cursor.x = t.practicalWidth(t.cursor.y)
 		case tcell.KeyUp:
 			if event.Modifiers()&tcell.ModCtrl != 0 {
@@ -1545,6 +1633,9 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			}
 		case tcell.KeyPgDn, tcell.KeyCtrlF:
 		case tcell.KeyPgUp, tcell.KeyCtrlB:
+		default:
+			t.writeAt(event.Rune(), t.cursor.x, t.cursor.y)
+			t.cursorRight()
 		}
 	})
 }
