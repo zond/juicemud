@@ -437,33 +437,10 @@ func (t *EditView) reindexAndChange() {
 	}
 }
 
-func (t *EditView) deleteAt(x, y int) {
+func (t *EditView) deleteAtIndex(idx *textViewIndex) {
 	defer t.reindexAndChange()
 
-	y += t.lineOffset
-	if y > len(t.index)-1 {
-		return
-	}
-
-	idx := t.index[y]
-	line := []rune(t.buffer[idx.Line])
-	if len(line) == 0 {
-		t.buffer = append(t.buffer[:idx.Line], t.buffer[idx.Line+1:]...)
-		return
-	}
-
-	before := []rune{}
-	if idx.Pos > 0 {
-		before = line[:idx.Pos]
-	}
-	after := []rune{}
-	if idx.NextPos < len(line) {
-		after = line[idx.NextPos:]
-	}
-	practicalLine := line[idx.Pos:idx.NextPos]
-	colorIndices, _, regionIndices, _, escapeIndices, _, lineWidth := decomposeString(string(practicalLine), true, true)
-
-	if x > lineWidth-1 {
+	if idx.Pos == idx.NextPos {
 		if idx.Line < len(t.buffer)-2 {
 			t.buffer = append(
 				t.buffer[:idx.Line],
@@ -477,37 +454,21 @@ func (t *EditView) deleteAt(x, y int) {
 		} else {
 			return
 		}
+
 	}
 
-	peekIndex := 0
-	consumedLength := 0
-	for {
-		for _, colorIndex := range colorIndices {
-			if colorIndex[0] == peekIndex {
-				peekIndex = colorIndex[1]
-			}
-		}
-		for _, regionIndex := range regionIndices {
-			if regionIndex[0] == peekIndex {
-				peekIndex = regionIndex[1]
-			}
-		}
-		for _, escapeIndex := range escapeIndices {
-			if escapeIndex[0] == peekIndex {
-				peekIndex = escapeIndex[1]
-			}
-		}
-		if consumedLength == x {
-			break
-		}
-		peekIndex++
-		consumedLength++
+	line := []rune(t.buffer[idx.Line])
+	if len(line) == 0 {
+		t.buffer = append(t.buffer[:idx.Line], t.buffer[idx.Line+1:]...)
+		return
 	}
 
-	if peekIndex < len(practicalLine)-1 {
-		t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s", string(before), string(practicalLine[:peekIndex]), string(practicalLine[peekIndex+1:]), string(after))
-	} else {
-		t.buffer[idx.Line] = fmt.Sprintf("%s%s%s", string(before), string(practicalLine[:peekIndex]), string(after))
+	t.buffer[idx.Line] = fmt.Sprintf("%s%s", string(line[:idx.Pos]), string(line[idx.Pos+1:]))
+}
+
+func (t *EditView) deleteAt(x, y int) {
+	if idx := t.indexAt(x, y); idx != nil {
+		t.deleteAtIndex(idx)
 	}
 }
 
@@ -584,7 +545,9 @@ func (t *EditView) writeAtIndex(s string, idx *textViewIndex) {
 }
 
 func (t *EditView) writeAt(s string, x, y int) {
-	t.writeAtIndex(s, t.indexAt(x, y))
+	if idx := t.indexAt(x, y); idx != nil {
+		t.writeAtIndex(s, idx)
+	}
 }
 
 func (t *EditView) cursorCanGoDown() bool {
@@ -1749,11 +1712,20 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 	})
 }
 
+const (
+	startHighlight = "[white:black]"
+	endHighlight   = "[black:white]"
+)
+
 func (t *EditView) removeHighlight(start, end *textViewIndex) {
+	for _ = range []rune(startHighlight) {
+		//t.deleteAt
+	}
 }
 
 func (t *EditView) addHighlight(start, end *textViewIndex) {
-
+	t.writeAtIndex(startHighlight, start)
+	t.writeAtIndex(endHighlight, end)
 }
 
 // MouseHandler returns the mouse handler for this primitive.
