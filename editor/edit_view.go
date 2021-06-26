@@ -325,7 +325,10 @@ type EditView struct {
 	sync.Mutex
 	*tview.Box
 
-	cursor struct {
+	currentlySelecting bool
+	selectStart        *textViewIndex
+	selectEnd          *textViewIndex
+	cursor             struct {
 		x int
 		y int
 	}
@@ -421,19 +424,21 @@ func NewEditView() *EditView {
 	}
 }
 
+func (t *EditView) reindexAndChange() {
+	if changed := func() func() {
+		_, _, width, _ := t.GetInnerRect()
+		t.Lock()
+		defer t.Unlock()
+		t.index = nil
+		t.reindexBuffer(width)
+		return t.changed
+	}(); changed != nil {
+		go changed()
+	}
+}
+
 func (t *EditView) deleteAt(x, y int) {
-	defer func() {
-		if changed := func() func() {
-			_, _, width, _ := t.GetInnerRect()
-			t.Lock()
-			defer t.Unlock()
-			t.index = nil
-			t.reindexBuffer(width)
-			return t.changed
-		}(); changed != nil {
-			go changed()
-		}
-	}()
+	defer t.reindexAndChange()
 
 	y += t.lineOffset
 	if y > len(t.index)-1 {
@@ -506,115 +511,106 @@ func (t *EditView) deleteAt(x, y int) {
 	}
 }
 
-func (t *EditView) writeAt(s string, x, y int) {
+func (t *EditView) writeAtIndex(s string, idx *textViewIndex) {
 	if len(s) == 0 {
 		return
 	}
 
 	// Abstract writing string with newlines as writing separate strings with newlines in between, backwards.
-	parts := strings.Split(s, "\n")
+	parts := strings.Split(s, "\r")
 	if len(s) > 1 && len(parts) > 1 {
 		for i := len(parts) - 1; i >= 0; i-- {
 			if len(parts[i]) == 0 {
 				continue
 			}
-			t.writeAt(parts[i], x, y)
+			t.writeAtIndex(parts[i], idx)
 			if i > 0 {
-				t.writeAt("\n", x, y)
+				t.writeAtIndex("\r", idx)
 			}
 		}
 		return
 	}
 
-	defer func() {
-		if changed := func() func() {
-			_, _, width, _ := t.GetInnerRect()
-			t.Lock()
-			defer t.Unlock()
-			t.index = nil
-			t.reindexBuffer(width)
-			return t.changed
-		}(); changed != nil {
-			go changed()
-		}
-	}()
+	defer t.reindexAndChange()
 
-	y += t.lineOffset
-	for y > len(t.index) {
-		t.buffer = append(t.buffer, "")
-		return
-	}
-	idx := t.index[y]
-	line := []rune(t.buffer[idx.Line])
-
-	before := []rune{}
-	if idx.Pos > 0 {
-		before = line[:idx.Pos]
-	}
-	after := []rune{}
-	if idx.NextPos < len(line) {
-		after = line[idx.NextPos:]
-	}
-	practicalLine := line[idx.Pos:idx.NextPos]
-	colorIndices, _, regionIndices, _, escapeIndices, _, lineWidth := decomposeString(string(practicalLine), true, true)
-
-	if x+1 > lineWidth {
-		if s == "\n" {
+	if idx.Pos == idx.NextPos {
+		if s == "\r" {
+			after := []string{}
+			if idx.Line < len(t.buffer)-1 {
+				after = t.buffer[idx.Line+1:]
+			}
 			t.buffer = append(
 				t.buffer[:idx.Line+1],
 				append(
 					[]string{""},
-					t.buffer[idx.Line+1:]...)...)
-		} else {
-			t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s", string(before), string(practicalLine), s, string(after))
+					after...)...)
+			idx.NextPos = idx.Pos
+			return
 		}
+		after := ""
+		if idx.Pos < len(t.buffer[idx.Line])-1 {
+			after = t.buffer[idx.Line][idx.Pos:]
+		}
+		t.buffer[idx.Line] = fmt.Sprintf("%s%s%s", t.buffer[idx.Line][:idx.Pos], s, after)
+		idx.NextPos += len([]rune(s))
 		return
 	}
 
-	peekIndex := 0
-	consumedLength := 0
-	for {
-		for _, colorIndex := range colorIndices {
-			if colorIndex[0] == peekIndex {
-				peekIndex = colorIndex[1] + 1
-			}
+	if s == "\r" {
+		afterLines := []string{}
+		if idx.Line < len(t.buffer)-1 {
+			afterLines = t.buffer[idx.Line+1:]
 		}
-		for _, regionIndex := range regionIndices {
-			if regionIndex[0] == peekIndex {
-				peekIndex = regionIndex[1] + 1
-			}
+		afterString := ""
+		if idx.Pos < len(t.buffer[idx.Line])-1 {
+			afterString = t.buffer[idx.Line][idx.Pos:]
 		}
-		for _, escapeIndex := range escapeIndices {
-			if escapeIndex[0] == peekIndex {
-				peekIndex = escapeIndex[1] + 1
-			}
-		}
-		if consumedLength == x {
-			break
-		}
-		peekIndex++
-		consumedLength++
-	}
-
-	if s == "\n" {
 		t.buffer = append(
 			t.buffer[:idx.Line],
 			append(
-				[]string{fmt.Sprintf("%s%s", string(before), string(practicalLine[:peekIndex]))},
+				[]string{t.buffer[idx.Line][:idx.Pos]},
 				append(
-					[]string{fmt.Sprintf("%s%s", string(practicalLine[peekIndex:]), string(after))},
-					t.buffer[idx.Line+1:]...)...)...)
-	} else {
-		t.buffer[idx.Line] = fmt.Sprintf("%s%s%s%s%s", string(before), string(practicalLine[:peekIndex]), s, string(practicalLine[peekIndex:]), string(after))
+					[]string{afterString},
+					afterLines...)...)...)
+		idx.NextPos = idx.Pos
+		return
 	}
+	after := ""
+	if idx.Pos < len(t.buffer[idx.Line])-1 {
+		after = t.buffer[idx.Line][idx.Pos:]
+	}
+	t.buffer[idx.Line] = fmt.Sprintf("%s%s%s", t.buffer[idx.Line][:idx.Pos], s, after)
+	idx.NextPos += len([]rune(s))
+}
+
+func (t *EditView) writeAt(s string, x, y int) {
+	t.writeAtIndex(s, t.indexAt(x, y))
+}
+
+func (t *EditView) cursorCanGoDown() bool {
+	_, _, _, height := t.GetInnerRect()
+	return t.cursor.y < len(t.index)-t.lineOffset-1 && t.cursor.y < height-1
+}
+
+func (t *EditView) cursorCanGoUp() bool {
+	return t.cursor.y > 0
+}
+
+func (t *EditView) cursorCanGoRight() bool {
+	_, _, width, _ := t.GetInnerRect()
+	pw := t.practicalWidth(t.cursor.y)
+	return t.cursor.x < pw && t.cursor.x < width-1
+}
+
+func (t *EditView) cursorCanGoLeft() bool {
+	return t.cursor.x > 0
 }
 
 func (t *EditView) cursorDown() bool {
-	_, _, _, height := t.GetInnerRect()
-	if lines := len(t.index); t.cursor.y < lines-t.lineOffset-1 && t.cursor.y < height-1 {
+	if t.cursorCanGoDown() {
 		t.cursor.y++
 		return true
-	} else if len(t.index)-t.lineOffset > height/2 {
+	} else if _, _, _, height := t.GetInnerRect(); len(t.index)-t.lineOffset > height/2 {
 		t.lineOffset++
 		return true
 	}
@@ -622,7 +618,7 @@ func (t *EditView) cursorDown() bool {
 }
 
 func (t *EditView) cursorUp() bool {
-	if t.cursor.y > 0 {
+	if t.cursorCanGoUp() {
 		t.cursor.y--
 		return true
 	} else if t.lineOffset > 0 {
@@ -633,11 +629,10 @@ func (t *EditView) cursorUp() bool {
 }
 
 func (t *EditView) cursorRight() bool {
-	_, _, width, height := t.GetInnerRect()
-	if pw := t.practicalWidth(t.cursor.y); t.cursor.x < pw && t.cursor.x < width-1 {
+	if t.cursorCanGoRight() {
 		t.cursor.x++
 		return true
-	} else if lines := len(t.index); t.cursor.y+1 < lines && t.cursor.y < height-1 {
+	} else if t.cursorCanGoDown() {
 		t.cursor.y++
 		t.cursor.x = 0
 		return true
@@ -649,11 +644,11 @@ func (t *EditView) cursorRight() bool {
 }
 
 func (t *EditView) cursorLeft() bool {
-	_, _, width, _ := t.GetInnerRect()
-	if t.cursor.x > 0 {
+	if t.cursorCanGoLeft() {
 		t.cursor.x--
 		return true
-	} else if t.cursor.y > 0 {
+	} else if t.cursorCanGoUp() {
+		_, _, width, _ := t.GetInnerRect()
 		t.cursor.y--
 		t.cursor.x = t.practicalWidth(t.cursor.y)
 		if t.cursor.x > width-1 {
@@ -678,14 +673,20 @@ func (t *EditView) indentAt(y int) int {
 	return pw
 }
 
-func (t *EditView) indexAt(x, y int) (*textViewIndex, bool) {
+func (t *EditView) indexAt(x, y int) *textViewIndex {
 	y += t.lineOffset
 	if y+1 > len(t.index) {
-		return nil, false
+		return nil
 	}
 	idx := t.index[y]
-	if x+1 > idx.Width {
-		return nil, false
+	if x == idx.Width {
+		return &textViewIndex{
+			Line:    idx.Line,
+			Pos:     idx.NextPos,
+			NextPos: idx.NextPos,
+		}
+	} else if x > idx.Width {
+		return nil
 	}
 
 	practicalLine := t.buffer[idx.Line][idx.Pos:idx.NextPos]
@@ -717,17 +718,20 @@ func (t *EditView) indexAt(x, y int) (*textViewIndex, bool) {
 	}
 
 	return &textViewIndex{
-		Line: idx.Line,
-		Pos:  peekIndex,
-	}, true
+		Line:    idx.Line,
+		Pos:     idx.Pos + peekIndex,
+		NextPos: idx.NextPos,
+	}
 }
 
 func (t *EditView) runeAt(x, y int) (rune, bool) {
-	idx, found := t.indexAt(x, y)
-	if !found {
-		return 0, false
+	if idx := t.indexAt(x, y); idx != nil {
+		if idx.Pos == idx.NextPos {
+			return 0, false
+		}
+		return []rune(t.buffer[idx.Line])[idx.Pos], true
 	}
-	return []rune(t.buffer[idx.Line])[idx.Pos], true
+	return 0, false
 }
 
 // SetWordWrap sets the flag that, if true and if the "wrap" flag is also true
@@ -1608,8 +1612,7 @@ func limit(v *int, minInc, maxExc int) {
 func (t *EditView) practicalWidth(y int) int {
 	_, _, width, _ := t.GetInnerRect()
 	for width > 0 {
-		_, hasByte := t.runeAt(width-1, y)
-		if hasByte {
+		if idx := t.indexAt(width, y); idx != nil {
 			return width
 		}
 		width--
@@ -1629,15 +1632,22 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 
 		_, _, _, height := t.GetInnerRect()
 
+		stopSelecting := true
 		key := event.Key()
 		switch key {
 		case tcell.KeyDelete:
 			t.deleteAt(t.cursor.x, t.cursor.y)
 		case tcell.KeyHome:
+			if event.Modifiers()&tcell.ModShift != 0 {
+				stopSelecting = false
+			}
 			t.lineOffset = 0
 			t.cursor.x = 0
 			t.cursor.y = 0
 		case tcell.KeyPgUp:
+			if event.Modifiers()&tcell.ModShift != 0 {
+				stopSelecting = false
+			}
 			for i := 0; i < height; i++ {
 				if !t.cursorUp() {
 					break
@@ -1650,10 +1660,16 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 				}
 			}
 		case tcell.KeyEnd:
+			if event.Modifiers()&tcell.ModShift != 0 {
+				stopSelecting = false
+			}
 			t.lineOffset = len(t.index) - height/2
 			t.cursor.y = len(t.index) - t.lineOffset - 1
 			t.cursor.x = t.practicalWidth(t.cursor.y)
 		case tcell.KeyUp:
+			if event.Modifiers()&tcell.ModShift != 0 {
+				stopSelecting = false
+			}
 			if event.Modifiers()&tcell.ModCtrl != 0 {
 				indent := t.indentAt(t.cursor.y)
 				for t.cursorUp() {
@@ -1665,6 +1681,9 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 				t.cursorUp()
 			}
 		case tcell.KeyDown:
+			if event.Modifiers()&tcell.ModShift != 0 {
+				stopSelecting = false
+			}
 			if event.Modifiers()&tcell.ModCtrl != 0 {
 				indent := t.indentAt(t.cursor.y)
 				for t.cursorDown() {
@@ -1676,12 +1695,15 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 				t.cursorDown()
 			}
 		case tcell.KeyLeft:
+			if event.Modifiers()&tcell.ModShift != 0 {
+				stopSelecting = false
+			}
 			if event.Modifiers()&tcell.ModCtrl != 0 {
-				r, _ := t.runeAt(t.cursor.x, t.cursor.y)
+				r, origFound := t.runeAt(t.cursor.x, t.cursor.y)
 				isWhite := spacePattern.MatchString(string([]rune{r}))
 				for t.cursorLeft() {
-					r, _ = t.runeAt(t.cursor.x, t.cursor.y)
-					if isWhite != spacePattern.MatchString(string([]rune{r})) {
+					r, found := t.runeAt(t.cursor.x, t.cursor.y)
+					if isWhite != spacePattern.MatchString(string([]rune{r})) || found != origFound {
 						break
 					}
 				}
@@ -1689,12 +1711,15 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 				t.cursorLeft()
 			}
 		case tcell.KeyRight:
+			if event.Modifiers()&tcell.ModShift != 0 {
+				stopSelecting = false
+			}
 			if event.Modifiers()&tcell.ModCtrl != 0 {
-				r, _ := t.runeAt(t.cursor.x, t.cursor.y)
+				r, origFound := t.runeAt(t.cursor.x, t.cursor.y)
 				isWhite := spacePattern.MatchString(string([]rune{r}))
 				for t.cursorRight() {
-					r, _ = t.runeAt(t.cursor.x, t.cursor.y)
-					if isWhite != spacePattern.MatchString(string([]rune{r})) {
+					r, found := t.runeAt(t.cursor.x, t.cursor.y)
+					if isWhite != spacePattern.MatchString(string([]rune{r})) || found != origFound {
 						break
 					}
 				}
@@ -1705,7 +1730,30 @@ func (t *EditView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			t.writeAt(string([]rune{event.Rune()}), t.cursor.x, t.cursor.y)
 			t.cursorRight()
 		}
+		if t.currentlySelecting {
+			if stopSelecting {
+				t.currentlySelecting = false
+			} else {
+				t.removeHighlight(t.selectStart, t.selectEnd)
+				t.selectEnd = t.indexAt(t.cursor.x, t.cursor.y)
+				t.addHighlight(t.selectStart, t.selectEnd)
+			}
+		} else {
+			if !stopSelecting {
+				if t.selectStart = t.indexAt(t.cursor.x, t.cursor.y); t.selectStart != nil {
+					t.currentlySelecting = true
+					t.selectEnd = t.selectStart
+				}
+			}
+		}
 	})
+}
+
+func (t *EditView) removeHighlight(start, end *textViewIndex) {
+}
+
+func (t *EditView) addHighlight(start, end *textViewIndex) {
+
 }
 
 // MouseHandler returns the mouse handler for this primitive.
