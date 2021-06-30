@@ -17,5 +17,5 @@ func Edit(sess ssh.Session, s string) (string, error) {
 		return "", err
 	}
 	ed := editorview.Editor{Screen: screen}
-	return ed.Edit(s)
+	return ed.Edit(editorview.Escape(s))
 }
