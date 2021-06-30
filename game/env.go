@@ -6,13 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/gliderlabs/ssh"
 	"github.com/timshannon/badgerhold/v2"
 	"github.com/zond/juicemud/editor"
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
-	"github.com/zond/juicemud/tty"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ssh/terminal"
 )
@@ -137,16 +135,7 @@ indent 1
 x`
 
 func (e *Env) edit([]string) error {
-	tty := &tty.SSHTTY{Sess: e.Sess}
-	screen, err := tcell.NewTerminfoScreenFromTty(tty)
-	if err != nil {
-		return err
-	}
-	if err := screen.Init(); err != nil {
-		return err
-	}
-	ed := editor.Editor{Screen: screen}
-	_, err = ed.Edit(lorem)
+	_, err := editor.Edit(e.Sess, lorem)
 	return err
 }
 
