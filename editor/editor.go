@@ -371,15 +371,13 @@ func (e *Editor) redraw() {
 	}
 
 	eol := func(contentLineIdx, contentLineLen int) {
-		for len(e.wrappedBufferIndex[len(e.wrappedBufferIndex)-1]) < width {
-			e.wrappedBufferIndex[len(e.wrappedBufferIndex)-1] = append(
-				e.wrappedBufferIndex[len(e.wrappedBufferIndex)-1],
-				[2]int{
-					-contentLineLen,
-					contentLineIdx,
-				},
-			)
-		}
+		e.wrappedBufferIndex[len(e.wrappedBufferIndex)-1] = append(
+			e.wrappedBufferIndex[len(e.wrappedBufferIndex)-1],
+			[2]int{
+				-contentLineLen,
+				contentLineIdx,
+			},
+		)
 	}
 
 	for contentLineIdx, contentLine := range e.contentBuffer {
@@ -403,7 +401,7 @@ func (e *Editor) redraw() {
 		for x := len(wrappedLine); x < width; x++ {
 			e.Screen.SetContent(x, wrappedLineIdx, rune(' '), nil, tcell.StyleDefault)
 		}
-		if wrappedLineIdx > height-2 {
+		if wrappedLineIdx+1 > height-1 {
 			break
 		}
 	}
