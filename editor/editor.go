@@ -4,11 +4,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/gliderlabs/ssh"
 	"github.com/zond/editorview"
-	"github.com/zond/juicemud/tty"
+	"github.com/zond/sshtcelltty"
 )
 
 func Edit(sess ssh.Session, s string) (string, error) {
-	tty := &tty.SSHTTY{Sess: sess}
+	tty := &sshtcelltty.SSHTTY{Sess: sess}
 	screen, err := tcell.NewTerminfoScreenFromTty(tty)
 	if err != nil {
 		return "", err
