@@ -2,12 +2,11 @@ package editor
 
 import (
 	"github.com/gdamore/tcell/v2"
-	"github.com/gliderlabs/ssh"
 	"github.com/zond/editorview"
 	"github.com/zond/sshtcelltty"
 )
 
-func Edit(sess ssh.Session, s string) (string, error) {
+func Edit(sess sshtcelltty.InterleavedSSHSession, s string) (string, error) {
 	tty := &sshtcelltty.SSHTTY{Sess: sess}
 	screen, err := tcell.NewTerminfoScreenFromTty(tty)
 	if err != nil {

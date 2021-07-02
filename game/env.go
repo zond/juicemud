@@ -6,11 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gliderlabs/ssh"
 	"github.com/timshannon/badgerhold/v2"
 	"github.com/zond/juicemud/editor"
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
+	"github.com/zond/sshtcelltty"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ssh/terminal"
 )
@@ -25,7 +25,7 @@ type Env struct {
 	Game   *Game
 	User   *storage.User
 	Object storage.Object
-	Sess   ssh.Session
+	Sess   sshtcelltty.InterleavedSSHSession
 	Term   *terminal.Terminal
 }
 
@@ -120,7 +120,7 @@ func (e *Env) Process() error {
 }
 
 var lorem = `What is Lorem Ipsum?
-
+<hepp> & oj
 &lt;hehu&lt;
 `
 
