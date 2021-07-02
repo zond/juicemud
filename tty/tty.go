@@ -9,24 +9,40 @@ import (
 )
 
 type SSHTTY struct {
-	Sess           ssh.Session
-	ResizeCallback func()
+	Sess ssh.Session
 
 	resizeCallback func()
 	stop           chan bool
 	drain          chan bool
-	incoming       chan byte
 	mutex          sync.Mutex
 	width          int
 	height         int
 }
 
-func (s *SSHTTY) Read(b []byte) (int, error) {
+type readResult struct {
+	b   byte
+	err error
+}
+
+func (s *SSHTTY) readOneByte(c chan readResult) {
+	defer close(c)
+	buf := make([]byte, 1)
+	_, err := s.Sess.Read(buf)
 	select {
-	case v, ok := <-s.incoming:
+	case <-s.stop:
+		return
+	case c <- readResult{b: buf[0], err: err}:
+	}
+}
+
+func (s *SSHTTY) Read(b []byte) (int, error) {
+	incoming := make(chan readResult)
+	go s.readOneByte(incoming)
+	select {
+	case v, ok := <-incoming:
 		if ok {
-			b[0] = v
-			return 1, nil
+			b[0] = v.b
+			return 1, v.err
 		} else {
 			return 0, io.EOF
 		}
@@ -59,37 +75,18 @@ func (s *SSHTTY) Start() error {
 		for {
 			select {
 			case ev := <-winCh:
-				cb1, cb2 := func() (func(), func()) {
+				cb := func() func() {
 					s.mutex.Lock()
 					defer s.mutex.Unlock()
 					s.width = ev.Width
 					s.height = ev.Height
-					return s.ResizeCallback, s.resizeCallback
+					return s.resizeCallback
 				}()
-				if cb2 != nil {
-					cb2()
-				}
-				if cb1 != nil {
-					cb1()
+				if cb != nil {
+					cb()
 				}
 			case <-s.stop:
 				return
-			}
-		}
-	}()
-
-	s.incoming = make(chan byte)
-	go func() {
-		defer close(s.incoming)
-		buf := []byte{0}
-		for nRead, err := s.Sess.Read(buf); err == nil; nRead, err = s.Sess.Read(buf) {
-			if nRead == 1 {
-				s.incoming <- buf[0]
-			}
-			select {
-			case <-s.stop:
-				return
-			default:
 			}
 		}
 	}()
