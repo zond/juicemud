@@ -14,6 +14,7 @@ require (
 	github.com/golang/protobuf v1.3.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-runewidth v0.0.13 // indirect
+	github.com/sergi/go-diff v1.2.0 // indirect
 	github.com/tdewolff/parse/v2 v2.5.18
 	github.com/timshannon/badgerhold/v2 v2.0.0-20201228162759-17050a01e34c
 	github.com/zond/editorview v0.0.0-00010101000000-000000000000
