@@ -9,12 +9,12 @@ replace github.com/zond/editorview => /home/zond/projects/editorview
 replace github.com/zond/sshtcelltty => /home/zond/projects/sshtcelltty
 
 require (
+	github.com/ditashi/jsbeautifier-go v0.0.0-20141206144643-2520a8026a9c
 	github.com/gdamore/tcell/v2 v2.3.11
 	github.com/gliderlabs/ssh v0.3.3
 	github.com/golang/protobuf v1.3.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-runewidth v0.0.13 // indirect
-	github.com/sergi/go-diff v1.2.0 // indirect
 	github.com/tdewolff/parse/v2 v2.5.18
 	github.com/timshannon/badgerhold/v2 v2.0.0-20201228162759-17050a01e34c
 	github.com/zond/editorview v0.0.0-00010101000000-000000000000
