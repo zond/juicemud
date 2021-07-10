@@ -33,5 +33,7 @@ func Edit(sess sshtcelltty.InterleavedSSHSession, s string) (string, error) {
 		}
 		return []tcell.Event{untypedEv}
 	}
+	ed.HelpMessage = editorview.DefaultHelpMessage + `
+Shift-Tab: Indent JavaScript`
 	return ed.Edit(editorview.Escape(s))
 }
