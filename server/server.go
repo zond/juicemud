@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/zond/juicemud/game"
@@ -12,10 +14,13 @@ import (
 	"github.com/zond/juicemud/storage"
 
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/net/webdav"
 )
 
 func main() {
-	iface := flag.String("iface", "127.0.0.1:15000", "Where to listen to SSH connections")
+	sshIface := flag.String("ssh", "127.0.0.1:15000", "Where to listen to SSH connections")
+	hostname := flag.String("hostname", "localhost", "Hostname for HTTPS certificate signatures")
+	httpIface := flag.String("webdav", "127.0.0.1:8080", "Where to listen to HTTPS connections for WebDAV")
 	dir := flag.String("dir", filepath.Join(os.Getenv("HOME"), ".juicemud"), "Where to save database and settings")
 
 	flag.Parse()
@@ -31,21 +36,25 @@ func main() {
 		dirFile.Close()
 	}
 
-	privatePEMPath := filepath.Join(*dir, "private.pem")
-	publicPEMPath := filepath.Join(*dir, "public.pem")
-	privatePEMFile, err := os.Open(privatePEMPath)
-	if os.IsNotExist(err) {
-		if err := pemfile.GenKeyPair(privatePEMPath, publicPEMPath); err != nil {
+	keyPath := filepath.Join(*dir, "key")
+	sshPubKeyPath := filepath.Join(*dir, "sshPubKey")
+	httpsCertPath := filepath.Join(*dir, "httpsCert")
+	if _, err = os.Stat(keyPath); os.IsNotExist(err) {
+		params := pemfile.KeyParams{
+			Hostname:      *hostname,
+			KeyPath:       keyPath,
+			SSHPubKeyPath: sshPubKeyPath,
+			HTTPSCertPath: httpsCertPath,
+		}
+		if err := params.Generate(); err != nil {
 			log.Fatal(err)
 		}
-		log.Printf("Generated server key pair in %q", *dir)
+		log.Printf("Generated crypto keys in %+v", params)
 	} else if err != nil {
 		log.Fatal(err)
-	} else {
-		privatePEMFile.Close()
 	}
 
-	pemBytes, err := os.ReadFile(privatePEMPath)
+	pemBytes, err := os.ReadFile(keyPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -54,6 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	fingerprint := gossh.FingerprintSHA256(signer.PublicKey())
 
 	dbPath := filepath.Join(*dir, "sqlite.db")
 	store, err := storage.New(dbPath)
@@ -62,15 +72,31 @@ func main() {
 	}
 	g := game.New(store)
 
-	s := &ssh.Server{
-		Addr:    *iface,
+	sshServer := &ssh.Server{
+		Addr:    *sshIface,
 		Handler: g.HandleSession,
 		PtyCallback: func(ssh.Context, ssh.Pty) bool {
 			return true
 		},
 	}
-	s.AddHostKey(signer)
+	sshServer.AddHostKey(signer)
+	log.Printf("Serving SSH on %q with public key %q", *sshIface, fingerprint)
 
-	log.Printf("Serving %q on %q with public key %q", dbPath, *iface, gossh.FingerprintSHA256(signer.PublicKey()))
-	log.Fatal(s.ListenAndServe())
+	httpServer := &http.Server{
+		Addr: *httpIface,
+		Handler: &webdav.Handler{
+			Prefix:     "",
+			FileSystem: store,
+		},
+	}
+	log.Printf("Serving HTTP on %q with public key %q", *httpIface, fingerprint)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		log.Fatal(sshServer.ListenAndServe())
+	}()
+	log.Fatal(httpServer.ListenAndServe())
+	wg.Wait()
 }

@@ -2,20 +2,44 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"golang.org/x/net/webdav"
 
 	_ "modernc.org/sqlite"
 )
 
 type Storage struct {
 	db *sqlx.DB
+}
+
+func (s *Storage) Mkdir(ctx context.Context, name string, perm os.FileMode) error {
+	return nil
+}
+
+func (s *Storage) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
+	return nil, nil
+}
+
+func (s *Storage) RemoveAll(ctx context.Context, name string) error {
+	return nil
+}
+
+func (s *Storage) Rename(ctx context.Context, oldName, newName string) error {
+	return nil
+}
+
+func (s *Storage) Stat(ctx context.Context, name string) (os.FileInfo, error) {
+	return nil, nil
 }
 
 type User struct {
@@ -32,22 +56,23 @@ type Group struct {
 }
 
 type GroupMember struct {
-	Id   int64
-	Name string
+	Id    int64
+	User  int64
+	Group int64 `db:"unique_with(User)"`
 }
 
 type Directory struct {
 	Id         int64
-	Parent     int64 `db:"index"`
-	Name       string
+	Parent     int64
+	Name       string `db:"unique_with(Parent)"`
 	ReadGroup  int64
 	WriteGroup int64
 }
 
 type File struct {
 	Id         int64
-	Directory  int64 `db:"index"`
-	Name       string
+	Directory  int64
+	Name       string `db:"unique_with(Directory)"`
 	Content    string
 	ReadGroup  int64
 	WriteGroup int64
@@ -84,6 +109,19 @@ func (s *Storage) EnsureTables(prototypes []any) error {
 		}
 	}
 	return nil
+}
+
+func (s *Storage) Get(instance any) error {
+	typ := reflect.TypeOf(instance)
+	if typ.Kind() != reflect.Ptr {
+		return fmt.Errorf("only pointers to structs can be updated")
+	}
+	typ = typ.Elem()
+	if typ.Kind() != reflect.Struct {
+		return fmt.Errorf("only points to structs can be updated")
+	}
+	val := reflect.ValueOf(instance).Elem()
+	return s.db.Get(instance, "SELECT * FROM `%s` WHERE Id = ?", val.FieldByName("Id").Interface())
 }
 
 func (s *Storage) Insert(instance any) error {
@@ -152,6 +190,10 @@ func (s *Storage) Update(instance any) error {
 	return nil
 }
 
+var (
+	uniqueWithRegexp = regexp.MustCompile("unique_with\\((.*)\\)")
+)
+
 func (s *Storage) EnsureTable(prototype any) error {
 	typ := reflect.TypeOf(prototype)
 	if typ.Kind() != reflect.Struct {
@@ -173,16 +215,38 @@ func (s *Storage) EnsureTable(prototype any) error {
 		} else {
 			return fmt.Errorf("only kinds in %+v are allowed fields in table prototypes", sqlTypeMap)
 		}
-		tag := field.Tag.Get("db")
-		if tag == "index" || tag == "unique" {
-			unique := ""
-			if tag == "unique" {
-				unique = "UNIQUE "
-			}
-			if _, err := s.db.Exec(fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS `%s.%s` ON `%s` (`%s`)", unique, typ.Name(), field.Name, typ.Name(), field.Name)); err != nil {
-				return err
+		for _, tag := range strings.Split(field.Tag.Get("db"), ",") {
+			if tag == "index" {
+				if err := s.createIndex(typ.Name(), []string{field.Name}, false); err != nil {
+					return err
+				}
+			} else if tag == "unique" {
+				if err := s.createIndex(typ.Name(), []string{field.Name}, true); err != nil {
+					return err
+				}
+			} else if match := uniqueWithRegexp.FindStringSubmatch(tag); match != nil {
+				if err := s.createIndex(typ.Name(), append(strings.Split(match[1], ";"), field.Name), true); err != nil {
+					return err
+				}
 			}
 		}
+
+	}
+	return nil
+}
+
+func (s *Storage) createIndex(table string, cols []string, unique bool) error {
+	uniqueString := ""
+	if unique {
+		uniqueString = "UNIQUE "
+	}
+	colNames := []string{}
+	for _, col := range cols {
+		colNames = append(colNames, fmt.Sprintf("`%s`", col))
+	}
+	_, err := s.db.Exec(fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS `%s.%s` ON `%s` (%s)", uniqueString, table, strings.Join(cols, ","), table, strings.Join(colNames, ",")))
+	if err != nil {
+		return fmt.Errorf("unable to create index on %q, %+v, unique: %v: %v", table, cols, unique, err)
 	}
 	return nil
 }

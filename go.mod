@@ -3,11 +3,11 @@ module github.com/zond/juicemud
 go 1.18
 
 require (
-	github.com/glebarez/go-sqlite v1.22.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	golang.org/x/crypto v0.31.0
+	golang.org/x/net v0.21.0
 	modernc.org/sqlite v1.28.0
 )
 
