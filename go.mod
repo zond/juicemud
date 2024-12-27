@@ -1,16 +1,32 @@
 module github.com/zond/juicemud
 
-go 1.15
+go 1.18
 
 require (
-	github.com/ditashi/jsbeautifier-go v0.0.0-20141206144643-2520a8026a9c
-	github.com/gdamore/tcell/v2 v2.7.4
+	github.com/glebarez/go-sqlite v1.22.0
 	github.com/gliderlabs/ssh v0.3.8
-	github.com/golang/protobuf v1.3.2 // indirect
-	github.com/tdewolff/parse/v2 v2.5.18
-	github.com/timshannon/badgerhold/v2 v2.0.0-20201228162759-17050a01e34c
-	github.com/zond/editorview v0.0.0-20241227094404-00b06db3db15
-	github.com/zond/gojuice v0.0.0-20210619192054-5ea4ae215e4c
-	github.com/zond/sshtcelltty v0.0.0-20241227095800-6923f88737de
+	github.com/google/uuid v1.6.0
+	github.com/jmoiron/sqlx v1.4.0
 	golang.org/x/crypto v0.31.0
+	modernc.org/sqlite v1.28.0
+)
+
+require (
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	golang.org/x/mod v0.14.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/tools v0.16.1 // indirect
+	lukechampine.com/uint128 v1.3.0 // indirect
+	modernc.org/cc/v3 v3.41.0 // indirect
+	modernc.org/ccgo/v3 v3.16.15 // indirect
+	modernc.org/libc v1.37.6 // indirect
+	modernc.org/mathutil v1.6.0 // indirect
+	modernc.org/memory v1.7.2 // indirect
+	modernc.org/opt v0.1.3 // indirect
+	modernc.org/strutil v1.2.0 // indirect
+	modernc.org/token v1.1.0 // indirect
 )

@@ -2,13 +2,11 @@ package main
 
 import (
 	"flag"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/gliderlabs/ssh"
-	"github.com/timshannon/badgerhold/v2"
 	"github.com/zond/juicemud/game"
 	"github.com/zond/juicemud/pemfile"
 	"github.com/zond/juicemud/storage"
@@ -47,7 +45,7 @@ func main() {
 		privatePEMFile.Close()
 	}
 
-	pemBytes, err := ioutil.ReadFile(privatePEMPath)
+	pemBytes, err := os.ReadFile(privatePEMPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -57,29 +55,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	dbPath := filepath.Join(*dir, "badgerhold")
-	dbOptions := badgerhold.DefaultOptions
-	dbOptions.Dir = filepath.Join(dbPath, "dir")
-	if err := os.MkdirAll(dbOptions.Dir, 0700); err != nil {
-		log.Fatal(err)
-	}
-	dbOptions.ValueDir = filepath.Join(dbPath, "valueDir")
-	if err := os.MkdirAll(dbOptions.ValueDir, 0700); err != nil {
-		log.Fatal(err)
-	}
-
-	db, err := badgerhold.Open(dbOptions)
+	dbPath := filepath.Join(*dir, "sqlite.db")
+	store, err := storage.New(dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
-
-	storage, err := storage.New(db)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	g := game.New(storage)
+	g := game.New(store)
 
 	s := &ssh.Server{
 		Addr:    *iface,
