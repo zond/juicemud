@@ -93,8 +93,8 @@ github.com/zond/editorview v0.0.0-20241227094404-00b06db3db15 h1:79Fe/W2pDottRXf
 github.com/zond/editorview v0.0.0-20241227094404-00b06db3db15/go.mod h1:UyWhzAmfZxD8xZe8iQNjUiFiAgBUWBAeiRClKzHjHjA=
 github.com/zond/gojuice v0.0.0-20210619192054-5ea4ae215e4c h1:VZUy0QrlJb4zFb8vTxx0bYLQal+jFafEkX1VEOItOq8=
 github.com/zond/gojuice v0.0.0-20210619192054-5ea4ae215e4c/go.mod h1:i6ZvpkdqNQkHlCo+TPoUuOwXHiWsOxrUyHAb2FyjpWg=
-github.com/zond/sshtcelltty v0.0.0-20241227094227-ae5e6bef339f h1:wyA/Mr97BSdeUAPLc1F1SkDkJ0jaX0i4NZg/X/yWoRE=
-github.com/zond/sshtcelltty v0.0.0-20241227094227-ae5e6bef339f/go.mod h1:aC7h3MnyiYq9MbhsVKjfDkrD+CL2AHnjCbWuWlrNWKc=
+github.com/zond/sshtcelltty v0.0.0-20241227095800-6923f88737de h1:SePHb8oFIYfgPx3MJnPa9SnZZy8lKHaYfRaow7nd2Qc=
+github.com/zond/sshtcelltty v0.0.0-20241227095800-6923f88737de/go.mod h1:oZQ8nql4RTljg16F83xLE0e2ew0UmB04SMoRXC/HPtg=
 golang.org/x/crypto v0.0.0-20181203042331-505ab145d0a9/go.mod h1:6SG95UA2DQfeDnfUPMdvaQW0Q7yPrPDi9nlGo2tz2b4=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20210921155107-089bfa567519/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=
