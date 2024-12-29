@@ -9,8 +9,8 @@ import (
 	"sync"
 
 	"github.com/gliderlabs/ssh"
+	"github.com/zond/juicemud/crypto"
 	"github.com/zond/juicemud/game"
-	"github.com/zond/juicemud/pemfile"
 	"github.com/zond/juicemud/storage"
 
 	gossh "golang.org/x/crypto/ssh"
@@ -19,11 +19,15 @@ import (
 
 func main() {
 	sshIface := flag.String("ssh", "127.0.0.1:15000", "Where to listen to SSH connections")
-	hostname := flag.String("hostname", "localhost", "Hostname for HTTPS certificate signatures")
 	httpIface := flag.String("webdav", "127.0.0.1:8080", "Where to listen to HTTPS connections for WebDAV")
+	hostname := flag.String("hostname", "", "Hostname for HTTPS certificate signatures, will use -webdav value if empty")
 	dir := flag.String("dir", filepath.Join(os.Getenv("HOME"), ".juicemud"), "Where to save database and settings")
 
 	flag.Parse()
+
+	if *hostname == "" {
+		*hostname = *httpIface
+	}
 
 	dirFile, err := os.Open(*dir)
 	if os.IsNotExist(err) {
@@ -36,25 +40,22 @@ func main() {
 		dirFile.Close()
 	}
 
-	keyPath := filepath.Join(*dir, "key")
-	sshPubKeyPath := filepath.Join(*dir, "sshPubKey")
-	httpsCertPath := filepath.Join(*dir, "httpsCert")
-	if _, err = os.Stat(keyPath); os.IsNotExist(err) {
-		params := pemfile.KeyParams{
-			Hostname:      *hostname,
-			KeyPath:       keyPath,
-			SSHPubKeyPath: sshPubKeyPath,
-			HTTPSCertPath: httpsCertPath,
-		}
-		if err := params.Generate(); err != nil {
+	crypto := crypto.Crypto{
+		Hostname:      *hostname,
+		PrivKeyPath:   filepath.Join(*dir, "privKey"),
+		SSHPubKeyPath: filepath.Join(*dir, "sshPubKey"),
+		HTTPSCertPath: filepath.Join(*dir, "httpsCert"),
+	}
+	if _, err = os.Stat(crypto.PrivKeyPath); os.IsNotExist(err) {
+		if err := crypto.Generate(); err != nil {
 			log.Fatal(err)
 		}
-		log.Printf("Generated crypto keys in %+v", params)
+		log.Printf("Generated crypto keys in %+v", crypto)
 	} else if err != nil {
 		log.Fatal(err)
 	}
 
-	pemBytes, err := os.ReadFile(keyPath)
+	pemBytes, err := os.ReadFile(crypto.PrivKeyPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -97,6 +98,6 @@ func main() {
 		defer wg.Done()
 		log.Fatal(sshServer.ListenAndServe())
 	}()
-	log.Fatal(httpServer.ListenAndServe())
+	log.Fatal(httpServer.ListenAndServeTLS(crypto.HTTPSCertPath, crypto.PrivKeyPath))
 	wg.Wait()
 }
