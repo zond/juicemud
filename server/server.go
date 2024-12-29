@@ -66,8 +66,7 @@ func main() {
 	}
 	fingerprint := gossh.FingerprintSHA256(signer.PublicKey())
 
-	dbPath := filepath.Join(*dir, "sqlite.db")
-	store, err := storage.New(dbPath)
+	store, err := storage.New(*dir)
 	if err != nil {
 		log.Fatal(err)
 	}
