@@ -1,11 +1,13 @@
 package cabinet
 
 import (
+	"bytes"
 	"os"
 	"reflect"
 	"testing"
 
 	"capnproto.org/go/capnp/v3"
+	"github.com/estraier/tkrzw-go"
 )
 
 func newTester(t *testing.T, name string, comment string) Tester {
@@ -53,6 +55,7 @@ func withTempDirectory(t *testing.T, f func(t *testing.T, dir string)) {
 }
 
 type hashlike interface {
+	Len() (int, error)
 	Get(any) (*capnp.Message, error)
 	Set(any, *capnp.Message, bool) error
 	Has(any) (bool, error)
@@ -64,6 +67,9 @@ func testHashLike(t *testing.T, h hashlike) {
 	if has, err := h.Has("a"); has || err != nil {
 		t.Errorf("got %v, %v, want false, nil", has, err)
 	}
+	if len, err := h.Len(); len != 0 || err != nil {
+		t.Errorf("got %v, %v, want 0, nil", len, err)
+	}
 	if found, err := h.Del("a"); found || err != nil {
 		t.Errorf("got %v, %v, want false, nil", found, err)
 	}
@@ -73,6 +79,9 @@ func testHashLike(t *testing.T, h hashlike) {
 	tester := newTester(t, "b", "c")
 	if err := h.Set("a", tester.Message(), true); err != nil {
 		t.Errorf("got %v, wanted nil", err)
+	}
+	if len, err := h.Len(); len != 1 || err != nil {
+		t.Errorf("got %v, %v, want 1, nil", len, err)
 	}
 	if has, err := h.Has("a"); !has || err != nil {
 		t.Errorf("got %v, %v, want true, nil", has, err)
@@ -97,11 +106,17 @@ func testHashLike(t *testing.T, h hashlike) {
 	if found, err := h.Del("a"); !found || err != nil {
 		t.Errorf("got %v, %v, want true, nil", found, err)
 	}
+	if len, err := h.Len(); len != 0 || err != nil {
+		t.Errorf("got %v, %v, want 0, nil", len, err)
+	}
 	if has, err := h.Has("a"); has || err != nil {
 		t.Errorf("got %v, %, want false, nil", has, err)
 	}
 	h.Set("b", newTester(t, "f", "g").Message(), false)
 	h.Set("c", newTester(t, "h", "i").Message(), false)
+	if len, err := h.Len(); len != 2 || err != nil {
+		t.Errorf("got %v, %v, want 2, nil", len, err)
+	}
 	if err := h.DelMulti([]any{"b", "c", "d"}); err != nil {
 		t.Errorf("got %v, want nil", err)
 	}
@@ -115,50 +130,91 @@ func testHashLike(t *testing.T, h hashlike) {
 
 func TestHash(t *testing.T) {
 	withTempDirectory(t, func(t *testing.T, dir string) {
-		o := &Opener{Dir: dir}
-		h := o.Hash("test")
-		if h == nil {
-			t.Fatalf("got nil, wanted something")
-		}
-		if o.Err != nil {
-			t.Fatalf("got %v, wanted nil", o.Err)
+		h, err := NewHash(dir, "test")
+		if err != nil {
+			t.Fatal(err)
 		}
 		testHashLike(t, h)
 	})
 }
 
-func findAll(t *testing.T, tr *Tree) map[string]bool {
+func findAll(t *testing.T, tr *Tree, firstChild string, exitBeforeChild string) (names map[string]string, comments map[string]string) {
 	t.Helper()
-	foundKeys := map[string]bool{}
-	if err := tr.Each("", func(key []byte, msg *capnp.Message) (bool, error) {
-		foundKeys[string(key)] = true
+	foundNames := map[string]string{}
+	foundComments := map[string]string{}
+	if err := tr.Each(firstChild, func(key []byte, msg *capnp.Message) (bool, error) {
+		if bytes.Compare(tkrzw.ToByteArray(exitBeforeChild), tkrzw.ToByteArray(key)) < 1 {
+			return false, nil
+		}
+		tester, err := ReadRootTester(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name, err := tester.Name()
+		if err != nil {
+			t.Fatal(err)
+		}
+		comment, err := tester.Comment()
+		if err != nil {
+			t.Fatal(err)
+		}
+		foundNames[string(key)] = name
+		foundComments[string(key)] = comment
 		return true, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return foundKeys
+	return foundNames, foundComments
+}
+
+func verifyTreeContent(t *testing.T, tr *Tree, firstChild string, exitBeforeChild string, keys []string, names []string, comments []string) {
+	t.Helper()
+	wantNames := map[string]string{}
+	wantComments := map[string]string{}
+	for index, key := range keys {
+		wantNames[key] = names[index]
+		wantComments[key] = comments[index]
+	}
+	if gotNames, gotComments := findAll(t, tr, firstChild, exitBeforeChild); !reflect.DeepEqual(gotNames, wantNames) || !reflect.DeepEqual(gotComments, wantComments) {
+		t.Errorf("got %+v, %+v, want %+v, %+v", gotNames, gotComments, wantNames, wantComments)
+	}
+}
+
+func testTree(t *testing.T, tr *Tree, prefix string) {
+	tr.Set(prefix+"1", newTester(t, prefix+"n1", prefix+"c1").Message(), false)
+	tr.Set(prefix+"2", newTester(t, prefix+"n2", prefix+"c2").Message(), false)
+	tr.Set(prefix+"3", newTester(t, prefix+"n3", prefix+"c3").Message(), false)
+	verifyTreeContent(t, tr, prefix+"0", prefix+"1", nil, nil, nil)
+	verifyTreeContent(t, tr, prefix+"0", prefix+"2", []string{prefix + "1"}, []string{prefix + "n1"}, []string{prefix + "c1"})
+	verifyTreeContent(t, tr, prefix+"0", prefix+"3", []string{prefix + "1", prefix + "2"}, []string{prefix + "n1", prefix + "n2"}, []string{prefix + "c1", prefix + "c2"})
+	verifyTreeContent(t, tr, prefix+"0", prefix+"z", []string{prefix + "1", prefix + "2", prefix + "3"}, []string{prefix + "n1", prefix + "n2", prefix + "n3"}, []string{prefix + "c1", prefix + "c2", prefix + "c3"})
+
+	verifyTreeContent(t, tr, prefix+"0", prefix+"z", []string{prefix + "1", prefix + "2", prefix + "3"}, []string{prefix + "n1", prefix + "n2", prefix + "n3"}, []string{prefix + "c1", prefix + "c2", prefix + "c3"})
+	verifyTreeContent(t, tr, prefix+"1", prefix+"z", []string{prefix + "1", prefix + "2", prefix + "3"}, []string{prefix + "n1", prefix + "n2", prefix + "n3"}, []string{prefix + "c1", prefix + "c2", prefix + "c3"})
+	verifyTreeContent(t, tr, prefix+"2", prefix+"z", []string{prefix + "2", prefix + "3"}, []string{prefix + "n2", prefix + "n3"}, []string{prefix + "c2", prefix + "c3"})
+	verifyTreeContent(t, tr, prefix+"3", prefix+"z", []string{prefix + "3"}, []string{prefix + "n3"}, []string{prefix + "c3"})
+	verifyTreeContent(t, tr, prefix+"z", prefix+"z", nil, nil, nil)
 }
 
 func TestTree(t *testing.T) {
 	withTempDirectory(t, func(t *testing.T, dir string) {
-		o := &Opener{Dir: dir}
-		tr := o.Tree("test")
-		if tr == nil {
-			t.Fatalf("got nil, wanted something")
+		tr1, err := NewTree(dir, "test")
+		if err != nil {
+			t.Fatal(err)
 		}
-		if o.Err != nil {
-			t.Fatalf("got %v, wanted nil", o.Err)
-		}
-		testHashLike(t, tr)
-		t1 := newTester(t, "n1", "c1")
-		tr.Set("1", t1.Message(), false)
-		t2 := newTester(t, "n2", "c2")
-		tr.Set("2", t2.Message(), false)
-		t3 := newTester(t, "n3", "c3")
-		tr.Set("3", t3.Message(), false)
-		wantKeys := map[string]bool{"1": true, "2": true, "3": true}
-		if gotKeys := findAll(t, tr); !reflect.DeepEqual(gotKeys, wantKeys) {
-			t.Errorf("got %+v, want %+v", gotKeys, wantKeys)
-		}
+		testHashLike(t, tr1)
+		testTree(t, tr1, "")
+		tr2 := tr1.Subtree("s")
+		testHashLike(t, tr2)
+		testTree(t, tr2, "")
+		testTree(t, tr2, "tr2")
+		tr3 := tr1.Subtree("t")
+		testHashLike(t, tr3)
+		testTree(t, tr3, "")
+		testTree(t, tr3, "tr3")
+		tr4 := tr3.Subtree("t")
+		testHashLike(t, tr4)
+		testTree(t, tr4, "")
+		testTree(t, tr4, "tr4")
 	})
 }

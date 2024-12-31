@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"reflect"
 
@@ -13,45 +14,21 @@ import (
 	"github.com/estraier/tkrzw-go"
 )
 
-type Opener struct {
-	Dir string
-	Err error
+type Hash struct {
+	dbm *tkrzw.DBM
 }
 
-func (o *Opener) Hash(name string) *Hash {
-	if o.Err != nil {
-		return nil
-	}
+func NewHash(dir string, name string) (*Hash, error) {
 	dbm := tkrzw.NewDBM()
-	stat := dbm.Open(filepath.Join(o.Dir, fmt.Sprintf("%s.tkh", name)), true, map[string]string{
+	stat := dbm.Open(filepath.Join(dir, fmt.Sprintf("%s.tkh", name)), true, map[string]string{
 		"update_mode":      "UPDATE_APPENDING",
 		"record_comp_mode": "RECORD_COMP_NONE",
 		"restore_mode":     "RESTORE_SYNC|RESTORE_NO_SHORTCUTS|RESTORE_WITH_HARDSYNC",
 	})
 	if !stat.IsOK() {
-		o.Err = stat
+		return nil, stat
 	}
-	return &Hash{dbm}
-}
-
-func (o *Opener) Tree(name string) *Tree {
-	if o.Err != nil {
-		return nil
-	}
-	dbm := tkrzw.NewDBM()
-	stat := dbm.Open(filepath.Join(o.Dir, fmt.Sprintf("%s.tkt", name)), true, map[string]string{
-		"update_mode":      "UPDATE_APPENDING",
-		"record_comp_mode": "RECORD_COMP_NONE",
-		"key_comparator":   "LexicalKeyComparator",
-	})
-	if !stat.IsOK() {
-		o.Err = stat
-	}
-	return &Tree{hash: Hash{dbm}}
-}
-
-type Hash struct {
-	dbm *tkrzw.DBM
+	return &Hash{dbm}, nil
 }
 
 var (
@@ -66,6 +43,14 @@ func (h *Hash) Get(key any) (*capnp.Message, error) {
 		return nil, stat
 	}
 	return capnp.Unmarshal(b)
+}
+
+func (h *Hash) Len() (int, error) {
+	size, stat := h.dbm.Count()
+	if !stat.IsOK() {
+		return 0, stat
+	}
+	return int(size), nil
 }
 
 func (h *Hash) Has(key any) (bool, error) {
@@ -83,6 +68,7 @@ var (
 )
 
 func (h *Hash) Set(key any, value *capnp.Message, overwrite bool) error {
+	log.Printf("setting %+v", key)
 	b, err := value.Marshal()
 	if err != nil {
 		return err
@@ -129,26 +115,31 @@ type Tree struct {
 	parent *Tree
 }
 
-func (t *Tree) fullPrefix() []byte {
-	if t == nil {
-		return nil
+func NewTree(dir string, name string) (*Tree, error) {
+	dbm := tkrzw.NewDBM()
+	stat := dbm.Open(filepath.Join(dir, fmt.Sprintf("%s.tkt", name)), true, map[string]string{
+		"update_mode":      "UPDATE_APPENDING",
+		"record_comp_mode": "RECORD_COMP_NONE",
+		"key_comparator":   "LexicalKeyComparator",
+	})
+	if !stat.IsOK() {
+		return nil, stat
 	}
-	parentPrefix := t.parent.fullPrefix()
-	parentPrefixLen := len(parentPrefix)
-	prefixLen := int32(len(t.prefix))
-	lenSize := binary.Size(prefixLen)
-	fullPrefix := make([]byte, parentPrefixLen+lenSize+int(prefixLen))
-	copy(fullPrefix, parentPrefix)
-	encodeDestination := fullPrefix[parentPrefixLen:]
-	if _, err := binary.Encode(encodeDestination, binary.BigEndian, prefixLen); err != nil {
-		panic(fmt.Errorf("this should never happen, but unable to write a %v to a %v of length %v: %v",
-			reflect.TypeOf(prefixLen),
-			reflect.TypeOf(encodeDestination),
-			len(encodeDestination),
-			err))
+	return &Tree{hash: Hash{dbm}}, nil
+}
+
+func (t *Tree) Len() (int, error) {
+	if t.parent == nil {
+		return t.hash.Len()
 	}
-	copy(fullPrefix[parentPrefixLen+lenSize:], t.prefix)
-	return fullPrefix
+	size := 0
+	if err := t.Each(nil, func(_key []byte, _msg *capnp.Message) (bool, error) {
+		size++
+		return true, nil
+	}); err != nil {
+		return 0, err
+	}
+	return size, nil
 }
 
 func concat(prefix []byte, key []byte) []byte {
@@ -158,8 +149,33 @@ func concat(prefix []byte, key []byte) []byte {
 	return result
 }
 
+func concatWithSeparator(prefix []byte, separator int, key []byte) []byte {
+	prefixLen := len(prefix)
+	sep32 := int32(separator)
+	sepSize := binary.Size(sep32)
+	result := make([]byte, prefixLen+sepSize+len(key))
+	copy(result, prefix)
+	encodeDestination := result[prefixLen:]
+	if _, err := binary.Encode(encodeDestination, binary.BigEndian, sep32); err != nil {
+		panic(fmt.Errorf("this should never happen, but unable to write a %v to a %v of length %v: %v",
+			reflect.TypeOf(sep32),
+			reflect.TypeOf(encodeDestination),
+			len(encodeDestination),
+			err))
+	}
+	copy(result[prefixLen+sepSize:], key)
+	return result
+}
+
+func (t *Tree) fullPrefix() []byte {
+	if t == nil || t.parent == nil {
+		return nil
+	}
+	return concatWithSeparator(t.parent.fullPrefix(), len(t.prefix), t.prefix)
+}
+
 func (t *Tree) fullKey(key any) []byte {
-	return concat(t.fullPrefix(), tkrzw.ToByteArray(key))
+	return concatWithSeparator(t.fullPrefix(), 0, tkrzw.ToByteArray(key))
 }
 
 func (t *Tree) Get(key any) (*capnp.Message, error) {
@@ -186,16 +202,16 @@ func (t *Tree) DelMulti(keys []any) error {
 	return t.hash.DelMulti(fullKeys)
 }
 
-func (t *Tree) Subtree(prefix []byte) *Tree {
+func (t *Tree) Subtree(prefix any) *Tree {
 	return &Tree{
 		hash:   t.hash,
-		prefix: prefix,
+		prefix: tkrzw.ToByteArray(prefix),
 		parent: t,
 	}
 }
 
 func (t *Tree) each(firstChild any, f func(fullKey []byte, msg *capnp.Message) (bool, error)) error {
-	treePrefix := t.fullPrefix()
+	treePrefix := concatWithSeparator(t.fullPrefix(), 0, nil)
 	firstChildKey := concat(treePrefix, tkrzw.ToByteArray(firstChild))
 	iter := t.hash.dbm.MakeIterator()
 	defer iter.Destruct()
@@ -203,12 +219,14 @@ func (t *Tree) each(firstChild any, f func(fullKey []byte, msg *capnp.Message) (
 	if !stat.IsOK() {
 		return stat
 	}
+	log.Printf("jumped to %+v", firstChildKey)
 	var fullKey, value []byte
 	for ; stat.IsOK(); stat = iter.Next() {
 		fullKey, value, stat = iter.Get()
 		if !stat.IsOK() {
 			break
 		}
+		log.Printf("found %+v, checking if it has treePrefix %+v", fullKey, treePrefix)
 		if !bytes.HasPrefix(fullKey, treePrefix) {
 			break
 		}
@@ -233,25 +251,8 @@ func (t *Tree) each(firstChild any, f func(fullKey []byte, msg *capnp.Message) (
 }
 
 func (t *Tree) Each(firstChildKey any, f func(childKey []byte, msg *capnp.Message) (bool, error)) error {
-	treePrefix := t.fullPrefix()
+	treePrefix := concatWithSeparator(t.fullPrefix(), 0, nil)
 	return t.each(firstChildKey, func(fullKey []byte, msg *capnp.Message) (bool, error) {
 		return f(fullKey[len(treePrefix):], msg)
 	})
-}
-
-func (t *Tree) DelManyToMany(key []byte, keyToOther *Tree, otherToKey *Tree) (bool, error) {
-	fullKey := t.fullKey(key)
-	if exists, err := t.Has(fullKey); err != nil {
-		return false, err
-	} else if !exists {
-		return false, nil
-	}
-	toRemove := []any{fullKey}
-	keyToOtherPrefix := keyToOther.fullPrefix()
-	keyToOther.Subtree(key).Each(nil, func(otherChildKey []byte, _ *capnp.Message) (bool, error) {
-		toRemove = append(toRemove, concat(keyToOtherPrefix, otherChildKey))
-		toRemove = append(toRemove, otherToKey.Subtree(otherChildKey).fullKey(key))
-		return true, nil
-	})
-	return true, t.hash.DelMulti(toRemove)
 }
