@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -68,11 +67,7 @@ func (o *opener) openTree(name string) *tkrzw.DBM {
 }
 
 func New(ctx context.Context, dir string) (*Storage, error) {
-	unixVFS := ""
-	if runtime.GOOS != "windows" {
-		unixVFS = "?vfs=unix-excl"
-	}
-	sql, err := sqly.Open("sqlite", filepath.Join(dir, fmt.Sprintf("sqlite.db%s", unixVFS)))
+	sql, err := sqly.Open("sqlite", filepath.Join(dir, "sqlite.db"))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

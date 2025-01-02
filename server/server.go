@@ -89,22 +89,25 @@ func main() {
 		Prefix:     "",
 		FileSystem: store,
 		LockSystem: webdav.NewMemLS(),
+		Logger: func(r *http.Request, err error) {
+			errString := ""
+			if err != nil {
+				errString = err.Error()
+			}
+			log.Printf("%s\t%s\t%s\t%s", r.RemoteAddr, r.Method, r.URL, errString)
+		},
 	}
 	auth := digest.NewDigestAuth("WebDAV", store).Wrap(davHandler)
-	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s\t%s\t%s", r.RemoteAddr, r.Method, r.URL)
-		auth.ServeHTTP(w, r)
-	})
 
 	httpsServer := &http.Server{
 		Addr:    *httpsIface,
-		Handler: logger,
+		Handler: auth,
 	}
 	log.Printf("Serving HTTPS on %q with public key %q", *httpsIface, fingerprint)
 
 	httpServer := &http.Server{
 		Addr:    *httpIface,
-		Handler: logger,
+		Handler: auth,
 	}
 	log.Printf("Serving HTTP on %q", *httpIface)
 
