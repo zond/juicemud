@@ -97,53 +97,160 @@ type Storage struct {
 }
 
 func (s *Storage) Mkdir(ctx context.Context, name string, perm os.FileMode) error {
+	log.Printf("Mkdir(..., %q, %v)", name, perm)
 	return nil
 }
 
-func (s *Storage) loadFile(ctx context.Context, name string) (*davFile, error) {
-	username, found := digest.AuthenticatedUsername(ctx)
-	log.Printf("username: %q, found: %v", username, found)
-	result := &File{
+func (s *Storage) loadFileAndOrParent(
+	ctx context.Context,
+	name string,
+) (file *davFile, parent *davFile, err error) {
+	sqlFile := &File{
 		Dir: true,
 	}
-	if err := s.sql.Read(ctx, func(tx *sqly.Tx) error {
-		for _, fileName := range strings.Split(name, "/") {
-			if fileName != "" {
-				if err := s.sql.Get(result, "SELECT * FROM File WHERE Parent = ? AND Name = ?", result.Id, fileName); err != nil {
-					return errors.WithStack(err)
+	sqlParent := sqlFile
+	parts := strings.Split(name, "/")
+	for index := 0; index < len(parts); index++ {
+		part := parts[index]
+		if part != "" {
+			sqlParent = sqlFile
+			if err := s.get(ctx, sqlFile, "SELECT * FROM File WHERE Parent = ? AND Name = ?", sqlParent.Id, part); err != nil {
+				if !errors.Is(err, NotFoundErr) {
+					return nil, nil, errors.WithStack(err)
+				} else {
+					sqlFile = nil
+					break
 				}
 			}
 		}
-		return nil
-	}); err != nil {
-		if err.Error() == "sql: no rows in result set" {
-			return nil, os.ErrNotExist
+	}
+	if sqlFile != nil {
+		file, err = sqlFile.toDav(ctx, s)
+		if err != nil {
+			return nil, nil, errors.WithStack(err)
 		}
+	}
+	parent, err = sqlParent.toDav(ctx, s)
+	if err != nil {
+		return nil, nil, errors.WithStack(err)
+	}
+	return file, parent, nil
+}
+
+func parseFlag(flag int) string {
+	flags := []string{}
+	for _, pair := range []struct {
+		f int
+		d string
+	}{
+		{
+			f: os.O_RDONLY,
+			d: "O_RDONLY",
+		},
+		{
+			f: os.O_WRONLY,
+			d: "O_WRONLY",
+		},
+		{
+			f: os.O_RDWR,
+			d: "O_RDWR",
+		},
+		{
+			f: os.O_APPEND,
+			d: "O_APPEND",
+		},
+		{
+			f: os.O_CREATE,
+			d: "O_CREATE",
+		},
+		{
+			f: os.O_EXCL,
+			d: "O_EXCL",
+		},
+		{
+			f: os.O_SYNC,
+			d: "O_SYNC",
+		},
+		{
+			f: os.O_TRUNC,
+			d: "O_TRUNC",
+		},
+	} {
+		if flag&pair.f == pair.f {
+			flags = append(flags, pair.d)
+		}
+	}
+	return strings.Join(flags, "|")
+}
+
+func (s *Storage) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
+	log.Printf("OpenFile(..., %q, %v, %v)", name, parseFlag(flag), perm)
+	file, parent, err := s.loadFileAndOrParent(ctx, name)
+	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	dav, err := result.toDav(s)
+	if file != nil {
+		if flag&os.O_TRUNC == os.O_TRUNC {
+			if err := file.File.Truncate(0); err != nil {
+				return nil, errors.WithStack(err)
+			}
+		}
+		if flag&os.O_APPEND == os.O_APPEND {
+			if _, err := file.File.Seek(0, 2); err != nil {
+				return nil, errors.WithStack(err)
+			}
+		}
+		return file, nil
+	}
+	if flag&os.O_CREATE == 0 && flag&os.O_WRONLY == 0 && flag&os.O_RDWR == 0 {
+		return nil, os.ErrNotExist
+	}
+	if parent.mode&0200 != 0200 {
+		return nil, os.ErrPermission
+	}
+	return s.createFile(ctx, &File{
+		Parent:     parent.f.Id,
+		Name:       name,
+		ModTime:    sqly.ToSQLTime(time.Now()),
+		Dir:        perm.IsDir(),
+		ReadGroup:  parent.f.ReadGroup,
+		WriteGroup: parent.f.WriteGroup,
+	})
+}
+
+func (s *Storage) createFile(ctx context.Context, f *File) (*davFile, error) {
+	if err := s.sql.Upsert(ctx, f, true); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	stat := s.sources.Set(toBytes(f.Id), []byte{}, true)
+	if !stat.IsOK() {
+		return nil, errors.WithStack(stat)
+	}
+	dav, err := f.toDav(ctx, s)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	return dav, nil
 }
 
-func (s *Storage) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
-	return s.loadFile(ctx, name)
-}
-
 func (s *Storage) RemoveAll(ctx context.Context, name string) error {
+	log.Printf("RemoveAll(..., %q)", name)
 	return nil
 }
 
 func (s *Storage) Rename(ctx context.Context, oldName, newName string) error {
+	log.Printf("Rename(..., %q, %q)", oldName, newName)
 	return nil
 }
 
 func (s *Storage) Stat(ctx context.Context, name string) (os.FileInfo, error) {
-	f, err := s.loadFile(ctx, name)
+	log.Printf("Stat(..., %q)", name)
+	f, _, err := s.loadFileAndOrParent(ctx, name)
 	if err != nil {
 		return nil, errors.WithStack(err)
+	}
+	if f == nil {
+		return nil, os.ErrNotExist
 	}
 	return f, nil
 }
@@ -158,11 +265,42 @@ type File struct {
 	WriteGroup int64
 }
 
-func (f *File) toDav(s *Storage) (*davFile, error) {
+var (
+	NotFoundErr = errors.New("Not found")
+)
+
+func (s *Storage) get(ctx context.Context, d any, sql string, params ...any) error {
+	if err := s.sql.GetContext(ctx, d, sql, params...); err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return errors.WithStack(NotFoundErr)
+		}
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+func (f *File) toDav(ctx context.Context, s *Storage) (*davFile, error) {
 	result := &davFile{
+		ctx:  ctx,
 		s:    s,
 		f:    f,
-		mode: 0777,
+		mode: 0,
+	}
+	if is, err := s.callerAccessToGroup(ctx, f.ReadGroup); err != nil {
+		return nil, errors.WithStack(err)
+	} else if is {
+		result.mode = result.mode | 0444
+		if f.Dir {
+			result.mode = result.mode | 0111
+		}
+	}
+	if is, err := s.callerAccessToGroup(ctx, f.WriteGroup); err != nil {
+		return nil, errors.WithStack(err)
+	} else if is {
+		result.mode = result.mode | 0666
+		if f.Dir {
+			result.mode = result.mode | 0111
+		}
 	}
 	if f.Dir {
 		result.mode = result.mode | fs.ModeDir
@@ -177,7 +315,7 @@ func (f *File) toDav(s *Storage) (*davFile, error) {
 			return nil, errors.WithStack(err)
 		}
 		if written, err := tmpFile.Write(content); written != len(content) || err != nil {
-			return nil, errors.Errorf("trying to write %v bytes to temporary file, got %v, %v", written, err)
+			return nil, errors.Errorf("trying to write %v bytes to temporary file, got %v, %v", len(content), written, err)
 		}
 		if newSeek, err := tmpFile.Seek(0, 0); newSeek != 0 || err != nil {
 			return nil, errors.Errorf("trying to seek to 0, 0 in temporary file, got %v, %v", newSeek, err)
@@ -190,10 +328,27 @@ func (f *File) toDav(s *Storage) (*davFile, error) {
 
 type davFile struct {
 	*os.File
+	ctx  context.Context
 	f    *File
 	s    *Storage
 	size int64
 	mode fs.FileMode
+}
+
+func (d *davFile) Close() error {
+	if err := d.File.Close(); err != nil {
+		return errors.WithStack(err)
+	}
+	defer os.Remove(d.File.Name())
+	content, err := os.ReadFile(d.File.Name())
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	stat := d.s.sources.Set(toBytes(d.f.Id), content, true)
+	if !stat.IsOK() {
+		return errors.WithStack(stat)
+	}
+	return nil
 }
 
 func (d *davFile) Size() int64 {
@@ -230,7 +385,7 @@ func (d *davFile) Readdir(count int) ([]fs.FileInfo, error) {
 	}
 	davs := make([]fs.FileInfo, len(files))
 	for index, file := range files {
-		dav, err := file.toDav(d.s)
+		dav, err := file.toDav(d.ctx, d.s)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -256,15 +411,37 @@ type User struct {
 	Owner        bool
 }
 
-func (s *Storage) GetHA1(username string) (string, bool, error) {
-	user := &User{}
-	if err := s.sql.Get(user, "SELECT * FROM User WHERE Name = ?", username); err != nil {
-		if err.Error() == "sql: no rows in result set" {
-			return "", false, nil
-		}
-		return "", false, errors.WithStack(err)
+func (s *Storage) callerAccessToGroup(ctx context.Context, group int64) (bool, error) {
+	userIf, found := digest.AuthenticatedUser(ctx)
+	if !found {
+		return false, nil
 	}
-	return user.PasswordHash, true, nil
+	user, ok := userIf.(*User)
+	if !ok {
+		return false, errors.Errorf("context user %v is not *User", userIf)
+	}
+	if user.Owner {
+		return true, nil
+	}
+	m := &GroupMember{}
+	if err := s.get(ctx, m, "SELECT * FROM GroupMember WHERE User = ? AND Group = ?", user.Id, group); err != nil {
+		if errors.Is(err, NotFoundErr) {
+			return false, nil
+		}
+		return false, errors.WithStack(err)
+	}
+	return true, nil
+}
+
+func (s *Storage) GetHA1AndUser(ctx context.Context, username string) (string, bool, any, error) {
+	user := &User{}
+	if err := s.get(ctx, user, "SELECT * FROM User WHERE Name = ?", username); err != nil {
+		if errors.Is(err, NotFoundErr) {
+			return "", false, nil, nil
+		}
+		return "", false, nil, errors.WithStack(err)
+	}
+	return user.PasswordHash, true, user, nil
 }
 
 type GroupMember struct {

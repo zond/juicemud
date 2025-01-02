@@ -17,21 +17,21 @@ func ComputeHA1(username, realm, password string) string {
 	return md5Hash(fmt.Sprintf("%s:%s:%s", username, realm, password))
 }
 
-type PasswordProvider interface {
-	GetHA1(username string) (string, bool, error)
+type UserProvider interface {
+	GetHA1AndUser(ctx context.Context, username string) (string, bool, any, error)
 }
 
 type DigestAuth struct {
-	Realm            string
-	PasswordProvider PasswordProvider
-	Opaque           string
+	Realm        string
+	UserProvider UserProvider
+	Opaque       string
 }
 
-func NewDigestAuth(realm string, provider PasswordProvider) *DigestAuth {
+func NewDigestAuth(realm string, provider UserProvider) *DigestAuth {
 	return &DigestAuth{
-		Realm:            realm,
-		PasswordProvider: provider,
-		Opaque:           generateSecureRandom(),
+		Realm:        realm,
+		UserProvider: provider,
+		Opaque:       generateSecureRandom(),
 	}
 }
 
@@ -47,7 +47,8 @@ func (da *DigestAuth) Wrap(handler http.Handler) http.HandlerFunc {
 
 		// Parse the Authorization header
 		authParams := parseDigestHeader(authHeader)
-		ha1, exists, err := da.PasswordProvider.GetHA1(authParams["username"])
+		ctx := r.Context()
+		ha1, exists, user, err := da.UserProvider.GetHA1AndUser(ctx, authParams["username"])
 		if err != nil {
 			log.Printf("trying to get HA1 for %q: %v", authParams["username"], err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -68,28 +69,23 @@ func (da *DigestAuth) Wrap(handler http.Handler) http.HandlerFunc {
 		}
 
 		// If valid, call the wrapped handler
-		ctx := context.WithValue(r.Context(), authenticatedUsername, authParams["username"])
+		ctx = context.WithValue(ctx, authenticatedUser, user)
 		handler.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
 
-func AuthenticatedUsername(ctx context.Context) (string, bool) {
-	val := ctx.Value(authenticatedUsername)
+func AuthenticatedUser(ctx context.Context) (any, bool) {
+	val := ctx.Value(authenticatedUser)
 	if val == nil {
 		return "", false
 	}
-	s, ok := val.(string)
-	if !ok {
-		log.Printf("authenticated username in context (%#v) is not a string??", val)
-		return "", false
-	}
-	return s, true
+	return val, true
 }
 
 type contextKey int
 
 var (
-	authenticatedUsername contextKey = 0
+	authenticatedUser contextKey = 0
 )
 
 func (da *DigestAuth) challenge(w http.ResponseWriter) {
