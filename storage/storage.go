@@ -9,11 +9,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/estraier/tkrzw-go"
 	"github.com/pkg/errors"
+	"github.com/zond/juicemud/digest"
 	"github.com/zond/sqly"
 	"golang.org/x/net/webdav"
 
@@ -66,9 +68,16 @@ func (o *opener) openTree(name string) *tkrzw.DBM {
 }
 
 func New(ctx context.Context, dir string) (*Storage, error) {
-	sql, err := sqly.Open("sqlite", filepath.Join(dir, "sqlite.db"))
+	unixVFS := ""
+	if runtime.GOOS != "windows" {
+		unixVFS = "?vfs=unix-excl"
+	}
+	sql, err := sqly.Open("sqlite", filepath.Join(dir, fmt.Sprintf("sqlite.db%s", unixVFS)))
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
+	}
+	if _, err := sql.ExecContext(ctx, "PRAGMA journal_mode = wal2"); err != nil {
+		return nil, errors.WithStack(err)
 	}
 	o := &opener{dir: dir}
 	s := &Storage{
@@ -97,6 +106,8 @@ func (s *Storage) Mkdir(ctx context.Context, name string, perm os.FileMode) erro
 }
 
 func (s *Storage) loadFile(ctx context.Context, name string) (*davFile, error) {
+	username, found := digest.AuthenticatedUsername(ctx)
+	log.Printf("username: %q, found: %v", username, found)
 	result := &File{
 		Dir: true,
 	}
@@ -166,7 +177,7 @@ func (f *File) toDav(s *Storage) (*davFile, error) {
 		if !stat.IsOK() {
 			return nil, errors.WithStack(stat)
 		}
-		tmpFile, err := os.CreateTemp("", "")
+		tmpFile, err := os.CreateTemp("", "juicemud-storage-*")
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}

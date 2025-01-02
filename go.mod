@@ -2,14 +2,12 @@ module github.com/zond/juicemud
 
 go 1.23.4
 
-replace github.com/zond/sqly => /Users/zond/projects/sqly
-
 require (
 	capnproto.org/go/capnp/v3 v3.0.1-alpha.2
 	github.com/estraier/tkrzw-go v0.0.0-20240603165139-89707b45d5ab
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/pkg/errors v0.9.1
-	github.com/zond/sqly v0.0.0-20250101190623-8677e111fb69
+	github.com/zond/sqly v0.0.0-20250102151012-7541cb10c2c5
 	golang.org/x/crypto v0.31.0
 	golang.org/x/net v0.26.0
 	modernc.org/sqlite v1.34.4

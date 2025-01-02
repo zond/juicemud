@@ -1,6 +1,7 @@
 package digest
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/subtle"
@@ -67,9 +68,29 @@ func (da *DigestAuth) Wrap(handler http.Handler) http.HandlerFunc {
 		}
 
 		// If valid, call the wrapped handler
-		handler.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), authenticatedUsername, authParams["username"])
+		handler.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
+
+func AuthenticatedUsername(ctx context.Context) (string, bool) {
+	val := ctx.Value(authenticatedUsername)
+	if val == nil {
+		return "", false
+	}
+	s, ok := val.(string)
+	if !ok {
+		log.Printf("authenticated username in context (%#v) is not a string??", val)
+		return "", false
+	}
+	return s, true
+}
+
+type contextKey int
+
+var (
+	authenticatedUsername contextKey = 0
+)
 
 func (da *DigestAuth) challenge(w http.ResponseWriter) {
 	nonce := generateNonce()
