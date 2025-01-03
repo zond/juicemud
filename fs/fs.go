@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/url"
 	"path/filepath"
 	"time"
 
@@ -16,8 +17,8 @@ type Fs struct {
 	Storage *storage.Storage
 }
 
-func (f *Fs) Read(ctx context.Context, name string) (io.ReadCloser, error) {
-	file, err := f.Storage.GetFile(ctx, name)
+func (f *Fs) Read(ctx context.Context, path string) (io.ReadCloser, error) {
+	file, err := f.Storage.GetFile(ctx, path)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -47,8 +48,8 @@ func (w *writeBuffer) Close() error {
 	return nil
 }
 
-func (f *Fs) Write(ctx context.Context, name string) (io.WriteCloser, error) {
-	file, err := f.Storage.EnsureFile(ctx, name)
+func (f *Fs) Write(ctx context.Context, path string) (io.WriteCloser, error) {
+	file, err := f.Storage.EnsureFile(ctx, path)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -83,16 +84,16 @@ func (f *Fs) stat(ctx context.Context, file *storage.File, path string) (*dav.Fi
 	}, nil
 }
 
-func (f *Fs) Stat(ctx context.Context, name string) (*dav.FileInfo, error) {
-	file, err := f.Storage.GetFile(ctx, name)
+func (f *Fs) Stat(ctx context.Context, path string) (*dav.FileInfo, error) {
+	file, err := f.Storage.GetFile(ctx, path)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	return f.stat(ctx, file, name)
+	return f.stat(ctx, file, path)
 }
 
-func (f *Fs) Remove(ctx context.Context, name string) error {
-	file, err := f.Storage.GetFile(ctx, name)
+func (f *Fs) Remove(ctx context.Context, path string) error {
+	file, err := f.Storage.GetFile(ctx, path)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -104,12 +105,12 @@ func (f *Fs) Remove(ctx context.Context, name string) error {
 	return f.Storage.DelFile(ctx, file)
 }
 
-func (f *Fs) Mkdir(ctx context.Context, name string) error {
-	return f.Storage.CreateDir(ctx, name)
+func (f *Fs) Mkdir(ctx context.Context, path string) error {
+	return f.Storage.CreateDir(ctx, path)
 }
 
-func (f *Fs) List(ctx context.Context, name string) ([]*dav.FileInfo, error) {
-	file, err := f.Storage.GetFile(ctx, name)
+func (f *Fs) List(ctx context.Context, path string) ([]*dav.FileInfo, error) {
+	file, err := f.Storage.GetFile(ctx, path)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -119,13 +120,13 @@ func (f *Fs) List(ctx context.Context, name string) ([]*dav.FileInfo, error) {
 	}
 	result := make([]*dav.FileInfo, len(children))
 	for index, child := range children {
-		if result[index], err = f.stat(ctx, &child, filepath.Join(name, child.Name)); err != nil {
+		if result[index], err = f.stat(ctx, &child, filepath.Join(path, child.Name)); err != nil {
 			return nil, errors.WithStack(err)
 		}
 	}
 	return result, nil
 }
 
-func (f *Fs) Rename(ctx context.Context, oldName, newName string) error {
-	return f.Storage.MoveFile(ctx, oldName, newName)
+func (f *Fs) Rename(ctx context.Context, oldPath string, newURL *url.URL) error {
+	return f.Storage.MoveFile(ctx, oldPath, newURL.Path)
 }

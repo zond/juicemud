@@ -1,13 +1,16 @@
 package dav
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -27,13 +30,13 @@ type FileInfo struct {
 
 // FileSystem defines the minimal interface for a WebDAV file system.
 type FileSystem interface {
-	Read(ctx context.Context, name string) (io.ReadCloser, error)   // Read file content
-	Write(ctx context.Context, name string) (io.WriteCloser, error) // Create a new file
-	Stat(ctx context.Context, name string) (*FileInfo, error)       // Retrieve file or directory info
-	Remove(ctx context.Context, name string) error                  // Delete a file or directory
-	Mkdir(ctx context.Context, name string) error                   // Create a directory
-	List(ctx context.Context, name string) ([]*FileInfo, error)     // List files in a directory
-	Rename(ctx context.Context, oldName, newName string) error      // Rename or move a file
+	Read(ctx context.Context, path string) (io.ReadCloser, error)      // Read file content
+	Write(ctx context.Context, path string) (io.WriteCloser, error)    // Create a new file
+	Stat(ctx context.Context, path string) (*FileInfo, error)          // Retrieve file or directory info
+	Remove(ctx context.Context, path string) error                     // Delete a file or directory
+	Mkdir(ctx context.Context, path string) error                      // Create a directory
+	List(ctx context.Context, path string) ([]*FileInfo, error)        // List files in a directory
+	Rename(ctx context.Context, oldPath string, newURL *url.URL) error // Rename or move a file
 }
 
 // Handler provides WebDAV functionality over the given FileSystem.
@@ -99,9 +102,14 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "text/html")
+
+		writer := bufio.NewWriter(w)
+		writer.WriteString(fmt.Sprintf("<html><head><title>%s</title></head><body>", r.URL.Path))
 		for _, f := range files {
-			w.Write([]byte(f.Name + "\n"))
+			writer.WriteString(fmt.Sprintf("<a href=\"%s\">%s</a></br>", f.Name, f.Name))
 		}
+		writer.WriteString("</body></html>")
+		writer.Flush()
 	} else {
 		if info.Size == 0 {
 			w.WriteHeader(http.StatusOK)
@@ -185,7 +193,12 @@ func (h *Handler) handleMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.fileSystem.Rename(r.Context(), r.URL.Path, destination)
+	destURL, err := url.Parse(destination)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse destination %q: %v", destination, err), http.StatusBadRequest)
+		return
+	}
+	err = h.fileSystem.Rename(r.Context(), r.URL.Path, destURL)
 	if err != nil {
 		http.Error(w, "Failed to move file", http.StatusInternalServerError)
 	}

@@ -139,17 +139,19 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, err 
 }
 
 func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) error {
+	log.Printf("%q / %q", oldPath, newPath)
 	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		oldFile, err := getFile(ctx, tx, oldPath)
 		if err != nil {
 			return errors.WithStack(err)
 		}
 		var newParent *File
-		if newPath == "/" {
+		if newParentPath := filepath.Dir(newPath); newParentPath == "/" {
 			newParent = &File{
 				Dir: true,
 			}
 		} else {
+			log.Printf("newparentpath %q", newParentPath)
 			newParent, err = getFile(ctx, tx, filepath.Dir(newPath))
 			if err != nil {
 				return errors.WithStack(err)
@@ -165,6 +167,7 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 			}
 		}
 		oldFile.Parent = newParent.Id
+		oldFile.Name = filepath.Base(newPath)
 		if err := tx.Upsert(ctx, oldFile, true); err != nil {
 			return errors.WithStack(err)
 		}
