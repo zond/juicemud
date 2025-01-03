@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"log"
@@ -8,16 +9,44 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/zond/juicemud/crypto"
-	"github.com/zond/juicemud/digest"
+	"github.com/zond/juicemud/dav"
+	"github.com/zond/juicemud/fs"
 	"github.com/zond/juicemud/game"
 	"github.com/zond/juicemud/storage"
-	"golang.org/x/net/webdav"
 
 	gossh "golang.org/x/crypto/ssh"
 )
+
+type responseWriter struct {
+	backend      http.ResponseWriter
+	status       int
+	size         int
+	errorContent bytes.Buffer
+}
+
+func (r *responseWriter) Header() http.Header {
+	return r.backend.Header()
+}
+
+func (r *responseWriter) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.WriteHeader(http.StatusOK)
+	} else if r.status >= 300 {
+		r.errorContent.Write(b)
+	}
+	written, err := r.backend.Write(b)
+	r.size += written
+	return written, err
+}
+
+func (r *responseWriter) WriteHeader(status int) {
+	r.status = status
+	r.backend.WriteHeader(status)
+}
 
 func main() {
 	sshIface := flag.String("ssh", "127.0.0.1:15000", "Where to listen to SSH connections")
@@ -85,29 +114,31 @@ func main() {
 	sshServer.AddHostKey(signer)
 	log.Printf("Serving SSH on %q with public key %q", *sshIface, fingerprint)
 
-	davHandler := &webdav.Handler{
-		Prefix:     "",
-		FileSystem: store,
-		LockSystem: webdav.NewMemLS(),
-		Logger: func(r *http.Request, err error) {
-			errString := ""
-			if err != nil {
-				errString = err.Error()
-			}
-			log.Printf("%s\t%s\t%s\t%s", r.RemoteAddr, r.Method, r.URL, errString)
-		},
+	fs := &fs.Fs{
+		Storage: store,
 	}
-	auth := digest.NewDigestAuth("WebDAV", store).Wrap(davHandler)
+	dav := dav.New(fs)
+	//auth := digest.NewDigestAuth("WebDAV", store).Wrap(dav)
+	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t := time.Now()
+		ww := &responseWriter{backend: w, status: http.StatusOK}
+		dav.ServeHTTP(ww, r)
+		lapsed := time.Since(t)
+		log.Printf("%s\t%s\t%s\t%v\t%vb in\t%vb out\t%s", r.RemoteAddr, r.Method, r.URL, ww.status, r.ContentLength, ww.size, lapsed)
+		if ww.status >= 300 {
+			log.Printf("\t%s", ww.errorContent.String())
+		}
+	})
 
 	httpsServer := &http.Server{
 		Addr:    *httpsIface,
-		Handler: auth,
+		Handler: logger,
 	}
 	log.Printf("Serving HTTPS on %q with public key %q", *httpsIface, fingerprint)
 
 	httpServer := &http.Server{
 		Addr:    *httpIface,
-		Handler: auth,
+		Handler: logger,
 	}
 	log.Printf("Serving HTTP on %q", *httpIface)
 

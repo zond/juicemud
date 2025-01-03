@@ -40,7 +40,7 @@ func (da *DigestAuth) Wrap(handler http.Handler) http.HandlerFunc {
 		// Check Authorization header
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Digest ") {
-			log.Printf("\tno digest auth header")
+			log.Printf("\t(no digest auth header)")
 			da.challenge(w)
 			return
 		}
@@ -55,7 +55,7 @@ func (da *DigestAuth) Wrap(handler http.Handler) http.HandlerFunc {
 			return
 		}
 		if !exists {
-			log.Printf("\tno such user")
+			log.Printf("\t(no such user)")
 			da.challenge(w)
 			return
 		}
@@ -63,7 +63,7 @@ func (da *DigestAuth) Wrap(handler http.Handler) http.HandlerFunc {
 		// Validate the response hash
 		expectedResponse := da.calculateResponse(authParams, ha1, r.Method)
 		if subtle.ConstantTimeCompare([]byte(authParams["response"]), []byte(expectedResponse)) != 1 {
-			log.Printf("\twrong response")
+			log.Printf("\t(wrong response)")
 			da.challenge(w)
 			return
 		}
