@@ -22,14 +22,14 @@ func New(s *storage.Storage) *Game {
 
 func (g *Game) HandleSession(sess ssh.Session) {
 	env := &Env{
-		Game: g,
-		Term: terminal.NewTerminal(sess, "> "),
-		Sess: sess,
+		game: g,
+		term: terminal.NewTerminal(sess, "> "),
+		sess: sess,
 	}
 	if err := env.Connect(); err != nil {
 		if err != io.EOF {
 			msg := fmt.Sprintf("InternalServerError: %v", err)
-			fmt.Fprintf(env.Term, msg)
+			fmt.Fprintf(env.term, msg)
 			log.Print(msg)
 		}
 	}

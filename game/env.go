@@ -20,10 +20,10 @@ var (
 )
 
 type Env struct {
-	Game *Game
-	Sess ssh.Session
-	User *storage.User
-	Term *term.Terminal
+	game *Game
+	sess ssh.Session
+	term *term.Terminal
+	user *storage.User
 }
 
 func (e *Env) SelectExec(options map[string]func() error) error {
@@ -34,8 +34,8 @@ func (e *Env) SelectExec(options map[string]func() error) error {
 	sort.Sort(commandNames)
 	prompt := fmt.Sprintf("%s\n", lang.Enumerator{Pattern: "[%s]", Operator: "or"}.Do(commandNames...))
 	for {
-		fmt.Fprint(e.Term, prompt)
-		line, err := e.Term.ReadLine()
+		fmt.Fprint(e.term, prompt)
+		line, err := e.term.ReadLine()
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -51,13 +51,13 @@ func (e *Env) SelectExec(options map[string]func() error) error {
 
 func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
 	for {
-		fmt.Fprintf(e.Term, "%s [%s]\n", prompt, strings.Join(options, "/"))
-		line, err := e.Term.ReadLine()
+		fmt.Fprintf(e.term, "%s [%s]\n", prompt, strings.Join(options, "/"))
+		line, err := e.term.ReadLine()
 		if err != nil {
 			return "", errors.WithStack(err)
 		}
 		for _, option := range options {
-			if strings.ToLower(line) == strings.ToLower(option) {
+			if strings.EqualFold(line, option) {
 				return option, nil
 			}
 		}
@@ -66,95 +66,95 @@ func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
 
 func (e *Env) Process() error {
 	for {
-		line, err := e.Term.ReadLine()
+		line, err := e.term.ReadLine()
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		fmt.Fprintf(e.Term, "%s\n\n", line)
+		fmt.Fprintf(e.term, "%s\n\n", line)
 	}
 }
 
 func (e *Env) Connect() error {
-	fmt.Fprint(e.Term, "Welcome!\n\n")
+	fmt.Fprint(e.term, "Welcome!\n\n")
 	sel := func() error {
 		return e.SelectExec(map[string]func() error{
 			"login user":  e.loginUser,
 			"create user": e.createUser,
 		})
 	}
-	for err := sel(); err != nil && e.User == nil; err = sel() {
+	for err := sel(); err != nil && e.user == nil; err = sel() {
 		if !errors.Is(err, OperationAborted) {
-			fmt.Fprintln(e.Term, err)
+			fmt.Fprintln(e.term, err)
 		}
 	}
 	return e.Process()
 }
 
 func (e *Env) loginUser() error {
-	fmt.Fprint(e.Term, "** Login user **\n\n")
+	fmt.Fprint(e.term, "** Login user **\n\n")
 	var user *storage.User
 	for user == nil {
-		fmt.Fprintln(e.Term, "Enter username or [abort]:")
-		username, err := e.Term.ReadLine()
+		fmt.Fprintln(e.term, "Enter username or [abort]:")
+		username, err := e.term.ReadLine()
 		if err != nil {
 			return err
 		}
 		if username == "abort" {
 			return errors.WithStack(OperationAborted)
 		}
-		if user, err = e.Game.storage.GetUser(e.Sess.Context(), username); errors.Is(err, storage.NotFoundErr) {
-			fmt.Fprintln(e.Term, "Username not found!")
+		if user, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, storage.NotFoundErr) {
+			fmt.Fprintln(e.term, "Username not found!")
 		} else if err != nil {
 			return errors.WithStack(err)
 		}
 	}
-	for e.User == nil {
-		fmt.Fprint(e.Term, "Enter password or [abort]:\n")
-		password, err := e.Term.ReadPassword("> ")
+	for e.user == nil {
+		fmt.Fprint(e.term, "Enter password or [abort]:\n")
+		password, err := e.term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
 		ha1 := digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
 		if subtle.ConstantTimeCompare([]byte(ha1), []byte(user.PasswordHash)) != 1 {
-			fmt.Fprintln(e.Term, "Incorrect password!")
+			fmt.Fprintln(e.term, "Incorrect password!")
 		} else {
-			e.User = user
+			e.user = user
 		}
 	}
-	fmt.Fprintf(e.Term, "Welcome back, %v!\n", e.User.Name)
+	fmt.Fprintf(e.term, "Welcome back, %v!\n", e.user.Name)
 	return nil
 }
 
 func (e *Env) createUser() error {
-	fmt.Fprint(e.Term, "** Create user **\n\n")
+	fmt.Fprint(e.term, "** Create user **\n\n")
 	var user *storage.User
 	for user == nil {
-		fmt.Fprint(e.Term, "Enter new username or [abort]:\n")
-		username, err := e.Term.ReadLine()
+		fmt.Fprint(e.term, "Enter new username or [abort]:\n")
+		username, err := e.term.ReadLine()
 		if err != nil {
 			return err
 		}
 		if username == "abort" {
 			return errors.WithStack(OperationAborted)
 		}
-		if _, err = e.Game.storage.GetUser(e.Sess.Context(), username); errors.Is(err, storage.NotFoundErr) {
+		if _, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, storage.NotFoundErr) {
 			user = &storage.User{
 				Name: username,
 			}
 		} else if err == nil {
-			fmt.Fprintln(e.Term, "Username already exists!")
+			fmt.Fprintln(e.term, "Username already exists!")
 		} else {
 			return errors.WithStack(err)
 		}
 	}
-	for e.User == nil {
-		fmt.Fprintln(e.Term, "Enter new password:")
-		password, err := e.Term.ReadPassword("> ")
+	for e.user == nil {
+		fmt.Fprintln(e.term, "Enter new password:")
+		password, err := e.term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(e.Term, "Repeat new password:")
-		verification, err := e.Term.ReadPassword("> ")
+		fmt.Fprintln(e.term, "Repeat new password:")
+		verification, err := e.term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
@@ -167,15 +167,24 @@ func (e *Env) createUser() error {
 				return errors.WithStack(OperationAborted)
 			} else if selection == "y" {
 				user.PasswordHash = digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
-				e.User = user
+				e.user = user
 			}
 		} else {
-			fmt.Fprintln(e.Term, "Passwords don't match!")
+			fmt.Fprintln(e.term, "Passwords don't match!")
 		}
 	}
-	if err := e.Game.storage.SetUser(e.Sess.Context(), e.User, false); err != nil {
+	object, err := e.game.storage.CreateObject(e.sess.Context())
+	if err != nil {
 		return errors.WithStack(err)
 	}
-	fmt.Fprintf(e.Term, "Welcome, %v!\n", e.User.Name)
+	objectID, err := object.Id()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	e.user.Object = objectID
+	if err := e.game.storage.SetUser(e.sess.Context(), e.user, false); err != nil {
+		return errors.WithStack(err)
+	}
+	fmt.Fprintf(e.term, "Welcome, %v!\n", e.user.Name)
 	return nil
 }

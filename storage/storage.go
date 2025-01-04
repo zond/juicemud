@@ -3,12 +3,15 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"log"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"capnproto.org/go/capnp/v3"
 	"github.com/estraier/tkrzw-go"
 	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
@@ -17,6 +20,32 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+var (
+	lastObjectTimePart uint64 = 0
+)
+
+const (
+	objectIDLen = 16
+)
+
+func nextObjectID() ([]byte, error) {
+	newTimePart := uint64(0)
+	for {
+		newTimePart = uint64(time.Now().UnixNano())
+		lastTimePart := atomic.LoadUint64(&lastObjectTimePart)
+		if newTimePart > lastTimePart && atomic.CompareAndSwapUint64(&lastObjectTimePart, lastTimePart, newTimePart) {
+			break
+		}
+	}
+	timeSize := binary.Size(newTimePart)
+	result := make([]byte, objectIDLen)
+	binary.BigEndian.PutUint64(result, newTimePart)
+	if _, err := rand.Read(result[timeSize:]); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return result, nil
+}
 
 func toBytes(i int64) []byte {
 	b := make([]byte, 8)
@@ -93,6 +122,63 @@ func (s *Storage) SetSource(ctx context.Context, id int64, content []byte) error
 
 func (s *Storage) DelSource(ctx context.Context, id int64) error {
 	if stat := s.sources.Remove(toBytes(id)); !stat.IsOK() && stat.GetCode() != tkrzw.StatusNotFoundError {
+		return errors.WithStack(stat)
+	}
+	return nil
+}
+
+func (s *Storage) GetObject(ctx context.Context, id []byte) (*Object, error) {
+	b, stat := s.objects.Get(id)
+	if stat.GetCode() == tkrzw.StatusNotFoundError {
+		return nil, errors.WithStack(NotFoundErr)
+	} else if !stat.IsOK() {
+		return nil, errors.WithStack(stat)
+	}
+	msg, err := capnp.Unmarshal(b)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	result, err := ReadRootObject(msg)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return &result, nil
+}
+
+func (s *Storage) CreateObject(ctx context.Context) (*Object, error) {
+	arena := capnp.SingleSegment(nil)
+	_, seg, err := capnp.NewMessage(arena)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	object, err := NewRootObject(seg)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	newID, err := nextObjectID()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	object.SetId(newID)
+	if err := s.SetObject(ctx, &object); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return &object, nil
+}
+
+func (s *Storage) SetObject(ctx context.Context, object *Object) error {
+	id, err := object.Id()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if len(id) != objectIDLen {
+		return errors.Errorf("Object ID %+v isn't %v long", id, objectIDLen)
+	}
+	b, err := object.Message().Marshal()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if stat := s.objects.Set(id, b, false); !stat.IsOK() {
 		return errors.WithStack(stat)
 	}
 	return nil
@@ -261,6 +347,7 @@ type User struct {
 	Name         string `sqly:"unique"`
 	PasswordHash string
 	Owner        bool
+	Object       []byte
 }
 
 func (s *Storage) GetUser(ctx context.Context, name string) (*User, error) {
