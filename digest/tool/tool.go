@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/digest"
 )
 
 func main() {
 	username := flag.String("username", "", "username to compute HA1 for")
 	password := flag.String("password", "", "password to compute HA1 for")
-	realm := flag.String("realm", "WebDAV", "realm to compute HA1 for")
+	realm := flag.String("realm", juicemud.DAVAuthRealm, "realm to compute HA1 for")
 
 	flag.Parse()
 

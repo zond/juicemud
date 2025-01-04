@@ -6,10 +6,11 @@ require (
 	capnproto.org/go/capnp/v3 v3.0.1-alpha.2
 	github.com/estraier/tkrzw-go v0.0.0-20240603165139-89707b45d5ab
 	github.com/gliderlabs/ssh v0.3.8
+	github.com/jmoiron/sqlx v1.4.0
 	github.com/pkg/errors v0.9.1
 	github.com/zond/sqly v0.0.0-20250103195816-5e19531f2e16
 	golang.org/x/crypto v0.31.0
-	golang.org/x/net v0.26.0
+	golang.org/x/term v0.27.0
 	modernc.org/sqlite v1.34.4
 )
 
@@ -19,7 +20,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

@@ -263,6 +263,18 @@ type User struct {
 	Owner        bool
 }
 
+func (s *Storage) GetUser(ctx context.Context, name string) (*User, error) {
+	user := &User{}
+	if err := getSQL(ctx, s.sql, user, "SELECT * FROM User WHERE Name = ?", name); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return user, nil
+}
+
+func (s *Storage) SetUser(ctx context.Context, user *User, overwrite bool) error {
+	return s.sql.Upsert(ctx, user, overwrite)
+}
+
 func (s *Storage) CallerAccessToGroup(ctx context.Context, group int64) (bool, error) {
 	userIf, found := digest.AuthenticatedUser(ctx)
 	if !found {

@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/gliderlabs/ssh"
+	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/crypto"
 	"github.com/zond/juicemud/dav"
+	"github.com/zond/juicemud/digest"
 	"github.com/zond/juicemud/fs"
 	"github.com/zond/juicemud/game"
 	"github.com/zond/juicemud/storage"
@@ -118,11 +120,11 @@ func main() {
 		Storage: store,
 	}
 	dav := dav.New(fs)
-	//auth := digest.NewDigestAuth("WebDAV", store).Wrap(dav)
+	auth := digest.NewDigestAuth(juicemud.DAVAuthRealm, store).Wrap(dav)
 	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t := time.Now()
 		ww := &responseWriter{backend: w, status: http.StatusOK}
-		dav.ServeHTTP(ww, r)
+		auth.ServeHTTP(ww, r)
 		lapsed := time.Since(t)
 		log.Printf("%s\t%s\t%s\t%v\t%vb in\t%vb out\t%s", r.RemoteAddr, r.Method, r.URL, ww.status, r.ContentLength, ww.size, lapsed)
 		if ww.status >= 300 {

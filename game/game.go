@@ -1,10 +1,13 @@
 package game
 
 import (
+	"fmt"
+	"io"
 	"log"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/zond/juicemud/storage"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 type Game struct {
@@ -18,5 +21,16 @@ func New(s *storage.Storage) *Game {
 }
 
 func (g *Game) HandleSession(sess ssh.Session) {
-	log.Printf("session!")
+	env := &Env{
+		Game: g,
+		Term: terminal.NewTerminal(sess, "> "),
+		Sess: sess,
+	}
+	if err := env.Connect(); err != nil {
+		if err != io.EOF {
+			msg := fmt.Sprintf("InternalServerError: %v", err)
+			fmt.Fprintf(env.Term, msg)
+			log.Print(msg)
+		}
+	}
 }
