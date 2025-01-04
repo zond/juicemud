@@ -16,9 +16,9 @@ struct Object {
     subscriptions @3 :List(Text);
     # Names of all event types this Object is interested in.
 
-    state @4 :Data;
-    # State of the object in JSON.
+    state @4 :Text;
+    # The global variables of the Object as JSON.
 
-    source @5 :Int64;
-    # ID of the JavaScript source controlling this Object.
+    source @5 :Text;
+    # Path to the JavaScript source controlling this Object.
 }

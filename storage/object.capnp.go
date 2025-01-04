@@ -14,12 +14,12 @@ type Object capnp.Struct
 const Object_TypeID = 0xbc7ab37c3dc9daa6
 
 func NewObject(s *capnp.Segment) (Object, error) {
-	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 5})
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 6})
 	return Object(st), err
 }
 
 func NewRootObject(s *capnp.Segment) (Object, error) {
-	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 5})
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 6})
 	return Object(st), err
 }
 
@@ -127,25 +127,40 @@ func (s Object) NewSubscriptions(n int32) (capnp.TextList, error) {
 	err = capnp.Struct(s).SetPtr(3, l.ToPtr())
 	return l, err
 }
-func (s Object) State() ([]byte, error) {
+func (s Object) State() (string, error) {
 	p, err := capnp.Struct(s).Ptr(4)
-	return []byte(p.Data()), err
+	return p.Text(), err
 }
 
 func (s Object) HasState() bool {
 	return capnp.Struct(s).HasPtr(4)
 }
 
-func (s Object) SetState(v []byte) error {
-	return capnp.Struct(s).SetData(4, v)
+func (s Object) StateBytes() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(4)
+	return p.TextBytes(), err
 }
 
-func (s Object) Source() int64 {
-	return int64(capnp.Struct(s).Uint64(0))
+func (s Object) SetState(v string) error {
+	return capnp.Struct(s).SetText(4, v)
 }
 
-func (s Object) SetSource(v int64) {
-	capnp.Struct(s).SetUint64(0, uint64(v))
+func (s Object) Source() (string, error) {
+	p, err := capnp.Struct(s).Ptr(5)
+	return p.Text(), err
+}
+
+func (s Object) HasSource() bool {
+	return capnp.Struct(s).HasPtr(5)
+}
+
+func (s Object) SourceBytes() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(5)
+	return p.TextBytes(), err
+}
+
+func (s Object) SetSource(v string) error {
+	return capnp.Struct(s).SetText(5, v)
 }
 
 // Object_List is a list of Object.
@@ -153,7 +168,7 @@ type Object_List = capnp.StructList[Object]
 
 // NewObject creates a new list of Object.
 func NewObject_List(s *capnp.Segment, sz int32) (Object_List, error) {
-	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 8, PointerCount: 5}, sz)
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 6}, sz)
 	return capnp.StructList[Object](l), err
 }
 
@@ -165,24 +180,24 @@ func (f Object_Future) Struct() (Object, error) {
 	return Object(p.Struct()), err
 }
 
-const schema_d258d93c56221e58 = "x\xda4\xcc\xb1J\x03A\x18\xc4\xf1\x99\xdd[\xd3x" +
-	"\xc1\x85-\xc4\xc2\x80\xbdB,\x83\xa2X\xda\x98\xaf\xd1" +
-	"\xb4\xc9zE\x82\xdc\x85\xdc\xa6\x11\xc1\x97\xb0\x11\x14\x82" +
-	"`\xb0\xb7Q\x08XY\x04\x14T\x14T|\x97\x93(" +
-	"\xd7\xfe\xfe\xcc,\x8c\xb7\xa3z\xfc@(qf\xae\x18" +
-	"\x7fO7On\x8f'\x90\x98,Z\xcb+\xfb\x1b_" +
-	"\xad7\x18S\x01\xec\xe3\x95}\xae\x00\xf5\xe9\x01\xb1Z" +
-	"d\x9d^\xe2\xc3\x9ag\xbb\x9f\xf6\x1b{\x9d^%\xf1" +
-	"\xa1I\xca\xa2\x8e\x80\x88\x80=_\x02\xe4LSF\x8a" +
-	"\x96t\x9c\xe1\xe5. \x17\x9ar\xa3h\x95rT\x80" +
-	"\xbd\xde\x01d\xa4)\x13E\xab\xb5\xa3\x06\xec\xfd\x00\x90" +
-	";MyW\xb4Q\xe4\x18\x01\xf6u\x1d\x90'M\xf9" +
-	"T\xa4q4\x80\xfdh\x00\xf2\xa2)?\x8a\xba{\xc8" +
-	"\x18\x8a1X\x1ce\xbe\x1d\xbaY\x0a\xa0\xb4S\x9f\xa5" +
-	"!I\x03\xab`S\xf3\x8f\xab`\x91\x0f;\xb9\x1ft" +
-	"\xfb\xa8\xcd\x06y\x99\xe7\xffs-\x0f\xed\x90\x94\x1f[" +
-	"y6\x1c\xf8\x84\x06\x8a\x06\xfc\x0d\x00\x00\xff\xff\xc1\xe9" +
-	"C_"
+const schema_d258d93c56221e58 = "x\xda<\xcb\xb1J#Q\x18\xc5\xf1s\xee\x9dI\x9a" +
+	"L\xd8\x0f\xa6X\xb6\xd8\x80\xbdB,\x83\xa2X\xda\x98" +
+	"\xaf\xd1\xb4\xc9u\x8a\x04\x99\x09\x99\x9bF\x04_\xc2F" +
+	"P\x08\x82\xc1\xdeF!`e\x11PPQP\xf1]" +
+	"F\x12\x89\xe5\xf9\xfd9\x7f\xc6\x9bA=\xba#\x8c\xc6" +
+	"a\xa9\x18\x7fN\xd7\x8f\xae\x0f'\x90\x88E\xeb\xff\xd2" +
+	"\xee\xdaG\xeb\x05a\xa9\x0c\xc8\xfd\x85<\x96\x81\xfat" +
+	"\x8fX.\xb2N/q~\xc5\xb1\xddO\xfb\x8d\x9dN" +
+	"\xaf\x9c8\xdf$\xf5\xaf\x0d\x80\x80\x80\x9c\xfe\x03\xf4\xc4" +
+	"RG\x86B\xc6\x9c\xe1\xf96\xa0g\x96ze(\xc6" +
+	"\xc44\x80\\n\x01:\xb2\xd4\x89\xa1X\x1b\xd3\x02r" +
+	";\x00\xf4\xc6R_\x0d%\x08b\x06\x80<\xaf\x02\xfa" +
+	"`\xa9\xef\x86\x12\x861C@\xde\x1a\x80>Y\xea\x97" +
+	"\xa1\xed\xee3\x82a\x04\x16\x07\x99k\xfbn\x96\x02X" +
+	"\xd8\xb1\xcbR\x9f\xa4\x9eU\xb0i9\xe7*X\xe4\xc3" +
+	"N\xee\x06\xdd>j\xb3C\xbe\xc8\x95\x9f\\\xcb}\xdb" +
+	"'\xf3U\x017\xf2l8p\xbf\xf3;\x00\x00\xff\xff" +
+	"\xa3\x85C@"
 
 func RegisterSchema(reg *schemas.Registry) {
 	reg.Register(&schemas.Schema{

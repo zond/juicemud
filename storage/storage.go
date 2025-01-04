@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"log"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -45,14 +44,6 @@ func nextObjectID() ([]byte, error) {
 		return nil, errors.WithStack(err)
 	}
 	return result, nil
-}
-
-func toBytes(i int64) []byte {
-	b := make([]byte, 8)
-	if _, err := binary.Encode(b, binary.BigEndian, i); err != nil {
-		log.Panic(err)
-	}
-	return b
 }
 
 func New(ctx context.Context, dir string) (*Storage, error) {
@@ -99,8 +90,8 @@ func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, para
 	return nil
 }
 
-func (s *Storage) GetSource(ctx context.Context, id int64) ([]byte, error) {
-	value, stat := s.sources.Get(toBytes(id))
+func (s *Storage) GetSource(ctx context.Context, path string) ([]byte, error) {
+	value, stat := s.sources.Get([]byte(path))
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
 		return []byte{}, nil
 	} else if !stat.IsOK() {
@@ -109,19 +100,8 @@ func (s *Storage) GetSource(ctx context.Context, id int64) ([]byte, error) {
 	return value, nil
 }
 
-func (s *Storage) SetSource(ctx context.Context, id int64, content []byte) error {
-	file := &File{}
-	if err := getSQL(ctx, s.sql, file, "SELECT * FROM File WHERE Id = ?", id); err != nil {
-		return errors.WithStack(err)
-	}
-	if stat := s.sources.Set(toBytes(id), content, true); !stat.IsOK() {
-		return errors.WithStack(stat)
-	}
-	return nil
-}
-
-func (s *Storage) DelSource(ctx context.Context, id int64) error {
-	if stat := s.sources.Remove(toBytes(id)); !stat.IsOK() && stat.GetCode() != tkrzw.StatusNotFoundError {
+func (s *Storage) DelSource(ctx context.Context, path string) error {
+	if stat := s.sources.Remove([]byte(path)); !stat.IsOK() && stat.GetCode() != tkrzw.StatusNotFoundError {
 		return errors.WithStack(stat)
 	}
 	return nil
@@ -188,6 +168,7 @@ type File struct {
 	Id         int64 `sqly:"pkey"`
 	Parent     int64 `sqly:"uniqueWith(Name)"`
 	Name       string
+	Path       string `sqly:"unique"`
 	ModTime    sqly.SQLTime
 	Dir        bool
 	ReadGroup  int64
@@ -208,6 +189,7 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, err 
 		}
 		file = &File{
 			Parent:     parent.Id,
+			Path:       path,
 			Name:       filepath.Base(path),
 			ModTime:    sqly.ToSQLTime(time.Now()),
 			Dir:        false,
@@ -225,7 +207,6 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, err 
 }
 
 func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) error {
-	log.Printf("%q / %q", oldPath, newPath)
 	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		oldFile, err := getFile(ctx, tx, oldPath)
 		if err != nil {
@@ -253,6 +234,7 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 			}
 		}
 		oldFile.Parent = newParent.Id
+		oldFile.Path = newPath
 		oldFile.Name = filepath.Base(newPath)
 		if err := tx.Upsert(ctx, oldFile, true); err != nil {
 			return errors.WithStack(err)
@@ -274,15 +256,15 @@ func (s *Storage) GetChildren(ctx context.Context, parent int64) ([]File, error)
 }
 
 func getFile(ctx context.Context, db sqlx.QueryerContext, path string) (*File, error) {
-	file := &File{
-		Dir: true,
+	if path == "/" {
+		return &File{
+			Dir:  true,
+			Path: "/",
+		}, nil
 	}
-	for _, part := range strings.Split(path, "/") {
-		if part != "" {
-			if err := getSQL(ctx, db, file, "SELECT * FROM File WHERE Parent = ? AND Name = ?", file.Id, part); err != nil {
-				return nil, errors.WithStack(err)
-			}
-		}
+	file := &File{}
+	if err := getSQL(ctx, db, file, "SELECT * FROM File WHERE Path = ?"); err != nil {
+		return nil, errors.WithStack(err)
 	}
 	return file, nil
 }
@@ -323,6 +305,7 @@ func (s *Storage) CreateDir(ctx context.Context, path string) error {
 			return errors.WithStack(err)
 		}
 		file := &File{
+			Path:       path,
 			Name:       filepath.Base(path),
 			ModTime:    sqly.ToSQLTime(time.Now()),
 			Dir:        true,

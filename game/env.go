@@ -1,15 +1,19 @@
 package game
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/digest"
+	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
 	"golang.org/x/term"
@@ -17,6 +21,11 @@ import (
 
 var (
 	OperationAborted = errors.New("operation aborted")
+)
+
+var (
+	envByObjectID      = map[string]*Env{}
+	envByObjectIDMutex = sync.RWMutex{}
 )
 
 type Env struct {
@@ -64,7 +73,57 @@ func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
 	}
 }
 
+func getObjectEnv(id []byte) (*Env, bool) {
+	envByObjectIDMutex.RLock()
+	defer envByObjectIDMutex.RUnlock()
+	e, found := envByObjectID[string(id)]
+	return e, found
+}
+
+func (e *Env) getJSContext(ctx context.Context, id []byte) (*js.Context, error) {
+	object, err := e.game.storage.GetObject(ctx, id)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	sourcePath, err := object.Source()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	state, err := object.State()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	source, err := e.game.storage.GetSource(ctx, sourcePath)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	result := &js.Context{
+		State: state,
+	}
+	if err := result.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
+		return nil, errors.WithStack(err)
+	}
+}
+
+func (e *Env) notify(ctx context.Context, id []byte, eventType string, message map[string]any) error {
+	script, err := e.getScript(ctx, id)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+}
+
 func (e *Env) Process() error {
+	if e.user == nil {
+		return errors.New("can't processes without user")
+	}
+	envByObjectIDMutex.Lock()
+	envByObjectID[string(e.user.Object)] = e
+	envByObjectIDMutex.Unlock()
+	defer func() {
+		envByObjectIDMutex.Lock()
+		delete(envByObjectID, string(e.user.Object))
+		envByObjectIDMutex.Unlock()
+	}()
 	for {
 		line, err := e.term.ReadLine()
 		if err != nil {
