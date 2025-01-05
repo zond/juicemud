@@ -105,9 +105,6 @@ func main() {
 	sshServer := &ssh.Server{
 		Addr:    *sshIface,
 		Handler: g.HandleSession,
-		PtyCallback: func(ssh.Context, ssh.Pty) bool {
-			return true
-		},
 	}
 	sshServer.AddHostKey(signer)
 	log.Printf("Serving SSH on %q with public key %q", *sshIface, fingerprint)
@@ -141,12 +138,13 @@ func main() {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		log.Fatal(sshServer.ListenAndServe())
+		log.Fatal(httpsServer.ListenAndServeTLS(crypto.HTTPSCertPath, crypto.PrivKeyPath))
 	}()
 	go func() {
 		defer wg.Done()
 		log.Fatal(httpServer.ListenAndServe())
 	}()
-	log.Fatal(httpsServer.ListenAndServeTLS(crypto.HTTPSCertPath, crypto.PrivKeyPath))
+
+	log.Fatal(sshServer.ListenAndServe())
 	wg.Wait()
 }

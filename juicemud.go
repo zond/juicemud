@@ -47,11 +47,17 @@ func NewSyncMap[K comparable, V comparable]() *SyncMap[K, V] {
 	}
 }
 
-func (s *SyncMap[K, V]) Get(key K) (V, bool) {
+func (s *SyncMap[K, V]) GetHas(key K) (V, bool) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	v, found := s.m[key]
 	return v, found
+}
+
+func (s *SyncMap[K, V]) Get(key K) V {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.m[key]
 }
 
 func (s *SyncMap[K, V]) Set(key K, value V) {
@@ -99,7 +105,7 @@ func (l *LockMap[K]) Lock(key K) {
 		if l.sm.Swap(key, nil, wg) {
 			break
 		}
-		otherWg, found := l.sm.Get(key)
+		otherWg, found := l.sm.GetHas(key)
 		if found {
 			otherWg.Wait()
 		}
@@ -107,7 +113,7 @@ func (l *LockMap[K]) Lock(key K) {
 }
 
 func (l *LockMap[K]) Unlock(key K) {
-	if wg, found := l.sm.Get(key); found {
+	if wg, found := l.sm.GetHas(key); found {
 		l.sm.Del(key)
 		wg.Done()
 	}

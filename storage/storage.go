@@ -1,6 +1,8 @@
 //go:generate sh -c "capnp compile -I `go list -m -f '{{.Dir}}' capnproto.org/go/capnp/v3`/std -ogo object.capnp"
 package storage
 
+// TODO(zond): Implement read/write group access restrictions.
+
 import (
 	"context"
 	"crypto/rand"
@@ -103,17 +105,14 @@ func (s *Storage) SetSource(ctx context.Context, path string, content []byte) er
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		if err := s.logSync(ctx, tx, &FileSync{
-			Set:          file.Path,
-			SetToContent: content,
-		}); err != nil {
-			return juicemud.WithStack(err)
-		}
-		return nil
+		return juicemud.WithStack(s.logSync(ctx, tx, &FileSync{
+			Set:     file.Path,
+			Content: content,
+		}))
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
-	return s.fileSync(ctx)
+	return s.sync(ctx)
 }
 
 func (s *Storage) GetObject(ctx context.Context, id []byte) (*Object, error) {
@@ -174,72 +173,60 @@ func (s *Storage) SetObject(ctx context.Context, object *Object) error {
 }
 
 type FileSync struct {
-	Id           int64 `sqly:"pkey"`
-	Remove       string
-	Set          string
-	SetToRemoved bool
-	SetToContent []byte
+	Id      int64 `sqly:"pkey,autoinc"`
+	Remove  string
+	Set     string
+	Content []byte
 }
 
 func (s *Storage) logSync(ctx context.Context, db sqlx.ExtContext, fileSync *FileSync) error {
 	if fileSync.Remove == "" && fileSync.Set == "" {
 		return errors.Errorf("invalid FileSync %+v: Remove == \"\" and Set == \"\"", fileSync)
 	}
-	if fileSync.Set != "" && fileSync.SetToRemoved && len(fileSync.SetToContent) > 0 {
-		return errors.Errorf("invalid FileSync %+v: Set != \"\", SetToRemoved, and non-empty SetToContent", fileSync)
+	if fileSync.Remove != "" && fileSync.Set != "" {
+		return errors.Errorf("invalid FileSync %+v: Remove != \"\" and Set != \"\"", fileSync)
 	}
-	count := int64(-1)
-	if err := sqlx.GetContext(ctx, db, &count, "SELECT COUNT(*) FROM FileSync"); err != nil {
-		return juicemud.WithStack(err)
+	if fileSync.Set != "" && len(fileSync.Content) > 0 {
+		return errors.Errorf("invalid FileSync %+v: Set != \"\" and empty Content", fileSync)
 	}
-	if count < 0 {
-		return errors.Errorf("invalid FileSync count %v", count)
+	if fileSync.Id != 0 {
+		return errors.Errorf("invalid FileSync %+v: Id != 0", fileSync)
 	}
-	fileSync.Id = count
 	return sqly.Upsert(ctx, db, fileSync, false)
 }
 
-func (s *Storage) fileSync(ctx context.Context) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
-		fileSyncs := []FileSync{}
-		if err := tx.SelectContext(ctx, &fileSyncs, "SELECT * FROM FileSync ORDER BY Id ASC"); err != nil {
+func (s *Storage) runSync(_ context.Context, fileSync *FileSync) error {
+	if fileSync.Remove != "" {
+		if stat := s.sources.Remove([]byte(fileSync.Remove)); !stat.IsOK() && stat.GetCode() != tkrzw.StatusNotFoundError {
+			return juicemud.WithStack(stat)
+		}
+	} else if fileSync.Set != "" {
+		if stat := s.sources.Set([]byte(fileSync.Set), fileSync.Content, true); !stat.IsOK() {
+			return juicemud.WithStack(stat)
+		}
+	}
+	return nil
+}
+
+func (s *Storage) sync(ctx context.Context) error {
+	getOldestSync := func() (*FileSync, error) {
+		result := &FileSync{}
+		if err := getSQL(ctx, s.sql, result, "SELECT * FROM FileSync ORDER BY Id ASC LIMIT 1"); errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		} else {
+			return nil, juicemud.WithStack(err)
+		}
+	}
+	oldestSync, err := getOldestSync()
+	for ; err == nil && oldestSync != nil; oldestSync, err = getOldestSync() {
+		if err := s.runSync(ctx, oldestSync); err != nil {
 			return juicemud.WithStack(err)
 		}
-		for _, fileSync := range fileSyncs {
-			pairs := []tkrzw.KeyProcPair{}
-			removed := []byte{}
-			if fileSync.Remove != "" {
-				pairs = append(pairs, tkrzw.KeyProcPair{
-					Key: []byte(fileSync.Remove),
-					Proc: func(key []byte, value []byte) any {
-						removed = value
-						return tkrzw.RemoveBytes
-					},
-				})
-			}
-			if fileSync.Set != "" {
-				pairs = append(pairs, tkrzw.KeyProcPair{
-					Key: []byte(fileSync.Set),
-					Proc: func(key []byte, value []byte) any {
-						if fileSync.SetToRemoved {
-							return removed
-						} else {
-							return []byte(fileSync.SetToContent)
-						}
-					},
-				})
-			}
-			if len(pairs) > 0 {
-				if stat := s.sources.ProcessMulti(pairs, true); !stat.IsOK() {
-					return juicemud.WithStack(stat)
-				}
-			}
-			if _, err := tx.ExecContext(ctx, "DELETE FROM FileSync WHERE Id = ?", fileSync.Id); err != nil {
-				return juicemud.WithStack(err)
-			}
+		if _, err := s.sql.ExecContext(ctx, "DELETE FROM FileSync WHERE Id = ?", oldestSync.Id); err != nil && errors.Is(err, os.ErrNotExist) {
+			return juicemud.WithStack(err)
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 type File struct {
@@ -290,6 +277,10 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
+		content, err := s.GetSource(ctx, oldPath)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
 		var newParent *File
 		if newParentPath := filepath.Dir(newPath); newParentPath == "/" {
 			newParent = &File{
@@ -311,17 +302,18 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 			return juicemud.WithStack(err)
 		}
 		if err := s.logSync(ctx, tx, &FileSync{
-			Remove:       oldPath,
-			Set:          newPath,
-			SetToRemoved: true,
+			Remove: oldPath,
 		}); err != nil {
 			return juicemud.WithStack(err)
 		}
-		return nil
+		return juicemud.WithStack(s.logSync(ctx, tx, &FileSync{
+			Set:     newPath,
+			Content: content,
+		}))
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
-	return s.fileSync(ctx)
+	return s.sync(ctx)
 }
 
 func getChildren(ctx context.Context, db sqlx.QueryerContext, parent int64) ([]File, error) {
@@ -386,7 +378,7 @@ func (s *Storage) DelFile(ctx context.Context, path string) error {
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
-	return s.fileSync(ctx)
+	return s.sync(ctx)
 }
 
 func (s *Storage) CreateDir(ctx context.Context, path string) error {

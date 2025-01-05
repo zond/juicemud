@@ -99,9 +99,9 @@ func (e *Env) withJSContext(ctx context.Context, id []byte, f func(jctx *js.Cont
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	result, err := js.NewContext(state)
-	if err != nil {
-		return juicemud.WithStack(err)
+	result := &js.Context{
+		State:   state,
+		Console: consoleByObjectID.Get(string(id)),
 	}
 	if err := result.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
 		return juicemud.WithStack(err)
@@ -117,16 +117,10 @@ func (e *Env) notify(ctx context.Context, id []byte, eventType string, message s
 
 func (e *Env) Process() error {
 	if e.user == nil {
-		return errors.New("can't processes without user")
+		return errors.New("can't process without user")
 	}
-	envByObjectIDMutex.Lock()
-	envByObjectID[string(e.user.Object)] = e
-	envByObjectIDMutex.Unlock()
-	defer func() {
-		envByObjectIDMutex.Lock()
-		delete(envByObjectID, string(e.user.Object))
-		envByObjectIDMutex.Unlock()
-	}()
+	envByObjectID.Set(string(e.user.Object), e)
+	defer envByObjectID.Del(string(e.user.Object))
 	for {
 		line, err := e.term.ReadLine()
 		if err != nil {
