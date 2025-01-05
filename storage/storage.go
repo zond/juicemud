@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -76,14 +77,10 @@ type Storage struct {
 	queue   *tkrzw.DBM
 }
 
-var (
-	NotFoundErr = errors.New("Not found")
-)
-
 func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, params ...any) error {
 	if err := sqlx.GetContext(ctx, db, d, sql, params...); err != nil {
 		if err.Error() == "sql: no rows in result set" {
-			return juicemud.WithStack(NotFoundErr)
+			return juicemud.WithStack(os.ErrNotExist)
 		}
 		return juicemud.WithStack(err)
 	}
@@ -122,7 +119,7 @@ func (s *Storage) SetSource(ctx context.Context, path string, content []byte) er
 func (s *Storage) GetObject(ctx context.Context, id []byte) (*Object, error) {
 	b, stat := s.objects.Get(id)
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(NotFoundErr)
+		return nil, juicemud.WithStack(os.ErrNotExist)
 	} else if !stat.IsOK() {
 		return nil, juicemud.WithStack(stat)
 	}
@@ -261,7 +258,7 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, err 
 		file, err = getFile(ctx, tx, path)
 		if err == nil {
 			return nil
-		} else if !errors.Is(err, NotFoundErr) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return juicemud.WithStack(err)
 		}
 		parent, err := getFile(ctx, tx, filepath.Dir(path))
@@ -347,7 +344,7 @@ func getFile(ctx context.Context, db sqlx.QueryerContext, path string) (*File, e
 		}, nil
 	}
 	file := &File{}
-	if err := getSQL(ctx, db, file, "SELECT * FROM File WHERE Path = ?"); err != nil {
+	if err := getSQL(ctx, db, file, "SELECT * FROM File WHERE Path = ?", path); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	return file, nil
@@ -359,7 +356,7 @@ func (s *Storage) GetFile(ctx context.Context, path string) (*File, error) {
 
 func delFileIfExistsCheckEmpty(ctx context.Context, db sqlx.ExtContext, path string) error {
 	file, err := getFile(ctx, db, path)
-	if errors.Is(err, NotFoundErr) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	children, err := getChildren(ctx, db, file.Id)
@@ -396,7 +393,7 @@ func (s *Storage) CreateDir(ctx context.Context, path string) error {
 	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		if _, err := getFile(ctx, tx, path); err == nil {
 			return nil
-		} else if !errors.Is(err, NotFoundErr) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return juicemud.WithStack(err)
 		}
 		parent, err := getFile(ctx, tx, filepath.Dir(path))
@@ -458,7 +455,7 @@ func (s *Storage) CallerAccessToGroup(ctx context.Context, group int64) (bool, e
 	}
 	m := &GroupMember{}
 	if err := getSQL(ctx, s.sql, m, "SELECT * FROM GroupMember WHERE User = ? AND Group = ?", user.Id, group); err != nil {
-		if errors.Is(err, NotFoundErr) {
+		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return false, juicemud.WithStack(err)
@@ -469,7 +466,7 @@ func (s *Storage) CallerAccessToGroup(ctx context.Context, group int64) (bool, e
 func (s *Storage) GetHA1AndUser(ctx context.Context, username string) (string, bool, any, error) {
 	user := &User{}
 	if err := getSQL(ctx, s.sql, user, "SELECT * FROM User WHERE Name = ?", username); err != nil {
-		if errors.Is(err, NotFoundErr) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", false, nil, nil
 		}
 		return "", false, nil, juicemud.WithStack(err)

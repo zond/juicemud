@@ -30,10 +30,9 @@ func (g *Game) HandleSession(sess ssh.Session) {
 	}
 	if err := env.Connect(); err != nil {
 		if !errors.Is(err, io.EOF) {
-			msg := fmt.Sprintf("InternalServerError: %v", err)
-			fmt.Fprintln(env.term, msg)
-			log.Print(msg)
-			log.Print(juicemud.StackTrace(err))
+			fmt.Fprintf(env.term, "InternalServerError: %v\n", err)
+			log.Println(err)
+			log.Println(juicemud.StackTrace(err))
 		}
 	}
 }

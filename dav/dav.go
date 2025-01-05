@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -17,6 +18,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pkg/errors"
+	"github.com/zond/juicemud"
 )
 
 // FileInfo represents a file or directory in the virtual file system.
@@ -30,20 +34,20 @@ type FileInfo struct {
 
 // FileSystem defines the minimal interface for a WebDAV file system.
 type FileSystem interface {
-	Read(ctx context.Context, path string) (io.ReadCloser, error)      // Read file content
-	Write(ctx context.Context, path string) (io.WriteCloser, error)    // Create a new file
-	Stat(ctx context.Context, path string) (*FileInfo, error)          // Retrieve file or directory info
-	Remove(ctx context.Context, path string) error                     // Delete a file or directory
-	Mkdir(ctx context.Context, path string) error                      // Create a directory
-	List(ctx context.Context, path string) ([]*FileInfo, error)        // List files in a directory
-	Rename(ctx context.Context, oldPath string, newURL *url.URL) error // Rename or move a file
+	Read(ctx context.Context, path string) (io.ReadCloser, error)
+	Write(ctx context.Context, path string) (io.WriteCloser, error)
+	Stat(ctx context.Context, path string) (*FileInfo, error)
+	Remove(ctx context.Context, path string) error
+	Mkdir(ctx context.Context, path string) error
+	List(ctx context.Context, path string) ([]*FileInfo, error)
+	Rename(ctx context.Context, oldPath string, newURL *url.URL) error
 }
 
 // Handler provides WebDAV functionality over the given FileSystem.
 type Handler struct {
 	fileSystem FileSystem
-	locks      map[string]*Lock // File path to lock mapping
-	lockMutex  sync.Mutex       // Protects Locks map
+	locks      map[string]*Lock
+	lockMutex  sync.Mutex
 }
 
 func New(fs FileSystem) *Handler {
@@ -55,54 +59,64 @@ func New(fs FileSystem) *Handler {
 
 // ServeHTTP handles HTTP requests for the WebDAV server.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var err error
+
 	switch r.Method {
 	case "OPTIONS":
 		h.handleOptions(w, r)
 	case "GET", "HEAD":
-		h.handleGet(w, r)
+		err = h.handleGet(w, r)
 	case "PUT":
-		h.handlePut(w, r)
+		err = h.handlePut(w, r)
 	case "DELETE":
-		h.handleDelete(w, r)
+		err = h.handleDelete(w, r)
 	case "MKCOL":
-		h.handleMkcol(w, r)
+		err = h.handleMkcol(w, r)
 	case "MOVE":
-		h.handleMove(w, r)
+		err = h.handleMove(w, r)
 	case "PROPFIND":
-		h.handlePropfind(w, r)
+		err = h.handlePropfind(w, r)
 	case "LOCK":
-		h.handleLock(w, r)
+		err = h.handleLock(w, r)
 	case "UNLOCK":
-		h.handleUnlock(w, r)
+		err = h.handleUnlock(w, r)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+
+	// If there was an error, you might want to log it here:
+	if err != nil {
+		log.Println(err)
+		log.Println(juicemud.StackTrace(err))
 	}
 }
 
 func (h *Handler) handleOptions(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Allow", "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, MOVE, PROPFIND, LOCK, UNLOCK")
-	w.Header().Set("DAV", "1, 2")          // WebDAV compliance levels
-	w.Header().Set("MS-Author-Via", "DAV") // Required for macOS compatibility
+	w.Header().Set("DAV", "1, 2")
+	w.Header().Set("MS-Author-Via", "DAV")
 	w.WriteHeader(http.StatusOK)
 }
 
 // handleGet serves files or lists directory contents.
-func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) error {
 	info, err := h.fileSystem.Stat(r.Context(), r.URL.Path)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		http.Error(w, "File not found", http.StatusNotFound)
-		return
+		return nil
+	} else if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return juicemud.WithStack(err)
 	}
 
 	if info.IsDir {
 		files, err := h.fileSystem.List(r.Context(), r.URL.Path)
 		if err != nil {
 			http.Error(w, "Failed to list directory", http.StatusInternalServerError)
-			return
+			return juicemud.WithStack(err)
 		}
 
 		w.Header().Set("Content-Type", "text/html")
-
 		writer := bufio.NewWriter(w)
 		writer.WriteString(fmt.Sprintf("<html><head><title>%s</title></head><body>", r.URL.Path))
 		for _, f := range files {
@@ -110,17 +124,17 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		}
 		writer.WriteString("</body></html>")
 		writer.Flush()
+
 	} else {
 		if info.Size == 0 {
 			w.WriteHeader(http.StatusOK)
-			return
+			return nil
 		}
 
-		// Predict content type based on file suffix
 		ext := path.Ext(info.Name)
 		contentType := mime.TypeByExtension(ext)
 		if contentType == "" {
-			contentType = "application/octet-stream" // Default for unknown types
+			contentType = "application/octet-stream"
 		}
 
 		w.Header().Set("Content-Type", contentType)
@@ -131,19 +145,21 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 			file, err := h.fileSystem.Read(r.Context(), r.URL.Path)
 			if err != nil {
 				http.Error(w, "File not found", http.StatusNotFound)
-				return
+				return juicemud.WithStack(err)
 			}
 			defer file.Close()
 
 			_, err = io.Copy(w, file)
 			if err != nil {
 				http.Error(w, "Failed to read file", http.StatusInternalServerError)
+				return juicemud.WithStack(err)
 			}
 		}
 	}
+	return nil
 }
 
-func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) error {
 	h.lockMutex.Lock()
 	lock := h.locks[r.URL.Path]
 	h.lockMutex.Unlock()
@@ -153,55 +169,74 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("If")
 		if token == "" || !strings.Contains(token, lock.Token) {
 			http.Error(w, "Resource is locked", http.StatusLocked)
-			return
+			return errors.New("resource is locked")
 		}
 	}
 
 	file, err := h.fileSystem.Write(r.Context(), r.URL.Path)
 	if err != nil {
 		http.Error(w, "Failed to create file", http.StatusInternalServerError)
-		return
+		return juicemud.WithStack(err)
 	}
 	defer file.Close()
 
 	_, err = io.Copy(file, r.Body)
 	if err != nil {
 		http.Error(w, "Failed to write file", http.StatusInternalServerError)
+		return juicemud.WithStack(err)
 	}
 
 	w.WriteHeader(http.StatusCreated)
+	return nil
 }
 
-func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) error {
 	err := h.fileSystem.Remove(r.Context(), r.URL.Path)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return nil
+	} else if err != nil {
 		http.Error(w, "Failed to delete file", http.StatusInternalServerError)
+		return juicemud.WithStack(err)
 	}
+	return nil
 }
 
-func (h *Handler) handleMkcol(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleMkcol(w http.ResponseWriter, r *http.Request) error {
 	err := h.fileSystem.Mkdir(r.Context(), r.URL.Path)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
+		http.Error(w, "Parent not found", http.StatusNotFound)
+		return nil
+	} else if err != nil {
 		http.Error(w, "Failed to create directory", http.StatusInternalServerError)
+		return juicemud.WithStack(err)
 	}
+	return nil
 }
 
-func (h *Handler) handleMove(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleMove(w http.ResponseWriter, r *http.Request) error {
 	destination := r.Header.Get("Destination")
 	if destination == "" {
 		http.Error(w, "Destination header missing", http.StatusBadRequest)
-		return
+		return errors.New("destination header missing")
 	}
 
 	destURL, err := url.Parse(destination)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to parse destination %q: %v", destination, err), http.StatusBadRequest)
-		return
+		return juicemud.WithStack(err)
 	}
+
 	err = h.fileSystem.Rename(r.Context(), r.URL.Path, destURL)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
+		http.Error(w, "File or destination directory not found", http.StatusNotFound)
+		return nil
+	} else if err != nil {
 		http.Error(w, "Failed to move file", http.StatusInternalServerError)
+		return juicemud.WithStack(err)
 	}
+
+	return nil
 }
 
 type multistatus struct {
@@ -231,43 +266,41 @@ type resourceType struct {
 	Collection *struct{} `xml:"D:collection,omitempty"`
 }
 
-func (h *Handler) handlePropfind(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handlePropfind(w http.ResponseWriter, r *http.Request) error {
 	depth := r.Header.Get("Depth")
 	if depth == "" {
-		depth = "1" // Default to Depth: 1
+		depth = "1"
 	}
 
-	ctx := r.Context() // Pass context to FileSystem methods
+	ctx := r.Context()
 	info, err := h.fileSystem.Stat(ctx, r.URL.Path)
-	if err != nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return nil
+	} else if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return juicemud.WithStack(err)
 	}
 
-	// Prepare responses
 	var responses []davResponse
-
-	// Add the root directory itself
 	responses = append(responses, createDavResponse(r.URL.Path, info))
 
-	// Add children if Depth > 0 and the root is a directory
 	if depth != "0" && info.IsDir {
 		children, err := h.fileSystem.List(ctx, r.URL.Path)
 		if err != nil {
 			http.Error(w, "Failed to list directory", http.StatusInternalServerError)
-			return
+			return juicemud.WithStack(err)
 		}
 
 		for _, child := range children {
 			childPath := path.Join(r.URL.Path, child.Name)
 			if child.IsDir {
-				childPath += "/" // Ensure trailing slash for directories
+				childPath += "/"
 			}
 			responses = append(responses, createDavResponse(childPath, child))
 		}
 	}
 
-	// Prepare and send the multistatus response
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.WriteHeader(http.StatusMultiStatus)
 
@@ -276,37 +309,33 @@ func (h *Handler) handlePropfind(w http.ResponseWriter, r *http.Request) {
 		Responses: responses,
 	}
 
-	// Encode response to XML
 	encoder := xml.NewEncoder(w)
 	encoder.Indent("", "  ")
 	if err := encoder.Encode(multiStatus); err != nil {
 		http.Error(w, "Failed to encode XML", http.StatusInternalServerError)
+		return juicemud.WithStack(err)
 	}
+
+	return nil
 }
 
-// Helper function to create a davResponse
+// createDavResponse is a helper function to build a WebDAV response entry.
 func createDavResponse(href string, info *FileInfo) davResponse {
 	if info.IsDir && !strings.HasSuffix(href, "/") {
 		href = href + "/"
 	}
 
-	// Set display name
 	displayName := info.Name
 	if displayName == "" && info.IsDir {
-		displayName = "/" // Use "/" as the display name for the root
+		displayName = "/"
 	}
 
-	// Set resource type
 	resourceType := resourceType{}
 	if info.IsDir {
 		resourceType.Collection = &struct{}{}
 	}
 
-	// Handle zero or invalid ModTime
 	modifiedTime := info.ModTime.UTC().Format(http.TimeFormat)
-	if info.ModTime.IsZero() {
-		modifiedTime = "Mon, 02 Jan 2023 15:04:05 GMT" // Fallback
-	}
 
 	prop := prop{
 		DisplayName:      displayName,
@@ -325,6 +354,8 @@ func createDavResponse(href string, info *FileInfo) davResponse {
 		Propstat: []propstat{propStat},
 	}
 }
+
+// Lock and related types for handling LOCK/UNLOCK requests below.
 
 // lockDiscovery represents the WebDAV lock discovery response.
 type lockDiscovery struct {
@@ -377,38 +408,33 @@ func parseTimeout(timeoutHeader string) time.Duration {
 			return time.Duration(seconds) * time.Second
 		}
 	}
-	return 10 * time.Minute // Default timeout
+	return 10 * time.Minute
 }
 
-// Updated handleLock function.
-func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) error {
 	h.lockMutex.Lock()
 	defer h.lockMutex.Unlock()
 
-	// Extract the requested path and lock duration (default to 10 minutes)
 	path := r.URL.Path
 	duration := 10 * time.Minute
 	if timeoutHeader := r.Header.Get("Timeout"); timeoutHeader != "" {
 		duration = parseTimeout(timeoutHeader)
 	}
 
-	// Generate or reuse lock token
 	lockTk := "opaquelocktoken:" + generateToken()
 
-	// Create or refresh the lock
 	lock := h.locks[path]
 	if lock == nil {
 		lock = &Lock{
 			Token:     lockTk,
-			Owner:     "anonymous", // In a real system, use user info
+			Owner:     "anonymous",
 			ExpiresAt: time.Now().Add(duration),
 		}
 		h.locks[path] = lock
 	} else {
-		lock.ExpiresAt = time.Now().Add(duration) // Refresh existing lock
+		lock.ExpiresAt = time.Now().Add(duration)
 	}
 
-	// Prepare the lock discovery response
 	lockResponse := lockDiscovery{
 		LockActive: activeLock{
 			LockType:  lockType{Write: ""},
@@ -420,7 +446,6 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Send the response
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 
@@ -428,11 +453,13 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 	encoder.Indent("", "  ")
 	if err := encoder.Encode(lockResponse); err != nil {
 		http.Error(w, "Failed to encode XML", http.StatusInternalServerError)
-		return
+		return juicemud.WithStack(err)
 	}
+
+	return nil
 }
 
-func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) error {
 	h.lockMutex.Lock()
 	defer h.lockMutex.Unlock()
 
@@ -443,10 +470,10 @@ func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
 	lock := h.locks[path]
 	if lock == nil || lock.Token != token {
 		http.Error(w, "Lock not found or token mismatch", http.StatusConflict)
-		return
+		return errors.New("lock not found or token mismatch")
 	}
 
-	// Remove the lock
 	delete(h.locks, path)
 	w.WriteHeader(http.StatusNoContent)
+	return nil
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"log"
@@ -24,10 +23,9 @@ import (
 )
 
 type responseWriter struct {
-	backend      http.ResponseWriter
-	status       int
-	size         int
-	errorContent bytes.Buffer
+	backend http.ResponseWriter
+	status  int
+	size    int
 }
 
 func (r *responseWriter) Header() http.Header {
@@ -37,8 +35,6 @@ func (r *responseWriter) Header() http.Header {
 func (r *responseWriter) Write(b []byte) (int, error) {
 	if r.status == 0 {
 		r.WriteHeader(http.StatusOK)
-	} else if r.status >= 300 {
-		r.errorContent.Write(b)
 	}
 	written, err := r.backend.Write(b)
 	r.size += written
@@ -127,9 +123,6 @@ func main() {
 		auth.ServeHTTP(ww, r)
 		lapsed := time.Since(t)
 		log.Printf("%s\t%s\t%s\t%v\t%vb in\t%vb out\t%s", r.RemoteAddr, r.Method, r.URL, ww.status, r.ContentLength, ww.size, lapsed)
-		if ww.status >= 300 {
-			log.Printf("\t%s", ww.errorContent.String())
-		}
 	})
 
 	httpsServer := &http.Server{

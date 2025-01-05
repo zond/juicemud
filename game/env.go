@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gliderlabs/ssh"
@@ -28,8 +29,9 @@ const (
 )
 
 var (
-	envByObjectID      = map[string]*Env{}
-	envByObjectIDMutex = sync.RWMutex{}
+	envByObjectID     = juicemud.NewSyncMap[string, *Env]()
+	consoleByObjectID = juicemud.NewSyncMap[string, io.Writer]()
+	jsContextLocks    = juicemud.NewLockMap[string]()
 )
 
 type Env struct {
@@ -77,49 +79,40 @@ func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
 	}
 }
 
-func getObjectEnv(id []byte) (*Env, bool) {
-	envByObjectIDMutex.RLock()
-	defer envByObjectIDMutex.RUnlock()
-	e, found := envByObjectID[string(id)]
-	return e, found
-}
+func (e *Env) withJSContext(ctx context.Context, id []byte, f func(jctx *js.Context) error) error {
+	jsContextLocks.Lock(string(id))
+	defer jsContextLocks.Unlock(string(id))
 
-func (e *Env) getJSContext(ctx context.Context, id []byte) (*js.Context, error) {
 	object, err := e.game.storage.GetObject(ctx, id)
 	if err != nil {
-		return nil, juicemud.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	sourcePath, err := object.Source()
 	if err != nil {
-		return nil, juicemud.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	state, err := object.State()
 	if err != nil {
-		return nil, juicemud.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	source, err := e.game.storage.GetSource(ctx, sourcePath)
 	if err != nil {
-		return nil, juicemud.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	result, err := js.NewContext(state)
 	if err != nil {
-		return nil, juicemud.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	if err := result.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
-		return nil, juicemud.WithStack(err)
+		return juicemud.WithStack(err)
 	}
-	return result, nil
+	return f(result)
 }
 
 func (e *Env) notify(ctx context.Context, id []byte, eventType string, message string) error {
-	jsContext, err := e.getJSContext(ctx, id)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	if err := jsContext.Notify(ctx, eventType, message); err != nil {
-		return juicemud.WithStack(err)
-	}
-	return nil
+	return e.withJSContext(ctx, id, func(jctx *js.Context) error {
+		return jctx.Notify(ctx, eventType, message)
+	})
 }
 
 func (e *Env) Process() error {
@@ -174,7 +167,7 @@ func (e *Env) loginUser() error {
 		if username == "abort" {
 			return juicemud.WithStack(OperationAborted)
 		}
-		if user, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, storage.NotFoundErr) {
+		if user, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintln(e.term, "Username not found!")
 		} else if err != nil {
 			return juicemud.WithStack(err)
@@ -209,7 +202,7 @@ func (e *Env) createUser() error {
 		if username == "abort" {
 			return juicemud.WithStack(OperationAborted)
 		}
-		if _, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, storage.NotFoundErr) {
+		if _, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
 			user = &storage.User{
 				Name: username,
 			}

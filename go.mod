@@ -6,6 +6,7 @@ require (
 	capnproto.org/go/capnp/v3 v3.0.1-alpha.2
 	github.com/estraier/tkrzw-go v0.0.0-20240603165139-89707b45d5ab
 	github.com/gliderlabs/ssh v0.3.8
+	github.com/hashicorp/golang-lru/arc/v2 v2.0.7
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/pkg/errors v0.9.1
 	github.com/zond/sqly v0.0.0-20250105135345-c2b1b869f7c1
