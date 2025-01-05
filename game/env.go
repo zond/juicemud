@@ -23,6 +23,10 @@ var (
 	OperationAborted = errors.New("operation aborted")
 )
 
+const (
+	connectedEventType = "connected"
+)
+
 var (
 	envByObjectID      = map[string]*Env{}
 	envByObjectIDMutex = sync.RWMutex{}
@@ -97,19 +101,25 @@ func (e *Env) getJSContext(ctx context.Context, id []byte) (*js.Context, error) 
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	result := &js.Context{
-		State: state,
+	result, err := js.NewContext(state)
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
 	if err := result.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
 		return nil, errors.WithStack(err)
 	}
+	return result, nil
 }
 
-func (e *Env) notify(ctx context.Context, id []byte, eventType string, message map[string]any) error {
-	script, err := e.getScript(ctx, id)
+func (e *Env) notify(ctx context.Context, id []byte, eventType string, message string) error {
+	jsContext, err := e.getJSContext(ctx, id)
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	if err := jsContext.Notify(ctx, eventType, message); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (e *Env) Process() error {
@@ -145,6 +155,9 @@ func (e *Env) Connect() error {
 		if !errors.Is(err, OperationAborted) {
 			fmt.Fprintln(e.term, err)
 		}
+	}
+	if err := e.notify(e.sess.Context(), e.user.Object, connectedEventType, ""); err != nil {
+		return errors.WithStack(err)
 	}
 	return e.Process()
 }

@@ -32,13 +32,21 @@ func (c *Context) Subscriptions() []string {
 }
 
 func (c *Context) Notify(ctx context.Context, eventType string, content string) error {
-	val, err := v8go.JSONParse(c.v8Context, content)
-	if err != nil {
-		return errors.WithStack(err)
+	var val *v8go.Value
+	if content != "" {
+		var err error
+		if val, err = v8go.JSONParse(c.v8Context, content); err != nil {
+			return errors.WithStack(err)
+		}
 	}
 	for _, callback := range c.subscriptions[eventType] {
 		if err := c.withTimeout(ctx, func() error {
-			_, err := callback.Call(c.v8Context.Global(), val)
+			var err error
+			if val != nil {
+				_, err = callback.Call(c.v8Context.Global(), val)
+			} else {
+				_, err = callback.Call(c.v8Context.Global())
+			}
 			return err
 		}, 200*time.Millisecond); err != nil {
 			return errors.WithStack(err)

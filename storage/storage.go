@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"log"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -61,7 +60,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if o.err != nil {
 		return nil, o.err
 	}
-	for _, prototype := range []any{File{}, Group{}, User{}, GroupMember{}} {
+	for _, prototype := range []any{File{}, FileSync{}, Group{}, User{}, GroupMember{}} {
 		if err := sql.CreateTableIfNotExists(ctx, prototype); err != nil {
 			return nil, err
 		}
@@ -100,11 +99,23 @@ func (s *Storage) GetSource(ctx context.Context, path string) ([]byte, error) {
 	return value, nil
 }
 
-func (s *Storage) DelSource(ctx context.Context, path string) error {
-	if stat := s.sources.Remove([]byte(path)); !stat.IsOK() && stat.GetCode() != tkrzw.StatusNotFoundError {
-		return errors.WithStack(stat)
+func (s *Storage) SetSource(ctx context.Context, path string, content []byte) error {
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
+		file, err := getFile(ctx, tx, path)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if err := s.logSync(ctx, tx, &FileSync{
+			Set:          file.Path,
+			SetToContent: content,
+		}); err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	}); err != nil {
+		return errors.WithStack(err)
 	}
-	return nil
+	return s.fileSync(ctx)
 }
 
 func (s *Storage) GetObject(ctx context.Context, id []byte) (*Object, error) {
@@ -164,6 +175,75 @@ func (s *Storage) SetObject(ctx context.Context, object *Object) error {
 	return nil
 }
 
+type FileSync struct {
+	Id           int64 `sqly:"pkey"`
+	Remove       string
+	Set          string
+	SetToRemoved bool
+	SetToContent []byte
+}
+
+func (s *Storage) logSync(ctx context.Context, db sqlx.ExtContext, fileSync *FileSync) error {
+	if fileSync.Remove == "" && fileSync.Set == "" {
+		return errors.Errorf("invalid FileSync %+v: Remove == \"\" and Set == \"\"", fileSync)
+	}
+	if fileSync.Set != "" && fileSync.SetToRemoved && len(fileSync.SetToContent) > 0 {
+		return errors.Errorf("invalid FileSync %+v: Set != \"\", SetToRemoved, and non-empty SetToContent", fileSync)
+	}
+	count := int64(-1)
+	if err := sqlx.GetContext(ctx, db, &count, "SELECT COUNT(*) FROM FileSync"); err != nil {
+		return errors.WithStack(err)
+	}
+	if count < 0 {
+		return errors.Errorf("invalid FileSync count %v", count)
+	}
+	fileSync.Id = count
+	return sqly.Upsert(ctx, db, fileSync, false)
+}
+
+func (s *Storage) fileSync(ctx context.Context) error {
+	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+		fileSyncs := []FileSync{}
+		if err := tx.SelectContext(ctx, &fileSyncs, "SELECT * FROM FileSync ORDER BY Id ASC"); err != nil {
+			return errors.WithStack(err)
+		}
+		for _, fileSync := range fileSyncs {
+			pairs := []tkrzw.KeyProcPair{}
+			removed := []byte{}
+			if fileSync.Remove != "" {
+				pairs = append(pairs, tkrzw.KeyProcPair{
+					Key: []byte(fileSync.Remove),
+					Proc: func(key []byte, value []byte) any {
+						removed = value
+						return tkrzw.RemoveBytes
+					},
+				})
+			}
+			if fileSync.Set != "" {
+				pairs = append(pairs, tkrzw.KeyProcPair{
+					Key: []byte(fileSync.Set),
+					Proc: func(key []byte, value []byte) any {
+						if fileSync.SetToRemoved {
+							return removed
+						} else {
+							return []byte(fileSync.SetToContent)
+						}
+					},
+				})
+			}
+			if len(pairs) > 0 {
+				if stat := s.sources.ProcessMulti(pairs, true); !stat.IsOK() {
+					return errors.WithStack(stat)
+				}
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM FileSync WHERE Id = ?", fileSync.Id); err != nil {
+				return errors.WithStack(err)
+			}
+		}
+		return nil
+	})
+}
+
 type File struct {
 	Id         int64 `sqly:"pkey"`
 	Parent     int64 `sqly:"uniqueWith(Name)"`
@@ -207,8 +287,8 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, err 
 }
 
 func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
-		oldFile, err := getFile(ctx, tx, oldPath)
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
+		toMove, err := getFile(ctx, tx, oldPath)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -218,29 +298,32 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 				Dir: true,
 			}
 		} else {
-			log.Printf("newparentpath %q", newParentPath)
 			newParent, err = getFile(ctx, tx, filepath.Dir(newPath))
 			if err != nil {
 				return errors.WithStack(err)
 			}
 		}
-		newFile, err := getFile(ctx, tx, newPath)
-		if err != nil && !errors.Is(err, NotFoundErr) {
+		if err := delFileIfExistsCheckEmpty(ctx, tx, newPath); err != nil {
 			return errors.WithStack(err)
 		}
-		if newFile != nil {
-			if err := delFile(ctx, tx, newFile); err != nil {
-				return errors.WithStack(err)
-			}
+		toMove.Parent = newParent.Id
+		toMove.Path = newPath
+		toMove.Name = filepath.Base(newPath)
+		if err := tx.Upsert(ctx, toMove, true); err != nil {
+			return errors.WithStack(err)
 		}
-		oldFile.Parent = newParent.Id
-		oldFile.Path = newPath
-		oldFile.Name = filepath.Base(newPath)
-		if err := tx.Upsert(ctx, oldFile, true); err != nil {
+		if err := s.logSync(ctx, tx, &FileSync{
+			Remove:       oldPath,
+			Set:          newPath,
+			SetToRemoved: true,
+		}); err != nil {
 			return errors.WithStack(err)
 		}
 		return nil
-	})
+	}); err != nil {
+		return errors.WithStack(err)
+	}
+	return s.fileSync(ctx)
 }
 
 func getChildren(ctx context.Context, db sqlx.QueryerContext, parent int64) ([]File, error) {
@@ -273,13 +356,17 @@ func (s *Storage) GetFile(ctx context.Context, path string) (*File, error) {
 	return getFile(ctx, s.sql, path)
 }
 
-func delFile(ctx context.Context, db sqlx.ExtContext, file *File) error {
+func delFileIfExistsCheckEmpty(ctx context.Context, db sqlx.ExtContext, path string) error {
+	file, err := getFile(ctx, db, path)
+	if errors.Is(err, NotFoundErr) {
+		return nil
+	}
 	children, err := getChildren(ctx, db, file.Id)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	if len(children) > 0 {
-		return errors.Errorf("%q contains files", file.Name)
+		return errors.Errorf("%q contains files", file.Path)
 	}
 	if _, err := db.ExecContext(ctx, "DELETE FROM File WHERE Id = ?", file.Id); err != nil {
 		return errors.WithStack(err)
@@ -287,10 +374,21 @@ func delFile(ctx context.Context, db sqlx.ExtContext, file *File) error {
 	return nil
 }
 
-func (s *Storage) DelFile(ctx context.Context, file *File) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
-		return delFile(ctx, tx, file)
-	})
+func (s *Storage) DelFile(ctx context.Context, path string) error {
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
+		if err := delFileIfExistsCheckEmpty(ctx, tx, path); err != nil {
+			return errors.WithStack(err)
+		}
+		if err := s.logSync(ctx, tx, &FileSync{
+			Remove: path,
+		}); err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	}); err != nil {
+		return errors.WithStack(err)
+	}
+	return s.fileSync(ctx)
 }
 
 func (s *Storage) CreateDir(ctx context.Context, path string) error {

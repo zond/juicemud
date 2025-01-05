@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"net/url"
-	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
@@ -18,11 +17,7 @@ type Fs struct {
 }
 
 func (f *Fs) Read(ctx context.Context, path string) (io.ReadCloser, error) {
-	file, err := f.Storage.GetFile(ctx, path)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	content, err := f.Storage.GetSource(ctx, file.Id)
+	content, err := f.Storage.GetSource(ctx, path)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -32,7 +27,7 @@ func (f *Fs) Read(ctx context.Context, path string) (io.ReadCloser, error) {
 type writeBuffer struct {
 	bytes.Buffer
 	ctx context.Context
-	id  int64
+	f   *storage.File
 	s   *storage.Storage
 }
 
@@ -42,7 +37,7 @@ func (w *writeBuffer) Write(b []byte) (int, error) {
 }
 
 func (w *writeBuffer) Close() error {
-	if err := w.s.SetSource(w.ctx, w.id, w.Bytes()); err != nil {
+	if err := w.s.SetSource(w.ctx, w.f.Path, w.Bytes()); err != nil {
 		return errors.WithStack(err)
 	}
 	return nil
@@ -56,12 +51,12 @@ func (f *Fs) Write(ctx context.Context, path string) (io.WriteCloser, error) {
 	return &writeBuffer{
 		Buffer: bytes.Buffer{},
 		ctx:    ctx,
-		id:     file.Id,
+		f:      file,
 		s:      f.Storage,
 	}, nil
 }
 
-func (f *Fs) stat(ctx context.Context, file *storage.File, path string) (*dav.FileInfo, error) {
+func (f *Fs) stat(ctx context.Context, file *storage.File) (*dav.FileInfo, error) {
 	if file.Id == 0 {
 		return &dav.FileInfo{
 			Name:    "/",
@@ -71,12 +66,12 @@ func (f *Fs) stat(ctx context.Context, file *storage.File, path string) (*dav.Fi
 			IsDir:   true,
 		}, nil
 	}
-	content, err := f.Storage.GetSource(ctx, file.Id)
+	content, err := f.Storage.GetSource(ctx, file.Path)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	return &dav.FileInfo{
-		Name:    path,
+		Name:    file.Path,
 		Size:    int64(len(content)),
 		Mode:    0777,
 		ModTime: file.ModTime.Time(),
@@ -89,20 +84,11 @@ func (f *Fs) Stat(ctx context.Context, path string) (*dav.FileInfo, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	return f.stat(ctx, file, path)
+	return f.stat(ctx, file)
 }
 
 func (f *Fs) Remove(ctx context.Context, path string) error {
-	file, err := f.Storage.GetFile(ctx, path)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	if !file.Dir {
-		if err := f.Storage.DelSource(ctx, file.Id); err != nil {
-			return errors.WithStack(err)
-		}
-	}
-	return f.Storage.DelFile(ctx, file)
+	return f.Storage.DelFile(ctx, path)
 }
 
 func (f *Fs) Mkdir(ctx context.Context, path string) error {
@@ -120,7 +106,7 @@ func (f *Fs) List(ctx context.Context, path string) ([]*dav.FileInfo, error) {
 	}
 	result := make([]*dav.FileInfo, len(children))
 	for index, child := range children {
-		if result[index], err = f.stat(ctx, &child, filepath.Join(path, child.Name)); err != nil {
+		if result[index], err = f.stat(ctx, &child); err != nil {
 			return nil, errors.WithStack(err)
 		}
 	}
