@@ -8,7 +8,7 @@ require (
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/pkg/errors v0.9.1
-	github.com/zond/sqly v0.0.0-20250104155426-734859b0bd7f
+	github.com/zond/sqly v0.0.0-20250105135345-c2b1b869f7c1
 	golang.org/x/crypto v0.31.0
 	golang.org/x/term v0.27.0
 	modernc.org/sqlite v1.34.4

@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/dav"
 	"github.com/zond/juicemud/storage"
 )
@@ -19,7 +19,7 @@ type Fs struct {
 func (f *Fs) Read(ctx context.Context, path string) (io.ReadCloser, error) {
 	content, err := f.Storage.GetSource(ctx, path)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	return io.NopCloser(bytes.NewBuffer(content)), nil
 }
@@ -38,7 +38,7 @@ func (w *writeBuffer) Write(b []byte) (int, error) {
 
 func (w *writeBuffer) Close() error {
 	if err := w.s.SetSource(w.ctx, w.f.Path, w.Bytes()); err != nil {
-		return errors.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	return nil
 }
@@ -46,7 +46,7 @@ func (w *writeBuffer) Close() error {
 func (f *Fs) Write(ctx context.Context, path string) (io.WriteCloser, error) {
 	file, err := f.Storage.EnsureFile(ctx, path)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	return &writeBuffer{
 		Buffer: bytes.Buffer{},
@@ -68,7 +68,7 @@ func (f *Fs) stat(ctx context.Context, file *storage.File) (*dav.FileInfo, error
 	}
 	content, err := f.Storage.GetSource(ctx, file.Path)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	return &dav.FileInfo{
 		Name:    file.Path,
@@ -82,7 +82,7 @@ func (f *Fs) stat(ctx context.Context, file *storage.File) (*dav.FileInfo, error
 func (f *Fs) Stat(ctx context.Context, path string) (*dav.FileInfo, error) {
 	file, err := f.Storage.GetFile(ctx, path)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	return f.stat(ctx, file)
 }
@@ -98,16 +98,16 @@ func (f *Fs) Mkdir(ctx context.Context, path string) error {
 func (f *Fs) List(ctx context.Context, path string) ([]*dav.FileInfo, error) {
 	file, err := f.Storage.GetFile(ctx, path)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	children, err := f.Storage.GetChildren(ctx, file.Id)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	result := make([]*dav.FileInfo, len(children))
 	for index, child := range children {
 		if result[index], err = f.stat(ctx, &child); err != nil {
-			return nil, errors.WithStack(err)
+			return nil, juicemud.WithStack(err)
 		}
 	}
 	return result, nil

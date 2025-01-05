@@ -50,11 +50,11 @@ func (e *Env) SelectExec(options map[string]func() error) error {
 		fmt.Fprint(e.term, prompt)
 		line, err := e.term.ReadLine()
 		if err != nil {
-			return errors.WithStack(err)
+			return juicemud.WithStack(err)
 		}
 		if cmd, found := options[line]; found {
 			if err := cmd(); err != nil {
-				return errors.WithStack(err)
+				return juicemud.WithStack(err)
 			}
 			break
 		}
@@ -67,7 +67,7 @@ func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
 		fmt.Fprintf(e.term, "%s [%s]\n", prompt, strings.Join(options, "/"))
 		line, err := e.term.ReadLine()
 		if err != nil {
-			return "", errors.WithStack(err)
+			return "", juicemud.WithStack(err)
 		}
 		for _, option := range options {
 			if strings.EqualFold(line, option) {
@@ -87,26 +87,26 @@ func getObjectEnv(id []byte) (*Env, bool) {
 func (e *Env) getJSContext(ctx context.Context, id []byte) (*js.Context, error) {
 	object, err := e.game.storage.GetObject(ctx, id)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	sourcePath, err := object.Source()
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	state, err := object.State()
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	source, err := e.game.storage.GetSource(ctx, sourcePath)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	result, err := js.NewContext(state)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	if err := result.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
-		return nil, errors.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 	return result, nil
 }
@@ -114,10 +114,10 @@ func (e *Env) getJSContext(ctx context.Context, id []byte) (*js.Context, error) 
 func (e *Env) notify(ctx context.Context, id []byte, eventType string, message string) error {
 	jsContext, err := e.getJSContext(ctx, id)
 	if err != nil {
-		return errors.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	if err := jsContext.Notify(ctx, eventType, message); err != nil {
-		return err
+		return juicemud.WithStack(err)
 	}
 	return nil
 }
@@ -137,7 +137,7 @@ func (e *Env) Process() error {
 	for {
 		line, err := e.term.ReadLine()
 		if err != nil {
-			return errors.WithStack(err)
+			return juicemud.WithStack(err)
 		}
 		fmt.Fprintf(e.term, "%s\n\n", line)
 	}
@@ -157,7 +157,7 @@ func (e *Env) Connect() error {
 		}
 	}
 	if err := e.notify(e.sess.Context(), e.user.Object, connectedEventType, ""); err != nil {
-		return errors.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	return e.Process()
 }
@@ -172,12 +172,12 @@ func (e *Env) loginUser() error {
 			return err
 		}
 		if username == "abort" {
-			return errors.WithStack(OperationAborted)
+			return juicemud.WithStack(OperationAborted)
 		}
 		if user, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, storage.NotFoundErr) {
 			fmt.Fprintln(e.term, "Username not found!")
 		} else if err != nil {
-			return errors.WithStack(err)
+			return juicemud.WithStack(err)
 		}
 	}
 	for e.user == nil {
@@ -207,7 +207,7 @@ func (e *Env) createUser() error {
 			return err
 		}
 		if username == "abort" {
-			return errors.WithStack(OperationAborted)
+			return juicemud.WithStack(OperationAborted)
 		}
 		if _, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, storage.NotFoundErr) {
 			user = &storage.User{
@@ -216,7 +216,7 @@ func (e *Env) createUser() error {
 		} else if err == nil {
 			fmt.Fprintln(e.term, "Username already exists!")
 		} else {
-			return errors.WithStack(err)
+			return juicemud.WithStack(err)
 		}
 	}
 	for e.user == nil {
@@ -236,7 +236,7 @@ func (e *Env) createUser() error {
 				return err
 			}
 			if selection == "abort" {
-				return errors.WithStack(OperationAborted)
+				return juicemud.WithStack(OperationAborted)
 			} else if selection == "y" {
 				user.PasswordHash = digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
 				e.user = user
@@ -247,15 +247,15 @@ func (e *Env) createUser() error {
 	}
 	object, err := e.game.storage.CreateObject(e.sess.Context())
 	if err != nil {
-		return errors.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	objectID, err := object.Id()
 	if err != nil {
-		return errors.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	e.user.Object = objectID
 	if err := e.game.storage.SetUser(e.sess.Context(), e.user, false); err != nil {
-		return errors.WithStack(err)
+		return juicemud.WithStack(err)
 	}
 	fmt.Fprintf(e.term, "Welcome, %v!\n", e.user.Name)
 	return nil

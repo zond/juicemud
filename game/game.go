@@ -6,8 +6,10 @@ import (
 	"log"
 
 	"github.com/gliderlabs/ssh"
+	"github.com/pkg/errors"
+	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/storage"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 type Game struct {
@@ -23,14 +25,15 @@ func New(s *storage.Storage) *Game {
 func (g *Game) HandleSession(sess ssh.Session) {
 	env := &Env{
 		game: g,
-		term: terminal.NewTerminal(sess, "> "),
+		term: term.NewTerminal(sess, "> "),
 		sess: sess,
 	}
 	if err := env.Connect(); err != nil {
-		if err != io.EOF {
+		if !errors.Is(err, io.EOF) {
 			msg := fmt.Sprintf("InternalServerError: %v", err)
-			fmt.Fprintf(env.term, msg)
+			fmt.Fprintln(env.term, msg)
 			log.Print(msg)
+			log.Print(juicemud.StackTrace(err))
 		}
 	}
 }

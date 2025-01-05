@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/estraier/tkrzw-go"
-	"github.com/pkg/errors"
+	"github.com/zond/juicemud"
 )
 
 type opener struct {
@@ -24,7 +24,7 @@ func (o *opener) openHash(name string) *tkrzw.DBM {
 		"restore_mode":     "RESTORE_SYNC|RESTORE_NO_SHORTCUTS|RESTORE_WITH_HARDSYNC",
 	})
 	if !stat.IsOK() {
-		o.err = errors.WithStack(stat)
+		o.err = juicemud.WithStack(stat)
 	}
 	return dbm
 }
@@ -40,7 +40,7 @@ func (o *opener) openTree(name string) *tkrzw.DBM {
 		"key_comparator":   "LexicalKeyComparator",
 	})
 	if !stat.IsOK() {
-		o.err = errors.WithStack(stat)
+		o.err = juicemud.WithStack(stat)
 	}
 	return dbm
 }
