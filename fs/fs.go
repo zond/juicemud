@@ -66,6 +66,7 @@ func (f *Fs) stat(ctx context.Context, file *storage.File) (*dav.FileInfo, error
 			IsDir:   true,
 		}, nil
 	}
+
 	content, err := f.Storage.GetSource(ctx, file.Path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)

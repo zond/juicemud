@@ -33,8 +33,8 @@ func (c *Context) Subscriptions() []string {
 }
 
 func (c *Context) Notify(ctx context.Context, eventType string, content string) error {
-	if err := c.setup(); err != nil {
-		return juicemud.WithStack(err)
+	if len(c.subscriptions) == 0 {
+		return nil
 	}
 
 	var val *v8go.Value
@@ -44,6 +44,7 @@ func (c *Context) Notify(ctx context.Context, eventType string, content string) 
 			return juicemud.WithStack(err)
 		}
 	}
+
 	for _, callback := range c.subscriptions[eventType] {
 		if err := c.withTimeout(ctx, func() error {
 			var err error
