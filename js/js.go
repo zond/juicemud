@@ -178,6 +178,10 @@ func (c *Context) withTimeout(_ context.Context, f func() error, timeout time.Du
 }
 
 func (c *Context) Run(ctx context.Context, source string, origin string, timeout time.Duration) error {
+	if err := c.setup(); err != nil {
+		return juicemud.WithStack(err)
+	}
+
 	defer c.collectState()
 
 	return c.withTimeout(ctx, func() error {

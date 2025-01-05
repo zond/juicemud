@@ -3,9 +3,10 @@ package game
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -29,10 +30,45 @@ const (
 )
 
 var (
-	envByObjectID     = juicemud.NewSyncMap[string, *Env]()
-	consoleByObjectID = juicemud.NewSyncMap[string, io.Writer]()
-	jsContextLocks    = juicemud.NewLockMap[string]()
+	envByObjectID      = juicemud.NewSyncMap[string, *Env]()
+	consolesByObjectID = juicemud.NewSyncMap[string, *terminals]()
+	jsContextLocks     = juicemud.NewLockMap[string]()
 )
+
+type errs []error
+
+func (e errs) Error() string {
+	return fmt.Sprintf("%+v", []error(e))
+}
+
+type terminals map[*term.Terminal]bool
+
+func (terms terminals) push(t *term.Terminal) {
+	terms[t] = true
+}
+
+func (terms terminals) drop(t *term.Terminal) {
+	delete(terms, t)
+}
+
+func (terms terminals) Write(b []byte) (int, error) {
+	errs := errs{}
+	max := 0
+	for t := range terms {
+		if written, err := t.Write(b); err != nil {
+			delete(terms, t)
+			errs = append(errs, err)
+		} else {
+			if written > max {
+				max = written
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return max, juicemud.WithStack(errs)
+	}
+	return max, nil
+}
 
 type Env struct {
 	game *Game
@@ -101,7 +137,7 @@ func (e *Env) withJSContext(ctx context.Context, id []byte, f func(jctx *js.Cont
 	}
 	result := &js.Context{
 		State:   state,
-		Console: consoleByObjectID.Get(string(id)),
+		Console: consolesByObjectID.Get(string(id)),
 	}
 	if err := result.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
 		return juicemud.WithStack(err)
@@ -115,6 +151,49 @@ func (e *Env) notify(ctx context.Context, id []byte, eventType string, message s
 	})
 }
 
+var (
+	commands = map[string]func(e *Env, args []string) error{
+		"debug": func(e *Env, args []string) error {
+			id := string(e.user.Object)
+			if len(args) == 1 {
+				if byteID, err := hex.DecodeString(args[0]); err != nil {
+					return juicemud.WithStack(err)
+				} else {
+					id = string(byteID)
+				}
+			}
+			terms, found := consolesByObjectID.GetHas(id)
+			for ; !found; terms, found = consolesByObjectID.GetHas(id) {
+				terms = &terminals{}
+				consolesByObjectID.Swap(id, nil, terms)
+			}
+			terms.push(e.term)
+			return nil
+		},
+		"undebug": func(e *Env, args []string) error {
+			id := string(e.user.Object)
+			if len(args) == 1 {
+				if byteID, err := hex.DecodeString(args[0]); err != nil {
+					return juicemud.WithStack(err)
+				} else {
+					id = string(byteID)
+				}
+			}
+			terms, found := consolesByObjectID.GetHas(id)
+			for ; !found; terms, found = consolesByObjectID.GetHas(id) {
+				terms = &terminals{}
+				consolesByObjectID.Swap(id, nil, terms)
+			}
+			terms.drop(e.term)
+			return nil
+		},
+	}
+)
+
+var (
+	whitespacePattern = regexp.MustCompile("\\s+")
+)
+
 func (e *Env) Process() error {
 	if e.user == nil {
 		return errors.New("can't process without user")
@@ -126,7 +205,15 @@ func (e *Env) Process() error {
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		fmt.Fprintf(e.term, "%s\n\n", line)
+		words := whitespacePattern.Split(line, -1)
+		if len(words) == 0 {
+			continue
+		}
+		if cmd, found := commands[words[0]]; found {
+			if err := cmd(e, words[1:]); err != nil {
+				fmt.Fprintln(e.term, err)
+			}
+		}
 	}
 }
 
