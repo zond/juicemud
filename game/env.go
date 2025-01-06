@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -29,10 +30,14 @@ const (
 	connectedEventType = "connected"
 )
 
+const (
+	userSource = "/user.js"
+)
+
 var (
-	envByObjectID      = juicemud.NewSyncMap[string, *Env]()
-	consolesByObjectID = juicemud.NewSyncMap[string, *terminals]()
-	jsContextLocks     = juicemud.NewLockMap[string]()
+	envByObjectID     = juicemud.NewSyncMap[string, *Env]()
+	consoleByObjectID = juicemud.NewSyncMap[string, *terminals]()
+	jsContextLocks    = juicemud.NewLockMap[string]()
 )
 
 type errs []error
@@ -51,12 +56,15 @@ func (terms terminals) drop(t *term.Terminal) {
 	delete(terms, t)
 }
 
-func (terms terminals) Write(b []byte) (int, error) {
+func (terms *terminals) Write(b []byte) (int, error) {
+	if terms == nil {
+		return len(b), nil
+	}
 	errs := errs{}
 	max := 0
-	for t := range terms {
+	for t := range *terms {
 		if written, err := t.Write(b); err != nil {
-			delete(terms, t)
+			delete(*terms, t)
 			errs = append(errs, err)
 		} else {
 			if written > max {
@@ -137,8 +145,9 @@ func (e *Env) withJSContext(ctx context.Context, id []byte, f func(jctx *js.Cont
 	}
 	result := &js.Context{
 		State:   state,
-		Console: consolesByObjectID.Get(string(id)),
+		Console: consoleByObjectID.Get(string(id)),
 	}
+	defer result.Close()
 	if err := result.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -162,10 +171,10 @@ var (
 					id = string(byteID)
 				}
 			}
-			terms, found := consolesByObjectID.GetHas(id)
-			for ; !found; terms, found = consolesByObjectID.GetHas(id) {
+			terms, found := consoleByObjectID.GetHas(id)
+			for ; !found; terms, found = consoleByObjectID.GetHas(id) {
 				terms = &terminals{}
-				consolesByObjectID.Swap(id, nil, terms)
+				consoleByObjectID.Swap(id, nil, terms)
 			}
 			terms.push(e.term)
 			return nil
@@ -179,10 +188,10 @@ var (
 					id = string(byteID)
 				}
 			}
-			terms, found := consolesByObjectID.GetHas(id)
-			for ; !found; terms, found = consolesByObjectID.GetHas(id) {
+			terms, found := consoleByObjectID.GetHas(id)
+			for ; !found; terms, found = consoleByObjectID.GetHas(id) {
 				terms = &terminals{}
-				consolesByObjectID.Swap(id, nil, terms)
+				consoleByObjectID.Swap(id, nil, terms)
 			}
 			terms.drop(e.term)
 			return nil
@@ -230,7 +239,15 @@ func (e *Env) Connect() error {
 			fmt.Fprintln(e.term, err)
 		}
 	}
-	if err := e.notify(e.sess.Context(), e.user.Object, connectedEventType, ""); err != nil {
+	b, err := json.Marshal(map[string]any{
+		"remote":   e.sess.RemoteAddr(),
+		"username": e.user.Name,
+		"object":   e.user.Object,
+	})
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := e.notify(e.sess.Context(), e.user.Object, connectedEventType, string(b)); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return e.Process()
@@ -323,6 +340,10 @@ func (e *Env) createUser() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
+	if err := object.SetSource(userSource); err != nil {
+		return juicemud.WithStack(err)
+	}
+
 	objectID, err := object.Id()
 	if err != nil {
 		return juicemud.WithStack(err)
@@ -331,6 +352,11 @@ func (e *Env) createUser() error {
 	if err := e.game.storage.SetUser(e.sess.Context(), e.user, false); err != nil {
 		return juicemud.WithStack(err)
 	}
+
+	if err := e.game.storage.SetObject(e.sess.Context(), object); err != nil {
+		return juicemud.WithStack(err)
+	}
+
 	fmt.Fprintf(e.term, "Welcome, %v!\n", e.user.Name)
 	return nil
 }

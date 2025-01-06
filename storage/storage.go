@@ -148,9 +148,6 @@ func (s *Storage) CreateObject(ctx context.Context) (*Object, error) {
 		return nil, juicemud.WithStack(err)
 	}
 	object.SetId(newID)
-	if err := s.SetObject(ctx, &object); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
 	return &object, nil
 }
 

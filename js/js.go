@@ -65,7 +65,14 @@ func (c *Context) log(info *v8go.FunctionCallbackInfo) *v8go.Value {
 	if c.Console != nil {
 		anyArgs := []any{}
 		for _, arg := range info.Args() {
-			anyArgs = append(anyArgs, arg.String())
+			stringArg := arg.String()
+			if stringArg == "[object Object]" {
+				jsonArg, err := v8go.JSONStringify(c.v8Context, arg)
+				if err == nil {
+					stringArg = jsonArg
+				}
+			}
+			anyArgs = append(anyArgs, stringArg)
 		}
 		log.New(c.Console, "", 0).Println(anyArgs...)
 	}

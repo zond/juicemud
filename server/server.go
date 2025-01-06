@@ -116,11 +116,15 @@ func main() {
 	}
 	fingerprint := gossh.FingerprintSHA256(signer.PublicKey())
 
-	store, err := storage.New(context.Background(), *dir)
+	ctx := context.Background()
+	store, err := storage.New(ctx, *dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	g := game.New(store)
+	g, err := game.New(ctx, store)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	sshServer := &ssh.Server{
 		Addr:    *sshIface,

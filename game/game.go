@@ -1,6 +1,7 @@
 package game
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -16,10 +17,13 @@ type Game struct {
 	storage *storage.Storage
 }
 
-func New(s *storage.Storage) *Game {
+func New(ctx context.Context, s *storage.Storage) (*Game, error) {
+	if _, err := s.EnsureFile(ctx, userSource); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	return &Game{
 		storage: s,
-	}
+	}, nil
 }
 
 func (g *Game) HandleSession(sess ssh.Session) {
