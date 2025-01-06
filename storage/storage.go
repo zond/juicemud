@@ -105,7 +105,7 @@ func (s *Storage) SetSource(ctx context.Context, path string, content []byte) er
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		return juicemud.WithStack(s.logSync(ctx, tx, &FileSync{
+		return juicemud.WithStack(logSync(ctx, tx, &FileSync{
 			Set:     file.Path,
 			Content: content,
 		}))
@@ -179,15 +179,12 @@ type FileSync struct {
 	Content []byte
 }
 
-func (s *Storage) logSync(ctx context.Context, db sqlx.ExtContext, fileSync *FileSync) error {
+func logSync(ctx context.Context, db sqlx.ExtContext, fileSync *FileSync) error {
 	if fileSync.Remove == "" && fileSync.Set == "" {
 		return errors.Errorf("invalid FileSync %+v: Remove == \"\" and Set == \"\"", fileSync)
 	}
 	if fileSync.Remove != "" && fileSync.Set != "" {
 		return errors.Errorf("invalid FileSync %+v: Remove != \"\" and Set != \"\"", fileSync)
-	}
-	if fileSync.Set != "" && len(fileSync.Content) > 0 {
-		return errors.Errorf("invalid FileSync %+v: Set != \"\" and empty Content", fileSync)
 	}
 	if fileSync.Id != 0 {
 		return errors.Errorf("invalid FileSync %+v: Id != 0", fileSync)
@@ -213,9 +210,10 @@ func (s *Storage) sync(ctx context.Context) error {
 		result := &FileSync{}
 		if err := getSQL(ctx, s.sql, result, "SELECT * FROM FileSync ORDER BY Id ASC LIMIT 1"); errors.Is(err, os.ErrNotExist) {
 			return nil, nil
-		} else {
+		} else if err != nil {
 			return nil, juicemud.WithStack(err)
 		}
+		return result, nil
 	}
 	oldestSync, err := getOldestSync()
 	for ; err == nil && oldestSync != nil; oldestSync, err = getOldestSync() {
@@ -292,7 +290,7 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 				return juicemud.WithStack(err)
 			}
 		}
-		if err := delFileIfExistsCheckEmpty(ctx, tx, newPath); err != nil {
+		if err := delFileIfExists(ctx, tx, newPath, false); err != nil {
 			return juicemud.WithStack(err)
 		}
 		toMove.Parent = newParent.Id
@@ -301,12 +299,12 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 		if err := tx.Upsert(ctx, toMove, true); err != nil {
 			return juicemud.WithStack(err)
 		}
-		if err := s.logSync(ctx, tx, &FileSync{
+		if err := logSync(ctx, tx, &FileSync{
 			Remove: oldPath,
 		}); err != nil {
 			return juicemud.WithStack(err)
 		}
-		return juicemud.WithStack(s.logSync(ctx, tx, &FileSync{
+		return juicemud.WithStack(logSync(ctx, tx, &FileSync{
 			Set:     newPath,
 			Content: content,
 		}))
@@ -346,7 +344,7 @@ func (s *Storage) GetFile(ctx context.Context, path string) (*File, error) {
 	return getFile(ctx, s.sql, path)
 }
 
-func delFileIfExistsCheckEmpty(ctx context.Context, db sqlx.ExtContext, path string) error {
+func delFileIfExists(ctx context.Context, db sqlx.ExtContext, path string, recursive bool) error {
 	file, err := getFile(ctx, db, path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -355,10 +353,23 @@ func delFileIfExistsCheckEmpty(ctx context.Context, db sqlx.ExtContext, path str
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if len(children) > 0 {
-		return errors.Errorf("%q contains files", file.Path)
+	if recursive {
+		for _, child := range children {
+			if err := delFileIfExists(ctx, db, child.Path, true); err != nil {
+				return juicemud.WithStack(err)
+			}
+		}
+	} else {
+		if len(children) > 0 {
+			return errors.Errorf("%q is not empty", path)
+		}
 	}
 	if _, err := db.ExecContext(ctx, "DELETE FROM File WHERE Id = ?", file.Id); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := logSync(ctx, db, &FileSync{
+		Remove: path,
+	}); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return nil
@@ -366,12 +377,7 @@ func delFileIfExistsCheckEmpty(ctx context.Context, db sqlx.ExtContext, path str
 
 func (s *Storage) DelFile(ctx context.Context, path string) error {
 	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
-		if err := delFileIfExistsCheckEmpty(ctx, tx, path); err != nil {
-			return juicemud.WithStack(err)
-		}
-		if err := s.logSync(ctx, tx, &FileSync{
-			Remove: path,
-		}); err != nil {
+		if err := delFileIfExists(ctx, tx, path, true); err != nil {
 			return juicemud.WithStack(err)
 		}
 		return nil

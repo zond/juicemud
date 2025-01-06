@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/zond/juicemud"
@@ -16,7 +17,17 @@ type Fs struct {
 	Storage *storage.Storage
 }
 
+func pathify(s *string) {
+	if strings.HasSuffix(*s, "/") {
+		*s = (*s)[:len(*s)-1]
+	}
+	if !strings.HasPrefix(*s, "/") {
+		*s = "/" + *s
+	}
+}
+
 func (f *Fs) Read(ctx context.Context, path string) (io.ReadCloser, error) {
+	pathify(&path)
 	content, err := f.Storage.GetSource(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
@@ -44,6 +55,7 @@ func (w *writeBuffer) Close() error {
 }
 
 func (f *Fs) Write(ctx context.Context, path string) (io.WriteCloser, error) {
+	pathify(&path)
 	file, err := f.Storage.EnsureFile(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
@@ -81,6 +93,7 @@ func (f *Fs) stat(ctx context.Context, file *storage.File) (*dav.FileInfo, error
 }
 
 func (f *Fs) Stat(ctx context.Context, path string) (*dav.FileInfo, error) {
+	pathify(&path)
 	file, err := f.Storage.GetFile(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
@@ -89,14 +102,17 @@ func (f *Fs) Stat(ctx context.Context, path string) (*dav.FileInfo, error) {
 }
 
 func (f *Fs) Remove(ctx context.Context, path string) error {
+	pathify(&path)
 	return f.Storage.DelFile(ctx, path)
 }
 
 func (f *Fs) Mkdir(ctx context.Context, path string) error {
+	pathify(&path)
 	return f.Storage.CreateDir(ctx, path)
 }
 
 func (f *Fs) List(ctx context.Context, path string) ([]*dav.FileInfo, error) {
+	pathify(&path)
 	file, err := f.Storage.GetFile(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
@@ -115,5 +131,8 @@ func (f *Fs) List(ctx context.Context, path string) ([]*dav.FileInfo, error) {
 }
 
 func (f *Fs) Rename(ctx context.Context, oldPath string, newURL *url.URL) error {
-	return f.Storage.MoveFile(ctx, oldPath, newURL.Path)
+	pathify(&oldPath)
+	newPath := newURL.Path
+	pathify(&newPath)
+	return f.Storage.MoveFile(ctx, oldPath, newPath)
 }

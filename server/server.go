@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -37,8 +38,27 @@ func (r *responseWriter) Write(b []byte) (int, error) {
 		r.WriteHeader(http.StatusOK)
 	}
 	written, err := r.backend.Write(b)
-	r.size += written
+	if written > 0 {
+		r.size += written
+	}
 	return written, err
+}
+
+type sizeBody struct {
+	backend io.ReadCloser
+	size    int
+}
+
+func (s *sizeBody) Read(b []byte) (int, error) {
+	read, err := s.backend.Read(b)
+	if read > 0 {
+		s.size += read
+	}
+	return read, err
+}
+
+func (s *sizeBody) Close() error {
+	return s.Close()
 }
 
 func (r *responseWriter) WriteHeader(status int) {
@@ -117,9 +137,11 @@ func main() {
 	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t := time.Now()
 		ww := &responseWriter{backend: w, status: http.StatusOK}
+		sb := &sizeBody{backend: r.Body}
+		r.Body = sb
 		auth.ServeHTTP(ww, r)
 		lapsed := time.Since(t)
-		log.Printf("%s\t%s\t%s\t%v\t%vb in\t%vb out\t%s", r.RemoteAddr, r.Method, r.URL, ww.status, r.ContentLength, ww.size, lapsed)
+		log.Printf("%s\t%s\t%s\t%v\t%vb in\t%vb out\t%s", r.RemoteAddr, r.Method, r.URL, ww.status, sb.size, ww.size, lapsed)
 	})
 
 	httpsServer := &http.Server{
