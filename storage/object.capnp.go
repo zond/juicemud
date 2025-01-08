@@ -6,6 +6,7 @@ import (
 	capnp "capnproto.org/go/capnp/v3"
 	text "capnproto.org/go/capnp/v3/encoding/text"
 	schemas "capnproto.org/go/capnp/v3/schemas"
+	math "math"
 )
 
 type Object capnp.Struct
@@ -14,12 +15,12 @@ type Object capnp.Struct
 const Object_TypeID = 0xbc7ab37c3dc9daa6
 
 func NewObject(s *capnp.Segment) (Object, error) {
-	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 6})
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 8})
 	return Object(st), err
 }
 
 func NewRootObject(s *capnp.Segment) (Object, error) {
-	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 6})
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 8})
 	return Object(st), err
 }
 
@@ -127,40 +128,86 @@ func (s Object) NewSubscriptions(n int32) (capnp.TextList, error) {
 	err = capnp.Struct(s).SetPtr(3, l.ToPtr())
 	return l, err
 }
-func (s Object) State() (string, error) {
+func (s Object) Skills() (Object_Skill_List, error) {
 	p, err := capnp.Struct(s).Ptr(4)
+	return Object_Skill_List(p.List()), err
+}
+
+func (s Object) HasSkills() bool {
+	return capnp.Struct(s).HasPtr(4)
+}
+
+func (s Object) SetSkills(v Object_Skill_List) error {
+	return capnp.Struct(s).SetPtr(4, v.ToPtr())
+}
+
+// NewSkills sets the skills field to a newly
+// allocated Object_Skill_List, preferring placement in s's segment.
+func (s Object) NewSkills(n int32) (Object_Skill_List, error) {
+	l, err := NewObject_Skill_List(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return Object_Skill_List{}, err
+	}
+	err = capnp.Struct(s).SetPtr(4, l.ToPtr())
+	return l, err
+}
+func (s Object) Descriptions() (Object_Description_List, error) {
+	p, err := capnp.Struct(s).Ptr(5)
+	return Object_Description_List(p.List()), err
+}
+
+func (s Object) HasDescriptions() bool {
+	return capnp.Struct(s).HasPtr(5)
+}
+
+func (s Object) SetDescriptions(v Object_Description_List) error {
+	return capnp.Struct(s).SetPtr(5, v.ToPtr())
+}
+
+// NewDescriptions sets the descriptions field to a newly
+// allocated Object_Description_List, preferring placement in s's segment.
+func (s Object) NewDescriptions(n int32) (Object_Description_List, error) {
+	l, err := NewObject_Description_List(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return Object_Description_List{}, err
+	}
+	err = capnp.Struct(s).SetPtr(5, l.ToPtr())
+	return l, err
+}
+func (s Object) State() (string, error) {
+	p, err := capnp.Struct(s).Ptr(6)
 	return p.Text(), err
 }
 
 func (s Object) HasState() bool {
-	return capnp.Struct(s).HasPtr(4)
+	return capnp.Struct(s).HasPtr(6)
 }
 
 func (s Object) StateBytes() ([]byte, error) {
-	p, err := capnp.Struct(s).Ptr(4)
+	p, err := capnp.Struct(s).Ptr(6)
 	return p.TextBytes(), err
 }
 
 func (s Object) SetState(v string) error {
-	return capnp.Struct(s).SetText(4, v)
+	return capnp.Struct(s).SetText(6, v)
 }
 
 func (s Object) Source() (string, error) {
-	p, err := capnp.Struct(s).Ptr(5)
+	p, err := capnp.Struct(s).Ptr(7)
 	return p.Text(), err
 }
 
 func (s Object) HasSource() bool {
-	return capnp.Struct(s).HasPtr(5)
+	return capnp.Struct(s).HasPtr(7)
 }
 
 func (s Object) SourceBytes() ([]byte, error) {
-	p, err := capnp.Struct(s).Ptr(5)
+	p, err := capnp.Struct(s).Ptr(7)
 	return p.TextBytes(), err
 }
 
 func (s Object) SetSource(v string) error {
-	return capnp.Struct(s).SetText(5, v)
+	return capnp.Struct(s).SetText(7, v)
 }
 
 // Object_List is a list of Object.
@@ -168,7 +215,7 @@ type Object_List = capnp.StructList[Object]
 
 // NewObject creates a new list of Object.
 func NewObject_List(s *capnp.Segment, sz int32) (Object_List, error) {
-	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 6}, sz)
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 8}, sz)
 	return capnp.StructList[Object](l), err
 }
 
@@ -180,30 +227,368 @@ func (f Object_Future) Struct() (Object, error) {
 	return Object(p.Struct()), err
 }
 
-const schema_d258d93c56221e58 = "x\xda<\xcb\xb1J#Q\x18\xc5\xf1s\xee\x9dI\x9a" +
-	"L\xd8\x0f\xa6X\xb6\xd8\x80\xbdB,\x83\xa2X\xda\x98" +
-	"\xaf\xd1\xb4\xc9u\x8a\x04\x99\x09\x99\x9bF\x04_\xc2F" +
-	"P\x08\x82\xc1\xdeF!`e\x11PPQP\xf1]" +
-	"F\x12\x89\xe5\xf9\xfd9\x7f\xc6\x9bA=\xba#\x8c\xc6" +
-	"a\xa9\x18\x7fN\xd7\x8f\xae\x0f'\x90\x88E\xeb\xff\xd2" +
-	"\xee\xdaG\xeb\x05a\xa9\x0c\xc8\xfd\x85<\x96\x81\xfat" +
-	"\x8fX.\xb2N/q~\xc5\xb1\xddO\xfb\x8d\x9dN" +
-	"\xaf\x9c8\xdf$\xf5\xaf\x0d\x80\x80\x80\x9c\xfe\x03\xf4\xc4" +
-	"RG\x86B\xc6\x9c\xe1\xf96\xa0g\x96ze(\xc6" +
-	"\xc44\x80\\n\x01:\xb2\xd4\x89\xa1X\x1b\xd3\x02r" +
-	";\x00\xf4\xc6R_\x0d%\x08b\x06\x80<\xaf\x02\xfa" +
-	"`\xa9\xef\x86\x12\x861C@\xde\x1a\x80>Y\xea\x97" +
-	"\xa1\xed\xee3\x82a\x04\x16\x07\x99k\xfbn\x96\x02X" +
-	"\xd8\xb1\xcbR\x9f\xa4\x9eU\xb0i9\xe7*X\xe4\xc3" +
-	"N\xee\x06\xdd>j\xb3C\xbe\xc8\x95\x9f\\\xcb}\xdb" +
-	"'\xf3U\x017\xf2l8p\xbf\xf3;\x00\x00\xff\xff" +
-	"\xa3\x85C@"
+type Object_Skill capnp.Struct
+
+// Object_Skill_TypeID is the unique identifier for the type Object_Skill.
+const Object_Skill_TypeID = 0xc8b64858fead2249
+
+func NewObject_Skill(s *capnp.Segment) (Object_Skill, error) {
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 1})
+	return Object_Skill(st), err
+}
+
+func NewRootObject_Skill(s *capnp.Segment) (Object_Skill, error) {
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 1})
+	return Object_Skill(st), err
+}
+
+func ReadRootObject_Skill(msg *capnp.Message) (Object_Skill, error) {
+	root, err := msg.Root()
+	return Object_Skill(root.Struct()), err
+}
+
+func (s Object_Skill) String() string {
+	str, _ := text.Marshal(0xc8b64858fead2249, capnp.Struct(s))
+	return str
+}
+
+func (s Object_Skill) EncodeAsPtr(seg *capnp.Segment) capnp.Ptr {
+	return capnp.Struct(s).EncodeAsPtr(seg)
+}
+
+func (Object_Skill) DecodeFromPtr(p capnp.Ptr) Object_Skill {
+	return Object_Skill(capnp.Struct{}.DecodeFromPtr(p))
+}
+
+func (s Object_Skill) ToPtr() capnp.Ptr {
+	return capnp.Struct(s).ToPtr()
+}
+func (s Object_Skill) IsValid() bool {
+	return capnp.Struct(s).IsValid()
+}
+
+func (s Object_Skill) Message() *capnp.Message {
+	return capnp.Struct(s).Message()
+}
+
+func (s Object_Skill) Segment() *capnp.Segment {
+	return capnp.Struct(s).Segment()
+}
+func (s Object_Skill) Name() (string, error) {
+	p, err := capnp.Struct(s).Ptr(0)
+	return p.Text(), err
+}
+
+func (s Object_Skill) HasName() bool {
+	return capnp.Struct(s).HasPtr(0)
+}
+
+func (s Object_Skill) NameBytes() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(0)
+	return p.TextBytes(), err
+}
+
+func (s Object_Skill) SetName(v string) error {
+	return capnp.Struct(s).SetText(0, v)
+}
+
+func (s Object_Skill) Theoretical() float32 {
+	return math.Float32frombits(capnp.Struct(s).Uint32(0))
+}
+
+func (s Object_Skill) SetTheoretical(v float32) {
+	capnp.Struct(s).SetUint32(0, math.Float32bits(v))
+}
+
+func (s Object_Skill) Practical() float32 {
+	return math.Float32frombits(capnp.Struct(s).Uint32(4))
+}
+
+func (s Object_Skill) SetPractical(v float32) {
+	capnp.Struct(s).SetUint32(4, math.Float32bits(v))
+}
+
+// Object_Skill_List is a list of Object_Skill.
+type Object_Skill_List = capnp.StructList[Object_Skill]
+
+// NewObject_Skill creates a new list of Object_Skill.
+func NewObject_Skill_List(s *capnp.Segment, sz int32) (Object_Skill_List, error) {
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 8, PointerCount: 1}, sz)
+	return capnp.StructList[Object_Skill](l), err
+}
+
+// Object_Skill_Future is a wrapper for a Object_Skill promised by a client call.
+type Object_Skill_Future struct{ *capnp.Future }
+
+func (f Object_Skill_Future) Struct() (Object_Skill, error) {
+	p, err := f.Future.Ptr()
+	return Object_Skill(p.Struct()), err
+}
+
+type Object_Challenge capnp.Struct
+
+// Object_Challenge_TypeID is the unique identifier for the type Object_Challenge.
+const Object_Challenge_TypeID = 0xd9a1cd92e8f3c467
+
+func NewObject_Challenge(s *capnp.Segment) (Object_Challenge, error) {
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 1})
+	return Object_Challenge(st), err
+}
+
+func NewRootObject_Challenge(s *capnp.Segment) (Object_Challenge, error) {
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 1})
+	return Object_Challenge(st), err
+}
+
+func ReadRootObject_Challenge(msg *capnp.Message) (Object_Challenge, error) {
+	root, err := msg.Root()
+	return Object_Challenge(root.Struct()), err
+}
+
+func (s Object_Challenge) String() string {
+	str, _ := text.Marshal(0xd9a1cd92e8f3c467, capnp.Struct(s))
+	return str
+}
+
+func (s Object_Challenge) EncodeAsPtr(seg *capnp.Segment) capnp.Ptr {
+	return capnp.Struct(s).EncodeAsPtr(seg)
+}
+
+func (Object_Challenge) DecodeFromPtr(p capnp.Ptr) Object_Challenge {
+	return Object_Challenge(capnp.Struct{}.DecodeFromPtr(p))
+}
+
+func (s Object_Challenge) ToPtr() capnp.Ptr {
+	return capnp.Struct(s).ToPtr()
+}
+func (s Object_Challenge) IsValid() bool {
+	return capnp.Struct(s).IsValid()
+}
+
+func (s Object_Challenge) Message() *capnp.Message {
+	return capnp.Struct(s).Message()
+}
+
+func (s Object_Challenge) Segment() *capnp.Segment {
+	return capnp.Struct(s).Segment()
+}
+func (s Object_Challenge) Skill() (string, error) {
+	p, err := capnp.Struct(s).Ptr(0)
+	return p.Text(), err
+}
+
+func (s Object_Challenge) HasSkill() bool {
+	return capnp.Struct(s).HasPtr(0)
+}
+
+func (s Object_Challenge) SkillBytes() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(0)
+	return p.TextBytes(), err
+}
+
+func (s Object_Challenge) SetSkill(v string) error {
+	return capnp.Struct(s).SetText(0, v)
+}
+
+func (s Object_Challenge) Legel() float32 {
+	return math.Float32frombits(capnp.Struct(s).Uint32(0))
+}
+
+func (s Object_Challenge) SetLegel(v float32) {
+	capnp.Struct(s).SetUint32(0, math.Float32bits(v))
+}
+
+// Object_Challenge_List is a list of Object_Challenge.
+type Object_Challenge_List = capnp.StructList[Object_Challenge]
+
+// NewObject_Challenge creates a new list of Object_Challenge.
+func NewObject_Challenge_List(s *capnp.Segment, sz int32) (Object_Challenge_List, error) {
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 8, PointerCount: 1}, sz)
+	return capnp.StructList[Object_Challenge](l), err
+}
+
+// Object_Challenge_Future is a wrapper for a Object_Challenge promised by a client call.
+type Object_Challenge_Future struct{ *capnp.Future }
+
+func (f Object_Challenge_Future) Struct() (Object_Challenge, error) {
+	p, err := f.Future.Ptr()
+	return Object_Challenge(p.Struct()), err
+}
+
+type Object_Description capnp.Struct
+
+// Object_Description_TypeID is the unique identifier for the type Object_Description.
+const Object_Description_TypeID = 0xa79088abb6334aec
+
+func NewObject_Description(s *capnp.Segment) (Object_Description, error) {
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 3})
+	return Object_Description(st), err
+}
+
+func NewRootObject_Description(s *capnp.Segment) (Object_Description, error) {
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 3})
+	return Object_Description(st), err
+}
+
+func ReadRootObject_Description(msg *capnp.Message) (Object_Description, error) {
+	root, err := msg.Root()
+	return Object_Description(root.Struct()), err
+}
+
+func (s Object_Description) String() string {
+	str, _ := text.Marshal(0xa79088abb6334aec, capnp.Struct(s))
+	return str
+}
+
+func (s Object_Description) EncodeAsPtr(seg *capnp.Segment) capnp.Ptr {
+	return capnp.Struct(s).EncodeAsPtr(seg)
+}
+
+func (Object_Description) DecodeFromPtr(p capnp.Ptr) Object_Description {
+	return Object_Description(capnp.Struct{}.DecodeFromPtr(p))
+}
+
+func (s Object_Description) ToPtr() capnp.Ptr {
+	return capnp.Struct(s).ToPtr()
+}
+func (s Object_Description) IsValid() bool {
+	return capnp.Struct(s).IsValid()
+}
+
+func (s Object_Description) Message() *capnp.Message {
+	return capnp.Struct(s).Message()
+}
+
+func (s Object_Description) Segment() *capnp.Segment {
+	return capnp.Struct(s).Segment()
+}
+func (s Object_Description) Short() (string, error) {
+	p, err := capnp.Struct(s).Ptr(0)
+	return p.Text(), err
+}
+
+func (s Object_Description) HasShort() bool {
+	return capnp.Struct(s).HasPtr(0)
+}
+
+func (s Object_Description) ShortBytes() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(0)
+	return p.TextBytes(), err
+}
+
+func (s Object_Description) SetShort(v string) error {
+	return capnp.Struct(s).SetText(0, v)
+}
+
+func (s Object_Description) Long() (string, error) {
+	p, err := capnp.Struct(s).Ptr(1)
+	return p.Text(), err
+}
+
+func (s Object_Description) HasLong() bool {
+	return capnp.Struct(s).HasPtr(1)
+}
+
+func (s Object_Description) LongBytes() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(1)
+	return p.TextBytes(), err
+}
+
+func (s Object_Description) SetLong(v string) error {
+	return capnp.Struct(s).SetText(1, v)
+}
+
+func (s Object_Description) Challenges() (Object_Challenge_List, error) {
+	p, err := capnp.Struct(s).Ptr(2)
+	return Object_Challenge_List(p.List()), err
+}
+
+func (s Object_Description) HasChallenges() bool {
+	return capnp.Struct(s).HasPtr(2)
+}
+
+func (s Object_Description) SetChallenges(v Object_Challenge_List) error {
+	return capnp.Struct(s).SetPtr(2, v.ToPtr())
+}
+
+// NewChallenges sets the challenges field to a newly
+// allocated Object_Challenge_List, preferring placement in s's segment.
+func (s Object_Description) NewChallenges(n int32) (Object_Challenge_List, error) {
+	l, err := NewObject_Challenge_List(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return Object_Challenge_List{}, err
+	}
+	err = capnp.Struct(s).SetPtr(2, l.ToPtr())
+	return l, err
+}
+
+// Object_Description_List is a list of Object_Description.
+type Object_Description_List = capnp.StructList[Object_Description]
+
+// NewObject_Description creates a new list of Object_Description.
+func NewObject_Description_List(s *capnp.Segment, sz int32) (Object_Description_List, error) {
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 3}, sz)
+	return capnp.StructList[Object_Description](l), err
+}
+
+// Object_Description_Future is a wrapper for a Object_Description promised by a client call.
+type Object_Description_Future struct{ *capnp.Future }
+
+func (f Object_Description_Future) Struct() (Object_Description, error) {
+	p, err := f.Future.Ptr()
+	return Object_Description(p.Struct()), err
+}
+
+const schema_d258d93c56221e58 = "x\xdalS\xc1k\x14W\x1c\xfe\xbe\xf7fw\xd3\xb0" +
+	"\xdbd\x989\x95\xb6\x1bB\x0fm %MR\xda\x86" +
+	"\x84\x846\x81lH\xe9\xbel[\x82x\x99\x9d\x0c\xbb" +
+	"\x1b\xc7\x99ew\x82 \x82W\xf1$\xfe\x07z\xd0\x83" +
+	"\x88\x07!'\x8fB\x14\xf4`PH\x04\xc1\x8b\xe0A" +
+	"\xc1\xa8W\x1dy\xbb\xce\xec \xb9\xcd\xfb\xde\xef\xfd~" +
+	"\xdf\xef\xfb\xbe\x99\xba\xc8%\xe3\x97\xd2\x9e\x80Pc\xb9" +
+	"|\xfcjmf\xf7\xc6\x85K\xd7a\xda\x8c\xaf=\xbd" +
+	"\xbfp\xee\xf6\xd9;\xc8\xc9\x020S\xa1\xa0\xf5\x1f\x0b" +
+	"\x80\xa5x\x0b\x99{\xb3\xc4x\xf3\xfb\xf1\xff\xe7\x0f7" +
+	"\xf7\x91\x1b\xd2\x15\x1fx\xd5\xca\x89\xdf\x80\x99I\xb1G" +
+	"0\xae\x8c\xdf\xfc\xb8\xb9\xba{\x0f\xcaf\xb6u\xaf\xdf" +
+	"\x82\xb1oU\x0c\xfd\xb5b\xe8\xce\x8d\xbb\xef^^~" +
+	"x\xe5\xf0\xd8\xe2\x17\xc6[\xeb\xa8W\xfc\xda8\x83\xc9" +
+	"8\xaco{n\xf4\xb3+\x9dv\xd0\x9e\xfb\xa7\x7fZ" +
+	"\xf6\xban\xa7\xd5\x8eZa\x80*\xa9\x8a\xd2\x00\x0c\x02" +
+	"\xe6\xca4\xa0\x96$\xd5\xba\xa0I\xda\xd4`e\x02P" +
+	"\xcb\x92\xaa*h\x0aaS\x00\xe6\xdf'\x00\xb5.\xa9" +
+	"\x9a\x82\xe5n3\xecD,B\xb0\x08\x8e\xf8a\xd0H" +
+	"\x0e\xb1\xdbt|\xdf\x0b\x1a\x90^\x97_\x83UI\x8e" +
+	"\x0ev\x005\x98\xd2dB\xb3\xe0\xb9\x91*2#\x8d" +
+	"iN\x0f\x9e\x99\xa5\x8d\x8c\x1d\xa5z\xb9v\xaa\xe5\xfb" +
+	"\xf1_\xc90zq\xb2$\x0a\xad0Pc\xe9\x8a\x8f" +
+	"\xbe\x01\xd4\x03Iu\x90Y\xf1\xc9\x1a\xa0\x1eK\xaa\xe7" +
+	"\x99\x15\x9f\xfd\x09\xa8\x03I\xf5^\xd0\x94\xd2\xa6\x04\xcc" +
+	"\xa3\x0e\xa0\xdeH\xd6\x8a\x144\x0d\xc3\xa6\x01X_q" +
+	"\x0e\xa8\x19\x94\xac\x8di<\x97\xb3\x99\x03\xac\xef\xb8\x0d" +
+	"\xd4\xbe\xd5\xf8\xef\x1a\xcf\xe7m\xe6\x01\xebWN\x03\xb5" +
+	")\x8d\xcfk\xbcP\xb0{\xf6\xfd\xd1\xeb3\xab\xf1%" +
+	"\x0a\xca\xd6\x16K\x10,\x81\xb1\x1f\xbaN\xcf1 \xc1" +
+	"\xce\xbba\x10yA\x94\xe8\xaaa\xadfw\xa7\xde\xdb" +
+	"\x1de\xfd \x95\xbd\xd8\xbf^\xecj\xad2f\xa4\x12" +
+	"\x7f6c+Qn$\xfbzt x\xbf\xae\xdc\x8d" +
+	"\x9c\xc8K\x8c^\xec\x86;\x1d7=\xa6\x8e\x8al\xf0" +
+	"\xb4K\xf4\xbf\x88\xdc\xc4 ri\xe2\xea\x80Z\x95T" +
+	"\xffj;\xd8\xb7Cm\x00\xaa*\xa9N\x0a\x8e\x04\xce" +
+	"\xe9\xc1\xac\xa8\xe9\x85\x1d/j\xa1\xe0:>\x87!8" +
+	"\x0c\xc6\xed\x8e\xe3F-\xd7\x01\x07\xd8\xb1\xactj\xca" +
+	":6\x9ef6\x942\xfbI\xff\x0c?H\xaa\xa9\x01" +
+	"\xb3I\x8d\xfd(\xa9fu\xec\xb5\x90\x09\x8b\xb2\xef5" +
+	"\xbct\xd2\xa7\x00\x00\x00\xff\xff\xe0V\xfb\xcd"
 
 func RegisterSchema(reg *schemas.Registry) {
 	reg.Register(&schemas.Schema{
 		String: schema_d258d93c56221e58,
 		Nodes: []uint64{
+			0xa79088abb6334aec,
 			0xbc7ab37c3dc9daa6,
+			0xc8b64858fead2249,
+			0xd9a1cd92e8f3c467,
 		},
 		Compressed: true,
 	})

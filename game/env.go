@@ -30,10 +30,6 @@ const (
 	connectedEventType = "connected"
 )
 
-const (
-	userSource = "/user.js"
-)
-
 var (
 	envByObjectID     = juicemud.NewSyncMap[string, *Env]()
 	consoleByObjectID = juicemud.NewSyncMap[string, *terminals]()
@@ -123,14 +119,15 @@ func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
 	}
 }
 
-func (e *Env) withJSContext(ctx context.Context, id []byte, f func(jctx *js.Context) error) error {
-	jsContextLocks.Lock(string(id))
-	defer jsContextLocks.Unlock(string(id))
-
-	object, err := e.game.storage.GetObject(ctx, id)
+func (e *Env) withJSContext(ctx context.Context, object *storage.Object, f func(jctx *js.FunContext) error) error {
+	id, err := object.Id()
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
+
+	jsContextLocks.Lock(string(id))
+	defer jsContextLocks.Unlock(string(id))
+
 	sourcePath, err := object.Source()
 	if err != nil {
 		return juicemud.WithStack(err)
@@ -143,21 +140,65 @@ func (e *Env) withJSContext(ctx context.Context, id []byte, f func(jctx *js.Cont
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	result := &js.Context{
+	jctx := &js.FunContext{
 		State:   state,
 		Console: consoleByObjectID.Get(string(id)),
 	}
-	defer result.Close()
-	if err := result.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
+	defer jctx.Close()
+	if err := jctx.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
 		return juicemud.WithStack(err)
 	}
-	return f(result)
+
+	if err := f(jctx); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	if err := object.SetState(jctx.State); err != nil {
+		return juicemud.WithStack(err)
+	}
+	newSubscriptions := jctx.Subscriptions()
+	newSubscriptionsTL, err := object.NewSubscriptions(int32(len(newSubscriptions)))
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	for index, sub := range newSubscriptions {
+		newSubscriptionsTL.Set(index, sub)
+	}
+	if err := object.SetSubscriptions(newSubscriptionsTL); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return e.game.storage.SetObject(ctx, object)
+}
+
+func (e *Env) isSubscriber(o *storage.Object, eventType string) (bool, error) {
+	subs, err := o.Subscriptions()
+	if err != nil {
+		return false, juicemud.WithStack(err)
+	}
+	for index := 0; index < subs.Len(); index++ {
+		sub, err := subs.At(index)
+		if err != nil {
+			return false, juicemud.WithStack(err)
+		}
+		if sub == eventType {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (e *Env) notify(ctx context.Context, id []byte, eventType string, message string) error {
-	return e.withJSContext(ctx, id, func(jctx *js.Context) error {
-		return jctx.Notify(ctx, eventType, message)
-	})
+	object, err := e.game.storage.GetObject(ctx, id)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if subscribes, err := e.isSubscriber(object, eventType); err != nil {
+		return juicemud.WithStack(err)
+	} else if subscribes {
+		return e.withJSContext(ctx, id, func(jctx *js.FunContext) error {
+			return jctx.Notify(ctx, eventType, message)
+		})
+	}
 }
 
 var (

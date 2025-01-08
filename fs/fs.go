@@ -56,7 +56,7 @@ func (w *writeBuffer) Close() error {
 
 func (f *Fs) Write(ctx context.Context, path string) (io.WriteCloser, error) {
 	pathify(&path)
-	file, err := f.Storage.EnsureFile(ctx, path)
+	file, _, err := f.Storage.EnsureFile(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}

@@ -16,9 +16,45 @@ struct Object {
     subscriptions @3 :List(Text);
     # Names of all event types this Object is interested in.
 
-    state @4 :Text;
+    struct Skill {
+        name @0 :Text;
+        # Name of this skill.
+
+        theoretical @1 :Float32;
+        # Theoretical level of this skill.
+
+        practical @2 :Float32;
+        # Practical level of this skill.
+    }
+
+    skills @4 :List(Skill);
+    # Skills of this Object.
+
+    struct Challenge {
+        skill @0 :Text;
+        # Name of the skill this challenges.
+
+        legel @1 :Float32;
+        # Level of challenge.
+    }
+
+    struct Description {
+        short @0 :Text;
+        # Short description text (when not being actively looked at).
+
+        long @1 :Text;
+        # Long description text (when being actively looked at).
+
+        challenges @2 :List(Challenge);
+        # Skill challenges to overcome to detect this description.
+    }
+
+    descriptions @5 :List(Description);
+    # Descriptions of this Object. Ordered by decreasing difficulty, the first one detected is the one shown.
+
+    state @6 :Text;
     # The global variables of the Object as JSON.
 
-    source @5 :Text;
+    source @7 :Text;
     # Path to the JavaScript source controlling this Object.
 }

@@ -13,13 +13,31 @@ import (
 	"golang.org/x/term"
 )
 
+const (
+	userSource    = "/user.js"
+	genesisSource = "/genesis.js"
+)
+
+var (
+	initialContent = map[string]string{
+		userSource:    "// This code runs all connected users.",
+		genesisSource: "// This code runs the room where newly created users are dropped.",
+	}
+)
+
 type Game struct {
 	storage *storage.Storage
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
-	if _, err := s.EnsureFile(ctx, userSource); err != nil {
-		return nil, juicemud.WithStack(err)
+	for _, path := range []string{userSource, genesisSource} {
+		if _, created, err := s.EnsureFile(ctx, path); err != nil {
+			return nil, juicemud.WithStack(err)
+		} else if created {
+			if err := s.SetSource(ctx, path, []byte(initialContent[path])); err != nil {
+				return nil, juicemud.WithStack(err)
+			}
+		}
 	}
 	return &Game{
 		storage: s,

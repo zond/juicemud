@@ -235,10 +235,11 @@ type File struct {
 	WriteGroup int64
 }
 
-func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, err error) {
+func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, created bool, err error) {
 	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		file, err = getFile(ctx, tx, path)
 		if err == nil {
+			created = false
 			return nil
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return juicemud.WithStack(err)
@@ -259,11 +260,12 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, err 
 		if err := tx.Upsert(ctx, file, true); err != nil {
 			return juicemud.WithStack(err)
 		}
+		created = true
 		return nil
 	}); err != nil {
-		return nil, juicemud.WithStack(err)
+		return nil, false, juicemud.WithStack(err)
 	}
-	return file, nil
+	return file, created, nil
 }
 
 func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) error {
