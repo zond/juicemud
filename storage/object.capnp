@@ -13,8 +13,8 @@ struct Object {
     content @2 :List(Data);
     # ID of all Objects contained by this Object.
 
-    subscriptions @3 :List(Text);
-    # Names of all event types this Object is interested in.
+    callbacks @3 :List(Text);
+    # Names of all functions this Object exports.
 
     struct Skill {
         name @0 :Text;
@@ -45,7 +45,10 @@ struct Object {
         long @1 :Text;
         # Long description text (when being actively looked at).
 
-        challenges @2 :List(Challenge);
+        tags @2 :List(Text);
+        # Object tags (user, mob, monster, aggro, whatever) for code detection provided by this description.
+
+        challenges @3 :List(Challenge);
         # Skill challenges to overcome to detect this description.
     }
 

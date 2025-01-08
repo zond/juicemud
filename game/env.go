@@ -20,6 +20,7 @@ import (
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
 	"golang.org/x/term"
+	"rogchap.com/v8go"
 )
 
 var (
@@ -31,47 +32,28 @@ const (
 )
 
 var (
-	envByObjectID     = juicemud.NewSyncMap[string, *Env]()
-	consoleByObjectID = juicemud.NewSyncMap[string, *terminals]()
-	jsContextLocks    = juicemud.NewLockMap[string]()
+	envByObjectID         = juicemud.NewSyncMap[string, *Env]()
+	consoleByObjectID     = juicemud.NewSyncMap[string, *Fanout]()
+	consoleByObjectIDLock = juicemud.NewLockMap[string]()
+	jsContextLocks        = juicemud.NewLockMap[string]()
 )
+
+func addConsole(id string, term *term.Terminal) {
+	consoleByObjectIDLock.WithLock(id, func() {
+		consoleByObjectID.Get(id).Push(term)
+	})
+}
+
+func delConsole(id string, term *term.Terminal) {
+	consoleByObjectIDLock.WithLock(id, func() {
+		consoleByObjectID.Get(id).Drop(term)
+	})
+}
 
 type errs []error
 
 func (e errs) Error() string {
 	return fmt.Sprintf("%+v", []error(e))
-}
-
-type terminals map[*term.Terminal]bool
-
-func (terms terminals) push(t *term.Terminal) {
-	terms[t] = true
-}
-
-func (terms terminals) drop(t *term.Terminal) {
-	delete(terms, t)
-}
-
-func (terms *terminals) Write(b []byte) (int, error) {
-	if terms == nil {
-		return len(b), nil
-	}
-	errs := errs{}
-	max := 0
-	for t := range *terms {
-		if written, err := t.Write(b); err != nil {
-			delete(*terms, t)
-			errs = append(errs, err)
-		} else {
-			if written > max {
-				max = written
-			}
-		}
-	}
-	if len(errs) > 0 {
-		return max, juicemud.WithStack(errs)
-	}
-	return max, nil
 }
 
 type Env struct {
@@ -119,88 +101,6 @@ func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
 	}
 }
 
-func (e *Env) withJSContext(ctx context.Context, object *storage.Object, f func(jctx *js.FunContext) error) error {
-	id, err := object.Id()
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	jsContextLocks.Lock(string(id))
-	defer jsContextLocks.Unlock(string(id))
-
-	sourcePath, err := object.Source()
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	state, err := object.State()
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	source, err := e.game.storage.GetSource(ctx, sourcePath)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	jctx := &js.FunContext{
-		State:   state,
-		Console: consoleByObjectID.Get(string(id)),
-	}
-	defer jctx.Close()
-	if err := jctx.Run(ctx, string(source), sourcePath, 100*time.Millisecond); err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	if err := f(jctx); err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	if err := object.SetState(jctx.State); err != nil {
-		return juicemud.WithStack(err)
-	}
-	newSubscriptions := jctx.Subscriptions()
-	newSubscriptionsTL, err := object.NewSubscriptions(int32(len(newSubscriptions)))
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	for index, sub := range newSubscriptions {
-		newSubscriptionsTL.Set(index, sub)
-	}
-	if err := object.SetSubscriptions(newSubscriptionsTL); err != nil {
-		return juicemud.WithStack(err)
-	}
-	return e.game.storage.SetObject(ctx, object)
-}
-
-func (e *Env) isSubscriber(o *storage.Object, eventType string) (bool, error) {
-	subs, err := o.Subscriptions()
-	if err != nil {
-		return false, juicemud.WithStack(err)
-	}
-	for index := 0; index < subs.Len(); index++ {
-		sub, err := subs.At(index)
-		if err != nil {
-			return false, juicemud.WithStack(err)
-		}
-		if sub == eventType {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (e *Env) notify(ctx context.Context, id []byte, eventType string, message string) error {
-	object, err := e.game.storage.GetObject(ctx, id)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	if subscribes, err := e.isSubscriber(object, eventType); err != nil {
-		return juicemud.WithStack(err)
-	} else if subscribes {
-		return e.withJSContext(ctx, id, func(jctx *js.FunContext) error {
-			return jctx.Notify(ctx, eventType, message)
-		})
-	}
-}
-
 var (
 	commands = map[string]func(e *Env, args []string) error{
 		"debug": func(e *Env, args []string) error {
@@ -212,12 +112,7 @@ var (
 					id = string(byteID)
 				}
 			}
-			terms, found := consoleByObjectID.GetHas(id)
-			for ; !found; terms, found = consoleByObjectID.GetHas(id) {
-				terms = &terminals{}
-				consoleByObjectID.Swap(id, nil, terms)
-			}
-			terms.push(e.term)
+			addConsole(id, e.term)
 			return nil
 		},
 		"undebug": func(e *Env, args []string) error {
@@ -229,12 +124,7 @@ var (
 					id = string(byteID)
 				}
 			}
-			terms, found := consoleByObjectID.GetHas(id)
-			for ; !found; terms, found = consoleByObjectID.GetHas(id) {
-				terms = &terminals{}
-				consoleByObjectID.Swap(id, nil, terms)
-			}
-			terms.drop(e.term)
+			delConsole(id, e.term)
 			return nil
 		},
 	}
@@ -288,7 +178,7 @@ func (e *Env) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := e.notify(e.sess.Context(), e.user.Object, connectedEventType, string(b)); err != nil {
+	if err := loadAndCall(e.sess.Context(), e.user.Object, connectedEventType, string(b)); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return e.Process()
@@ -384,6 +274,9 @@ func (e *Env) createUser() error {
 	if err := object.SetSource(userSource); err != nil {
 		return juicemud.WithStack(err)
 	}
+	if err := call(e.sess.Context(), object, "", ""); err != nil {
+		return juicemud.WithStack(err)
+	}
 
 	objectID, err := object.Id()
 	if err != nil {
@@ -400,4 +293,77 @@ func (e *Env) createUser() error {
 
 	fmt.Fprintf(e.term, "Welcome, %v!\n", e.user.Name)
 	return nil
+}
+
+func call(ctx context.Context, object *storage.Object, callbackName string, message string) error {
+	id, err := object.Id()
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	sid := string(id)
+	origin, err := object.Source()
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	state, err := object.State()
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	game, err := GetGame(ctx)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	source, err := game.storage.GetSource(ctx, origin)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	callbacks := map[string]func(fctx *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value{}
+	if console, found := consoleByObjectID.GetHas(sid); found {
+		callbacks["log"] = js.Log(console)
+	}
+	target := js.Target{
+		Source:    string(source),
+		Origin:    origin,
+		State:     state,
+		Callbacks: callbacks,
+	}
+	res, err := target.Call(ctx, callbackName, message, 200*time.Millisecond)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := object.SetState(res.State); err != nil {
+		return juicemud.WithStack(err)
+	}
+	newCallbacks, err := object.NewCallbacks(int32(len(res.Callbacks)))
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	for index, cb := range res.Callbacks {
+		if err := newCallbacks.Set(index, cb); err != nil {
+			return juicemud.WithStack(err)
+		}
+	}
+	if err := object.SetCallbacks(newCallbacks); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return nil
+}
+
+func loadAndCall(ctx context.Context, id []byte, callbackName string, message string) error {
+	sid := string(id)
+	jsContextLocks.Lock(sid)
+	defer jsContextLocks.Unlock(sid)
+
+	game, err := GetGame(ctx)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	object, err := game.storage.GetObject(ctx, id)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := call(ctx, object, callbackName, message); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return juicemud.WithStack(game.storage.SetObject(ctx, object))
 }

@@ -98,6 +98,12 @@ func NewLockMap[K comparable]() *LockMap[K] {
 	return &LockMap[K]{sm: sm}
 }
 
+func (l *LockMap[K]) WithLock(key K, f func()) {
+	l.Lock(key)
+	defer l.Unlock(key)
+	f()
+}
+
 func (l *LockMap[K]) Lock(key K) {
 	for {
 		wg := &sync.WaitGroup{}

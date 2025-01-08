@@ -105,22 +105,22 @@ func (s Object) NewContent(n int32) (capnp.DataList, error) {
 	err = capnp.Struct(s).SetPtr(2, l.ToPtr())
 	return l, err
 }
-func (s Object) Subscriptions() (capnp.TextList, error) {
+func (s Object) Callbacks() (capnp.TextList, error) {
 	p, err := capnp.Struct(s).Ptr(3)
 	return capnp.TextList(p.List()), err
 }
 
-func (s Object) HasSubscriptions() bool {
+func (s Object) HasCallbacks() bool {
 	return capnp.Struct(s).HasPtr(3)
 }
 
-func (s Object) SetSubscriptions(v capnp.TextList) error {
+func (s Object) SetCallbacks(v capnp.TextList) error {
 	return capnp.Struct(s).SetPtr(3, v.ToPtr())
 }
 
-// NewSubscriptions sets the subscriptions field to a newly
+// NewCallbacks sets the callbacks field to a newly
 // allocated capnp.TextList, preferring placement in s's segment.
-func (s Object) NewSubscriptions(n int32) (capnp.TextList, error) {
+func (s Object) NewCallbacks(n int32) (capnp.TextList, error) {
 	l, err := capnp.NewTextList(capnp.Struct(s).Segment(), n)
 	if err != nil {
 		return capnp.TextList{}, err
@@ -421,12 +421,12 @@ type Object_Description capnp.Struct
 const Object_Description_TypeID = 0xa79088abb6334aec
 
 func NewObject_Description(s *capnp.Segment) (Object_Description, error) {
-	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 3})
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 4})
 	return Object_Description(st), err
 }
 
 func NewRootObject_Description(s *capnp.Segment) (Object_Description, error) {
-	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 3})
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 4})
 	return Object_Description(st), err
 }
 
@@ -498,17 +498,40 @@ func (s Object_Description) SetLong(v string) error {
 	return capnp.Struct(s).SetText(1, v)
 }
 
-func (s Object_Description) Challenges() (Object_Challenge_List, error) {
+func (s Object_Description) Tags() (capnp.TextList, error) {
 	p, err := capnp.Struct(s).Ptr(2)
+	return capnp.TextList(p.List()), err
+}
+
+func (s Object_Description) HasTags() bool {
+	return capnp.Struct(s).HasPtr(2)
+}
+
+func (s Object_Description) SetTags(v capnp.TextList) error {
+	return capnp.Struct(s).SetPtr(2, v.ToPtr())
+}
+
+// NewTags sets the tags field to a newly
+// allocated capnp.TextList, preferring placement in s's segment.
+func (s Object_Description) NewTags(n int32) (capnp.TextList, error) {
+	l, err := capnp.NewTextList(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return capnp.TextList{}, err
+	}
+	err = capnp.Struct(s).SetPtr(2, l.ToPtr())
+	return l, err
+}
+func (s Object_Description) Challenges() (Object_Challenge_List, error) {
+	p, err := capnp.Struct(s).Ptr(3)
 	return Object_Challenge_List(p.List()), err
 }
 
 func (s Object_Description) HasChallenges() bool {
-	return capnp.Struct(s).HasPtr(2)
+	return capnp.Struct(s).HasPtr(3)
 }
 
 func (s Object_Description) SetChallenges(v Object_Challenge_List) error {
-	return capnp.Struct(s).SetPtr(2, v.ToPtr())
+	return capnp.Struct(s).SetPtr(3, v.ToPtr())
 }
 
 // NewChallenges sets the challenges field to a newly
@@ -518,7 +541,7 @@ func (s Object_Description) NewChallenges(n int32) (Object_Challenge_List, error
 	if err != nil {
 		return Object_Challenge_List{}, err
 	}
-	err = capnp.Struct(s).SetPtr(2, l.ToPtr())
+	err = capnp.Struct(s).SetPtr(3, l.ToPtr())
 	return l, err
 }
 
@@ -527,7 +550,7 @@ type Object_Description_List = capnp.StructList[Object_Description]
 
 // NewObject_Description creates a new list of Object_Description.
 func NewObject_Description_List(s *capnp.Segment, sz int32) (Object_Description_List, error) {
-	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 3}, sz)
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 4}, sz)
 	return capnp.StructList[Object_Description](l), err
 }
 
@@ -539,47 +562,49 @@ func (f Object_Description_Future) Struct() (Object_Description, error) {
 	return Object_Description(p.Struct()), err
 }
 
-const schema_d258d93c56221e58 = "x\xdalS\xc1k\x14W\x1c\xfe\xbe\xf7fw\xd3\xb0" +
-	"\xdbd\x989\x95\xb6\x1bB\x0fm %MR\xda\x86" +
-	"\x84\x846\x81lH\xe9\xbel[\x82x\x99\x9d\x0c\xbb" +
-	"\x1b\xc7\x99ew\x82 \x82W\xf1$\xfe\x07z\xd0\x83" +
-	"\x88\x07!'\x8fB\x14\xf4`PH\x04\xc1\x8b\xe0A" +
-	"\xc1\xa8W\x1dy\xbb\xce\xec \xb9\xcd\xfb\xde\xef\xfd~" +
-	"\xdf\xef\xfb\xbe\x99\xba\xc8%\xe3\x97\xd2\x9e\x80Pc\xb9" +
-	"|\xfcjmf\xf7\xc6\x85K\xd7a\xda\x8c\xaf=\xbd" +
-	"\xbfp\xee\xf6\xd9;\xc8\xc9\x020S\xa1\xa0\xf5\x1f\x0b" +
-	"\x80\xa5x\x0b\x99{\xb3\xc4x\xf3\xfb\xf1\xff\xe7\x0f7" +
-	"\xf7\x91\x1b\xd2\x15\x1fx\xd5\xca\x89\xdf\x80\x99I\xb1G" +
-	"0\xae\x8c\xdf\xfc\xb8\xb9\xba{\x0f\xcaf\xb6u\xaf\xdf" +
-	"\x82\xb1oU\x0c\xfd\xb5b\xe8\xce\x8d\xbb\xef^^~" +
-	"x\xe5\xf0\xd8\xe2\x17\xc6[\xeb\xa8W\xfc\xda8\x83\xc9" +
-	"8\xaco{n\xf4\xb3+\x9dv\xd0\x9e\xfb\xa7\x7fZ" +
-	"\xf6\xban\xa7\xd5\x8eZa\x80*\xa9\x8a\xd2\x00\x0c\x02" +
-	"\xe6\xca4\xa0\x96$\xd5\xba\xa0I\xda\xd4`e\x02P" +
-	"\xcb\x92\xaa*h\x0aaS\x00\xe6\xdf'\x00\xb5.\xa9" +
-	"\x9a\x82\xe5n3\xecD,B\xb0\x08\x8e\xf8a\xd0H" +
-	"\x0e\xb1\xdbt|\xdf\x0b\x1a\x90^\x97_\x83UI\x8e" +
-	"\x0ev\x005\x98\xd2dB\xb3\xe0\xb9\x91*2#\x8d" +
-	"iN\x0f\x9e\x99\xa5\x8d\x8c\x1d\xa5z\xb9v\xaa\xe5\xfb" +
-	"\xf1_\xc90zq\xb2$\x0a\xad0Pc\xe9\x8a\x8f" +
-	"\xbe\x01\xd4\x03Iu\x90Y\xf1\xc9\x1a\xa0\x1eK\xaa\xe7" +
-	"\x99\x15\x9f\xfd\x09\xa8\x03I\xf5^\xd0\x94\xd2\xa6\x04\xcc" +
-	"\xa3\x0e\xa0\xdeH\xd6\x8a\x144\x0d\xc3\xa6\x01X_q" +
-	"\x0e\xa8\x19\x94\xac\x8di<\x97\xb3\x99\x03\xac\xef\xb8\x0d" +
-	"\xd4\xbe\xd5\xf8\xef\x1a\xcf\xe7m\xe6\x01\xebWN\x03\xb5" +
-	")\x8d\xcfk\xbcP\xb0{\xf6\xfd\xd1\xeb3\xab\xf1%" +
-	"\x0a\xca\xd6\x16K\x10,\x81\xb1\x1f\xbaN\xcf1 \xc1" +
-	"\xce\xbba\x10yA\x94\xe8\xaaa\xadfw\xa7\xde\xdb" +
-	"\x1de\xfd \x95\xbd\xd8\xbf^\xecj\xad2f\xa4\x12" +
-	"\x7f6c+Qn$\xfbzt x\xbf\xae\xdc\x8d" +
-	"\x9c\xc8K\x8c^\xec\x86;\x1d7=\xa6\x8e\x8al\xf0" +
-	"\xb4K\xf4\xbf\x88\xdc\xc4 ri\xe2\xea\x80Z\x95T" +
-	"\xffj;\xd8\xb7Cm\x00\xaa*\xa9N\x0a\x8e\x04\xce" +
-	"\xe9\xc1\xac\xa8\xe9\x85\x1d/j\xa1\xe0:>\x87!8" +
-	"\x0c\xc6\xed\x8e\xe3F-\xd7\x01\x07\xd8\xb1\xactj\xca" +
-	":6\x9ef6\x942\xfbI\xff\x0c?H\xaa\xa9\x01" +
-	"\xb3I\x8d\xfd(\xa9fu\xec\xb5\x90\x09\x8b\xb2\xef5" +
-	"\xbct\xd2\xa7\x00\x00\x00\xff\xff\xe0V\xfb\xcd"
+const schema_d258d93c56221e58 = "x\xdal\x93Kh\xdcV\x18\x85\xcf\xb9W\x9aq\xcd" +
+	"\x8cm!\xadJ\xdb1\xa6\x8b\xb6\xe0\xe2Wiml" +
+	"l\xfa\x00\x8f)\xd4\xd7\xd3\x16S\xbc\xa8F\x163\xb2" +
+	"Ui\x98Q)-.\xed\xb2\xdd\xb5\x85B7]$" +
+	"\x8bd\x11B\x16\x01\xaf\xb2\x0c8\x81d\x11\x93\x80\x1d" +
+	"\x08d\x97,\xb2\xc8k\x1d\x85;\x8e4\"x\xa7{" +
+	"\xee\xaf\xff\xf1\x9d\xffN\xfd\xcf\x15c\xbaz  \xd4" +
+	"\xb8YJ\x1f\xad\xcd\xee_\xf8\xe3\xaf\xf3\xb0\x1c\xa6\xe7" +
+	"\xee^_\xda\xbb\xfc\xcb\x15\x98F\x19\x98\xadS\xd0\xfe" +
+	"\x86e\xc0V|\x80\xc2\xbdUe\xba\xf9\xce\xc4\xb7\x8b" +
+	"\xc7\x9b\x870\x87tD]\x9c\xb5\x95\xf8\x18\x98\xfdY" +
+	"\x1c\x10L\xeb\x13\x17_l\xae\xee_\x83rXL\xdd" +
+	"\xcf\xf7\xa7qh\xff\xab\x8b\xd8\x7f\x1b\x97\xc0\xb4u\xf5" +
+	"\xd9\xc3\x7fn\x9e9>5x\xda|j/\x99\xfak" +
+	"\xde\xfc\x09\x93i\xdc\xdc\xf1\xbd\xe4CO\xba\x9d\xa8\xb3" +
+	"\xf0\xd5\xc9\xe9s\xbf\xe7u\x83N\x12\xc4\x11\xd6I5" +
+	"&\x0d\xc0 `\xb93\x80\xda\x92TmA\x8bt\xa8" +
+	"E\xff\x03@}/\xa9BAK\x08\x87\x02\xb0\x02-" +
+	"nK\xaa\xdf\x05-)\x1dJ\xc0\xfa\xf5;@\xedI" +
+	"\xaa\xff\x04k\xbdv\xdcMX\x81`\x05\x1c\x0d\xe3\xa8" +
+	"\x95\x1f\x12\xb7\xd5\xe3\x08\xb8.\xd9\xd7F\xc0\xd4k\xbb" +
+	"a\xe8G-H?\xbf\x1b\x1b\x0c\x0b\xf6\xa3\xb2y\x98" +
+	"\xcdS\xf6\xbdDUX`hY3\x83\xdf\xac\xeaF" +
+	"\xc1\xb7j\xb3\xd6\xd8\x0d\xc20\xfd,+F?\xcdh" +
+	"\xa0\x1c\xc4\x91\x1a\xcfY\xdcz\x13P7$\xd5Q\x81" +
+	"\xc5\x9d5@\xdd\x96T\xf7\x0b,\xee}\x0a\xa8#I" +
+	"\xf5\xbc\xc0\xe2\xc9\x06\xa0\x1eK6*\x14\xb4\x0c\xc3\xa1" +
+	"\x01\xd8op\x01h\x18\x94l\x8ck\xdd4\x1d\x9a\x80" +
+	"\xfd6w\x80\xc6[Z\xffD\xeb\xa5\x92\xc3\x12`\x7f" +
+	"\xc4\x19\xa01\xa5\xf5E\xad\x97\xcbN\xdf\xe7\xf9~\x9e" +
+	"9\xad\xafPP\x06\xdb\xacB\xb0\x0a\xa6a\xec\xb9}" +
+	"k\x81L\xfb\xcd\x8b\xa3\xc4\x8f\x92\x8ck5c\xee\x86" +
+	"a\xd3\xf5v\xc1\xd7\xedX\xeeiN\x05#r\xbc\xaf" +
+	"\x8c\xd8\xce\xa8\x8d\x06qT\x88\xcba\x9f\xc4\xd5z\x89" +
+	"\x9b\xf8\x99\xf1\xcb\xbd\xf8\xc7\xae\x97\x1fs7Eq;" +
+	"\xb5C\x0c\xf5^Vr/\xbe\xd0\xdb\xb6\"\xa9\xbe\x14" +
+	"\xcc\xac\xa87\x01\xb5*\xa9\xbe\xd6V\xf0\xc4\x0a\xa5\xa9" +
+	"\xafK\xaa-\xc1\xd1\xc8\xfdaP+i\xfbq\xd7O" +
+	"\x02\x94=7\xe40\x04\x87\xc1\xb4\xd3u\xbd$\xf0\\" +
+	"p\xa0\x9d\xda\x95\xde\x98\x9a^\x19_w6\x94w\xf6" +
+	"\xbe~1\xefJ\xaa\xa9Ag\x93Z{OR\xcd\xe9" +
+	"g\xa0Af]\xd4B\xbf\xe5\xe7\x95^\x06\x00\x00\xff" +
+	"\xff!\x81\xfep"
 
 func RegisterSchema(reg *schemas.Registry) {
 	reg.Register(&schemas.Schema{

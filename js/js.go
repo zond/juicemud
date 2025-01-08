@@ -47,27 +47,11 @@ func newMachine() (*machine, error) {
 	return m, nil
 }
 
-type FunContext struct {
-	m    *machine
-	vctx *v8go.Context
-}
-
-func (c *FunContext) String(s string) *v8go.Value {
-	if result, err := v8go.NewValue(c.m.iso, s); err == nil {
-		return result
-	}
-	return c.m.unableToGenerateString
-}
-
-func (c *FunContext) Context() *v8go.Context {
-	return c.vctx
-}
-
 type Target struct {
 	Source    string
 	Origin    string
 	State     string
-	Callbacks map[string]func(fctx *FunContext, args *v8go.FunctionCallbackInfo) *v8go.Value
+	Callbacks map[string]func(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value
 }
 
 type Result struct {
@@ -75,40 +59,51 @@ type Result struct {
 	Callbacks []string
 }
 
-type runContext struct {
+type RunContext struct {
 	m         *machine
+	vctx      *v8go.Context
 	t         *Target
 	callbacks map[string]*v8go.Function
 }
 
-func (rc *runContext) addJSCallback(fctx *FunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+func (rc *RunContext) Context() *v8go.Context {
+	return rc.vctx
+}
+
+func (rc *RunContext) String(s string) *v8go.Value {
+	if res, err := v8go.NewValue(rc.m.iso, s); err == nil {
+		return res
+	}
+	return rc.m.unableToGenerateString
+}
+
+func addJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 	args := info.Args()
 	if len(args) == 2 && args[0].IsString() && args[1].IsFunction() {
 		eventType := args[0].String()
 		fun, err := args[1].AsFunction()
 		if err != nil {
-			return fctx.Context().Isolate().ThrowException(fctx.String("unable to cast callback to *v8go.Function"))
+			return rc.Context().Isolate().ThrowException(rc.String("unable to cast callback to *v8go.Function"))
 		}
 		rc.callbacks[eventType] = fun
 		return nil
 	}
-	return fctx.Context().Isolate().ThrowException(fctx.String("addEventListener takes [string, function] arguments"))
+	return rc.Context().Isolate().ThrowException(rc.String("addEventListener takes [string, function] arguments"))
 }
 
-func (rc *runContext) removeJSCallback(fctx *FunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+func removeJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 	args := info.Args()
 	if len(args) == 1 && args[0].IsString() {
 		delete(rc.callbacks, args[0].String())
 		return nil
 	}
-	return fctx.Context().Isolate().ThrowException(fctx.String("removeEventListener takes [string] arguments"))
+	return rc.Context().Isolate().ThrowException(rc.String("removeEventListener takes [string] arguments"))
 }
 
-func (rc *runContext) addCallback(
+func (rc *RunContext) addCallback(
 	tmpl *v8go.ObjectTemplate,
-	fctx *FunContext,
 	name string,
-	f func(*FunContext, *v8go.FunctionCallbackInfo) *v8go.Value,
+	f func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value,
 ) error {
 	return juicemud.WithStack(
 		tmpl.Set(
@@ -116,7 +111,7 @@ func (rc *runContext) addCallback(
 			v8go.NewFunctionTemplate(
 				rc.m.iso,
 				func(info *v8go.FunctionCallbackInfo) *v8go.Value {
-					return f(fctx, info)
+					return f(rc, info)
 				},
 			),
 			v8go.ReadOnly,
@@ -124,17 +119,12 @@ func (rc *runContext) addCallback(
 	)
 }
 
-func (rc *runContext) createV8Context(iso *v8go.Isolate) (*v8go.Context, error) {
-	fctx := &FunContext{
-		m: rc.m,
-	}
-
+func (rc *RunContext) createV8Context(iso *v8go.Isolate, timeout *time.Duration) (*v8go.Context, error) {
 	globalTemplate := v8go.NewObjectTemplate(iso)
 
 	for name, fun := range rc.t.Callbacks {
 		if err := rc.addCallback(
 			globalTemplate,
-			fctx,
 			name,
 			fun,
 		); err != nil {
@@ -143,49 +133,53 @@ func (rc *runContext) createV8Context(iso *v8go.Isolate) (*v8go.Context, error) 
 	}
 	for _, cb := range []struct {
 		name string
-		fun  func(*FunContext, *v8go.FunctionCallbackInfo) *v8go.Value
+		fun  func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value
 	}{
 		{
 			name: "addCallback",
-			fun:  rc.addJSCallback,
+			fun:  addJSCallback,
 		},
 		{
 			name: "removeCallback",
-			fun:  rc.removeJSCallback,
+			fun:  removeJSCallback,
 		},
 	} {
-		if err := rc.addCallback(globalTemplate, fctx, cb.name, cb.fun); err != nil {
+		if err := rc.addCallback(globalTemplate, cb.name, cb.fun); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}
 
-	fctx.vctx = v8go.NewContext(rc.m.iso, globalTemplate)
+	vctx := v8go.NewContext(rc.m.iso, globalTemplate)
 
 	stateJSON := rc.t.State
 	if stateJSON == "" {
 		stateJSON = "{}"
 	}
-	stateValue, err := v8go.JSONParse(fctx.vctx, stateJSON)
+	startTime := time.Now()
+	stateValue, err := v8go.JSONParse(vctx, stateJSON)
+	*timeout -= time.Since(startTime)
 	if err != nil {
+		vctx.Close()
 		return nil, juicemud.WithStack(err)
 	}
-	if err := fctx.vctx.Global().Set(stateName, stateValue); err != nil {
+	if err := vctx.Global().Set(stateName, stateValue); err != nil {
+		vctx.Close()
 		return nil, juicemud.WithStack(err)
 	}
 
-	return fctx.vctx, nil
+	return vctx, nil
 }
 
 var (
 	ErrTimeout = fmt.Errorf("Timeout")
 )
 
-func (rc *runContext) withTimeout(_ context.Context, f func() error, timeout *time.Duration) error {
+func (rc *RunContext) withTimeout(_ context.Context, f func() error, timeout *time.Duration) error {
 	errs := make(chan error, 1)
 	go func() {
 		t := time.Now()
-		defer func() { *timeout -= time.Since(t) }()
 		errs <- f()
+		*timeout -= time.Since(t)
 	}()
 
 	select {
@@ -197,20 +191,23 @@ func (rc *runContext) withTimeout(_ context.Context, f func() error, timeout *ti
 	}
 }
 
-func (t *Target) Call(ctx context.Context, callbackName string, message string, timeout time.Duration) (*Result, error) {
+func (t Target) Call(ctx context.Context, callbackName string, message string, timeout time.Duration) (*Result, error) {
 	m := <-machines
 	defer func() { machines <- m }()
 
-	rc := &runContext{
+	rc := &RunContext{
 		m:         m,
-		t:         t,
+		t:         &t,
 		callbacks: map[string]*v8go.Function{},
 	}
-	vctx, err := rc.createV8Context(m.iso)
+
+	vctx, err := rc.createV8Context(m.iso, &timeout)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	defer vctx.Close()
+
+	rc.vctx = vctx
 
 	if err := rc.withTimeout(ctx, func() error {
 		_, err := vctx.RunScript(t.Source, t.Origin)
@@ -221,14 +218,14 @@ func (t *Target) Call(ctx context.Context, callbackName string, message string, 
 
 	jsCB, found := rc.callbacks[callbackName]
 	if !found {
-		return rc.collectResult(vctx)
+		return collectResult(rc)
 	}
 
 	var val *v8go.Value
 	if message != "" {
 		var err error
 		start := time.Now()
-		if val, err = v8go.JSONParse(vctx, message); err != nil {
+		if val, err = v8go.JSONParse(rc.vctx, message); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 		timeout -= time.Since(start)
@@ -237,24 +234,24 @@ func (t *Target) Call(ctx context.Context, callbackName string, message string, 
 	if err := rc.withTimeout(ctx, func() error {
 		var err error
 		if val != nil {
-			_, err = jsCB.Call(vctx.Global(), val)
+			_, err = jsCB.Call(rc.vctx.Global(), val)
 		} else {
-			_, err = jsCB.Call(vctx.Global())
+			_, err = jsCB.Call(rc.vctx.Global())
 		}
 		return juicemud.WithStack(err)
 	}, &timeout); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	return rc.collectResult(vctx)
+	return collectResult(rc)
 }
 
-func (rc *runContext) collectResult(vctx *v8go.Context) (*Result, error) {
+func collectResult(rc *RunContext) (*Result, error) {
 	result := &Result{}
-	stateValue, err := vctx.Global().Get(stateName)
+	stateValue, err := rc.vctx.Global().Get(stateName)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	if result.State, err = v8go.JSONStringify(vctx, stateValue); err != nil {
+	if result.State, err = v8go.JSONStringify(rc.vctx, stateValue); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	for name := range rc.callbacks {
@@ -263,8 +260,8 @@ func (rc *runContext) collectResult(vctx *v8go.Context) (*Result, error) {
 	return result, nil
 }
 
-func Log(w io.Writer) func(*FunContext, *v8go.FunctionCallbackInfo) *v8go.Value {
-	return func(ctx *FunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+func Log(w io.Writer) func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value {
+	return func(ctx *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		anyArgs := []any{}
 		for _, arg := range info.Args() {
 			stringArg := arg.String()
