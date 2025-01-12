@@ -38,6 +38,23 @@ func TestArrays(t *testing.T) {
 	if v := idx2.String(); v != "c" {
 		t.Errorf("wanted 'c', got %v", v)
 	}
+	f, err := v8go.NewValue(iso, "f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := aObj.MethodCall("push", f); err != nil {
+		t.Error(err)
+	}
+	idx5, err := aObj.Get("5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !idx5.IsString() {
+		t.Errorf("%v is no string", idx5)
+	}
+	if v := idx5.String(); v != "f" {
+		t.Errorf("wanted 'f', got %v", v)
+	}
 }
 
 func TestBasics(t *testing.T) {

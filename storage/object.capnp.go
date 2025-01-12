@@ -354,12 +354,12 @@ type Object_Challenge capnp.Struct
 const Object_Challenge_TypeID = 0xd9a1cd92e8f3c467
 
 func NewObject_Challenge(s *capnp.Segment) (Object_Challenge, error) {
-	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 1})
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 2})
 	return Object_Challenge(st), err
 }
 
 func NewRootObject_Challenge(s *capnp.Segment) (Object_Challenge, error) {
-	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 1})
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 2})
 	return Object_Challenge(st), err
 }
 
@@ -421,12 +421,30 @@ func (s Object_Challenge) SetLevel(v float32) {
 	capnp.Struct(s).SetUint32(0, math.Float32bits(v))
 }
 
+func (s Object_Challenge) FailMessage() (string, error) {
+	p, err := capnp.Struct(s).Ptr(1)
+	return p.Text(), err
+}
+
+func (s Object_Challenge) HasFailMessage() bool {
+	return capnp.Struct(s).HasPtr(1)
+}
+
+func (s Object_Challenge) FailMessageBytes() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(1)
+	return p.TextBytes(), err
+}
+
+func (s Object_Challenge) SetFailMessage(v string) error {
+	return capnp.Struct(s).SetText(1, v)
+}
+
 // Object_Challenge_List is a list of Object_Challenge.
 type Object_Challenge_List = capnp.StructList[Object_Challenge]
 
 // NewObject_Challenge creates a new list of Object_Challenge.
 func NewObject_Challenge_List(s *capnp.Segment, sz int32) (Object_Challenge_List, error) {
-	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 8, PointerCount: 1}, sz)
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 8, PointerCount: 2}, sz)
 	return capnp.StructList[Object_Challenge](l), err
 }
 
@@ -591,12 +609,12 @@ type Object_Exit capnp.Struct
 const Object_Exit_TypeID = 0xdd6ce297dd67d15e
 
 func NewObject_Exit(s *capnp.Segment) (Object_Exit, error) {
-	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 4})
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 6})
 	return Object_Exit(st), err
 }
 
 func NewRootObject_Exit(s *capnp.Segment) (Object_Exit, error) {
-	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 4})
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 6})
 	return Object_Exit(st), err
 }
 
@@ -678,35 +696,86 @@ func (s Object_Exit) NewUseChallenges(n int32) (Object_Challenge_List, error) {
 	err = capnp.Struct(s).SetPtr(1, l.ToPtr())
 	return l, err
 }
-func (s Object_Exit) UseFailureDescription() (string, error) {
-	p, err := capnp.Struct(s).Ptr(2)
-	return p.Text(), err
-}
-
-func (s Object_Exit) HasUseFailureDescription() bool {
-	return capnp.Struct(s).HasPtr(2)
-}
-
-func (s Object_Exit) UseFailureDescriptionBytes() ([]byte, error) {
-	p, err := capnp.Struct(s).Ptr(2)
-	return p.TextBytes(), err
-}
-
-func (s Object_Exit) SetUseFailureDescription(v string) error {
-	return capnp.Struct(s).SetText(2, v)
-}
-
-func (s Object_Exit) Destination() ([]byte, error) {
+func (s Object_Exit) LookChallenges() (Object_Challenge_List, error) {
 	p, err := capnp.Struct(s).Ptr(3)
+	return Object_Challenge_List(p.List()), err
+}
+
+func (s Object_Exit) HasLookChallenges() bool {
+	return capnp.Struct(s).HasPtr(3)
+}
+
+func (s Object_Exit) SetLookChallenges(v Object_Challenge_List) error {
+	return capnp.Struct(s).SetPtr(3, v.ToPtr())
+}
+
+// NewLookChallenges sets the lookChallenges field to a newly
+// allocated Object_Challenge_List, preferring placement in s's segment.
+func (s Object_Exit) NewLookChallenges(n int32) (Object_Challenge_List, error) {
+	l, err := NewObject_Challenge_List(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return Object_Challenge_List{}, err
+	}
+	err = capnp.Struct(s).SetPtr(3, l.ToPtr())
+	return l, err
+}
+func (s Object_Exit) SniffChallenges() (Object_Challenge_List, error) {
+	p, err := capnp.Struct(s).Ptr(4)
+	return Object_Challenge_List(p.List()), err
+}
+
+func (s Object_Exit) HasSniffChallenges() bool {
+	return capnp.Struct(s).HasPtr(4)
+}
+
+func (s Object_Exit) SetSniffChallenges(v Object_Challenge_List) error {
+	return capnp.Struct(s).SetPtr(4, v.ToPtr())
+}
+
+// NewSniffChallenges sets the sniffChallenges field to a newly
+// allocated Object_Challenge_List, preferring placement in s's segment.
+func (s Object_Exit) NewSniffChallenges(n int32) (Object_Challenge_List, error) {
+	l, err := NewObject_Challenge_List(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return Object_Challenge_List{}, err
+	}
+	err = capnp.Struct(s).SetPtr(4, l.ToPtr())
+	return l, err
+}
+func (s Object_Exit) HearChallenges() (Object_Challenge_List, error) {
+	p, err := capnp.Struct(s).Ptr(5)
+	return Object_Challenge_List(p.List()), err
+}
+
+func (s Object_Exit) HasHearChallenges() bool {
+	return capnp.Struct(s).HasPtr(5)
+}
+
+func (s Object_Exit) SetHearChallenges(v Object_Challenge_List) error {
+	return capnp.Struct(s).SetPtr(5, v.ToPtr())
+}
+
+// NewHearChallenges sets the hearChallenges field to a newly
+// allocated Object_Challenge_List, preferring placement in s's segment.
+func (s Object_Exit) NewHearChallenges(n int32) (Object_Challenge_List, error) {
+	l, err := NewObject_Challenge_List(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return Object_Challenge_List{}, err
+	}
+	err = capnp.Struct(s).SetPtr(5, l.ToPtr())
+	return l, err
+}
+func (s Object_Exit) Destination() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(2)
 	return []byte(p.Data()), err
 }
 
 func (s Object_Exit) HasDestination() bool {
-	return capnp.Struct(s).HasPtr(3)
+	return capnp.Struct(s).HasPtr(2)
 }
 
 func (s Object_Exit) SetDestination(v []byte) error {
-	return capnp.Struct(s).SetData(3, v)
+	return capnp.Struct(s).SetData(2, v)
 }
 
 // Object_Exit_List is a list of Object_Exit.
@@ -714,7 +783,7 @@ type Object_Exit_List = capnp.StructList[Object_Exit]
 
 // NewObject_Exit creates a new list of Object_Exit.
 func NewObject_Exit_List(s *capnp.Segment, sz int32) (Object_Exit_List, error) {
-	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 4}, sz)
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 6}, sz)
 	return capnp.StructList[Object_Exit](l), err
 }
 
@@ -726,58 +795,61 @@ func (f Object_Exit_Future) Struct() (Object_Exit, error) {
 	return Object_Exit(p.Struct()), err
 }
 
-const schema_d258d93c56221e58 = "x\xda\x8c\x94O\x88\x1cE\x18\xc5\xdf\xab\x9a\x9eY\xc3" +
-	"Nv\x9b\xee=\xac\x07[\xc3\x06b \x12w=h" +
-	"\x88$\xa8\xd1$\x04\xdc\xda\x09\xb2H\x90\xf4\xf4\x143" +
-	"\xbdi\xbb\x87\xe9\x1e]e\x17\xf5\xe6Q%\xa0\x07\x05" +
-	"\xf5\xa0\x82\x88\xa8\x98\x93\x1e\x04\x0f*x0\xb7\x08\xb9" +
-	"xI\x0e\x0a\xfe\xc9E\x10[\xaag\xbb\xa7Y\x16\xf5" +
-	"\xd6\xf5\xabo\xaa\xbez\xef}s\xb4-N6\xeem" +
-	"{\x12B-Y\xcd\xfc\xe7\xb3+W>|\xf9\x95\xf7" +
-	"a\xbb\xcc\xdf\xfb\xf1\xdb\x07\xb7>{\xfe\x0bX\x8d\x16" +
-	"\xb02\xa6\xa0\xf3\x12[\x80\xb3\xcd\x1b\xa8\xed\xdbm\xe6" +
-	"\xebw\x1cx\xe2\xf8\xb5\xf5\xab\xb0n3\x15c\xf1\xae" +
-	"\xb3-\x1e\x03V>\x119\xc1\xfc\xcc\x81\x8f\xfe^?" +
-	"}\xe5\x1b(\x97\xf5\xa3\x8b\xf3\xda\xd6Ug\xd12_" +
-	"\x0b\xd6\xc7`\xde\xff\xfa\x8f\x9b\xaf}\xff\xce\xb5=\x8b" +
-	"?\xb7~w\xbe*\x8a\xbf\xb4\x9e\x05\xf3\xa7~\xe8_" +
-	"\x7f\xfd\xa7\xe8\xfa\x1e=;\x8b\xcd\xef\x9c\x83M\xf3u" +
-	"W\xf3\x06\x8e\xe4IwC\x07\xd9=\x81\xf4\x87\xf1\xf0" +
-	"\xd8\xe3\x93\xd5#:\x0dF\xe10\x0b\x93\x18\xab\xa4\x9a" +
-	"\x97\x0d\xa0A\xc0\xf6\x97\x01uAR\x0d\x04m\xd2\xa5" +
-	"\x81\xfa0\xa0.J\xaaH\xd0\x16\xc2\xa5\x00\xec\xd0\xc0" +
-	"\x9e\xa4zQ\xd0\x96\xd2\xa5\x04\xec\xed'\x01\xb5%\xa9" +
-	"\xde\x10\xf4\xd2A2\xca8\x0b\xc1Yp.J\xe2~" +
-	"\xb5\xc8\xfc~\xca\xfd\xe0\xaad\xc1\xf6\x83y0\xf0\xa3" +
-	"H\xc7}H]\xed\xcdO\x85\x01\x8b\xaa\xf2=,\xdf" +
-	"\xd3\xd2A\xa6\xe6Y\xd3\xdb^\\\x9e\xfe\xcc^X\xab" +
-	"y\xbc\xd0\xad\x89\xb7p\xd8\xeb\\\x0a\xa3(\x7f\xb8\xbc" +
-	"\x99:/\xa5A+L\xe2\xb9S\x9ba\xa6\x96*u" +
-	"~\xb9\x1dP7%\xd5\xad\x9a:\xbf\x9d\x05\xd4\xaf\x92" +
-	"\xea\xaf\x9a:\x7f>\x04\xa8[\x92\x9dyN\xe5q\xda" +
-	"\\\x03:\xb3\x94\xec\x1c2\xbc\xd1p\xd9\x00\x9c\x83<" +
-	"\x06t\xee4\xfc\xb8\xe1\x96\xe5\xd2\x02\x9c\x07\xb8\x01t" +
-	"\xee7\xfc\xbc\xe1\xcd\xa6\xcb&\xe0(.\x03\x9ds\x86" +
-	"\x0f\x0co\xb5\xdc\"(\xba\xe0\x17\x0d\x8f\x0c\x9f\x99q" +
-	"9\x038aq~\xcf\xf0!\x05e\xd8c\x1b\x82m" +
-	"0\x8f\x92\xc0/r\x00\x94\xec\x85 \x893\x1dg\xa5" +
-	"\x09\xed\xd2 ?\x8a\xba~p\x09\xdc\xed\xdd\x89\xd4\xe8" +
-	"Xs\xad\xf2b\xc7\xb5^\xa9\xea\\\x98\xc4\xb5\xba\xca" +
-	"\x99I\x9d\xa77\xc3\xac\xb6]y\xb5\xb3\x9df~\xa6" +
-	"\xcb\x10\x9dH\x93\xf1(\xa8\x96U2D=\xe9\xc6`" +
-	"F&\xe3\xb3\x95\x8b\xa7LrOJ\xaas\x82\xa5\x89" +
-	"g\xba\x80:-\xa9\xce\x1b\x1391Q\xad\x01jU" +
-	"R]\x10\x9c\x8b\xfd\xa7\xa7we\x03\x9d\x8ct\x16\xa2" +
-	"\x15\xf8\x11\xf7Ap\x1f\x98\x0fG~\x90\x85\x81\x0fN" +
-	"\xd9\x9e]\x99\xc0y&q\xdat6Suv\xb7\x99" +
-	"\xbe%Iut\xda\xd9\x11\xc3\x0eI\xaa\xfb\xccH\x19" +
-	"\x9d\xcb.\xbcH?\xa3\xff\xe3&\x13`\xec\x9e\xf1\x8d" +
-	"\x9dq\xde\xaa\xa5\xf8\xb9\x11\xa06%\xd5\xe5Z\x8a_" +
-	"\xfd\x14P\x97%\xd5\xdb\xb5\x19\x7f\xcbH\xf5\xa6\xa4\xfa" +
-	"@\xfcoc\xf3q\xaa\x8b)\x83g^\xfd/\xf3=" +
-	"N\xf5\xa3~\x18\x8d9\xd2\x93Q\xf4\x8a\xbf\xa9J\xf9" +
-	"\x9eN\xb30\xf6'\xf3Y&\xf6\x9f\x00\x00\x00\xff\xff" +
-	"\x94\x95a_"
+const schema_d258d93c56221e58 = "x\xda\x8cTOh\x1cU\x1c\xfe\xbe\xf7vvc\xc9" +
+	"6\x19f\x02V\xc4\x95RA\x0a\x8a&\x17-\x95\x14" +
+	"\xdbbZR\xcc\xcb\x16\x8dR\xa4\x93\xd9\x97\xddI\xc6" +
+	"\x99eg\"%4\xf8\xe7\xe4Q\xbcX\x8fz\xd0\x83" +
+	"\x88\x16\xb5'=\x08\x1eZQ\xb0\xc5K\x85^\xbcX" +
+	"\xa1\x82\x7fz\x11\xc4\x917\xbb3;\x84\xda\xf66\xf3" +
+	"\xbdo\xde\xfb\xe6\xfb\xbe\xdf{lA\x1c\xaa=\xdel" +
+	"I\x08\xb5\xcf\xaag7\x8e\xcf]\xf8\xe8\xcd\xb7>\x84" +
+	"\xed2\xfb\xe0\xa7KO\x9d\xfdl\xebKX\xb5\x060" +
+	"\xb7IA\xe7u6\x00g\x9b\xbf\xa0\xb2n7\x99\xad" +
+	"<\xb0\xf7\xb9\x83WW\xae\xc0\xba\xc706\xc5\xfb\xce" +
+	"\xb6x\x06\x98;/2\x82\xd9\xb1\xbd\x1f\xff\xbb\xb2p" +
+	"\xe1\"\x94\xcb\xea\xd6\xf9~M\xeb\x8a\xb3\xc72O3" +
+	"\xd6'`\xd6\xfd\xe6\xaf\xebo\x7f\xff\xde\xd5\x9dda" +
+	"(_X\x7f:_\xe7\xe4\xafr\xf2K\x97\xbb\xd7\xde" +
+	"\xf99\xbc\xb6Cs\xdd0^\xa8\x7f\xebh\xf34\xe7" +
+	"\xd5\x9f'\x1e\xc9\xe2\xd5u\xed\xa7\x8f\xfa\xd2\xebG\xfd" +
+	"\x03\xcf\x0e\xdf\x8e\xe8\xc4\x1f\x04\xfd4\x88#,\x91j" +
+	"Z\xd6\x80\x1a\x01\xdb\x9b\x05\xd4)I\xd5\x13\xb4I\x97" +
+	"\x06\xd4\xfb\x01uZR\x85\x82\xb6\x10.\x05`\x07\x06" +
+	"\xecH\xaa\xd7\x04m)]J\xc0\xde~\x11Pg%" +
+	"\xd59\xc1V\xd2\x8b\x07)'!8\x09N\x85q\xd4" +
+	"-_R\xaf\x9bp7\xb8$\x99c\xbb\xc1\xcc\xefy" +
+	"a\xa8\xa3.\xa4.\xd7\xa6\xc7\xce\x809\xab\xf8\x1f\x16" +
+	"\xff\xd3\xd0~\xaa\xa6Y1\xdc\xde3;\xfe\xcc\x9eY" +
+	"\xae\x84<\xb3Zqof\x7f\xab\xbd\x11\x84av\xb8" +
+	"8\x99:+\xacA#\x88\xa3\xa9\xa3g\x82T\xed+" +
+	"\xdd\xf9\xed>@]\x97T7+\xee\xfcq\x1cP\xbf" +
+	"K\xaa\x7f*\xee\xfc\xfd4\xa0nJ\xb6\xa79\xb6\xc7" +
+	"ir\x19hOR\xb2\xfd\xb0\xc1k5\x975\xc0y" +
+	"\x88\x07\x80\xf6\x83\x06?hp\xcbri\x01\xce\x93\\" +
+	"\x07\xdaO\x18\xfc\xa4\xc1\xebu\x97u\xc0Q\x9c\x05\xda" +
+	"\x8b\x06\xef\x19\xbc\xd1p\xf3Z\xe9\x1c?m\xf0\xd0\xe0" +
+	"\x13\x13.'\x00'\xc8\xf7\xef\x18\xbcOA\x19t\xd8" +
+	"\x84`\x13\xcc\xc2\xd8\xf7\xf2\x1e\x00\x05\xf6\xaa\x1fG\xa9" +
+	"\x8e\xd2\"\x84f\x11\x90\x17\x86\xab\x9e\xbf\x01\xee\xccn" +
+	">1>VR+\xb3\x18\xa5\xd6)\\\x9d\x0a\xe2\xa8" +
+	"\xc2+\x93\x19\xf2Z\xfaL\x90V\x96\xcb\xacF\xcbI" +
+	"\xea\xa5\xba(\xd1|\x12o\x0e\xfc\xf2\xb5l\x86\xa86" +
+	"\xdd\x04\xcc\xd0t|\xb2L\xf1\xa8i\xee!I\xb5(" +
+	"X\x84xl\x15P\x0b\x92\xea\xa4\x09\x91\xc3\x10\xd52" +
+	"\xa0\x96$\xd5)\xc1\xa9\xc8{y|V\xda\xd3\xf1@" +
+	"\xa7\x01\x1a\xbe\x17r\x17\x04w\x81Y\x7f\xe0\xf9i\xe0" +
+	"{\xe0\x18\xbb\xa5*S\xb8\x96i\x9c\xde\xa1l\xf6\x16" +
+	"\xca\x0cvDR-U\x94\x9d0r\x17%\xd5\x8a\x99" +
+	"3c~!\xad\x15\xeaW\xf4\xf8\xf85/\x08O\xe8" +
+	"$A\xc3\xeb\xde\xc1*\xd3u\xe4\xd7\xc1\xbd\xa5\xa0w" +
+	"\xd7\x01uNR}^)\xfc\xf9\x01\xa0>\x95T\xdf" +
+	"\x99\xaa\x8e\x0a\x7f\xc9(\xba(\xa9~42G\xd7\xc1" +
+	"\xe5-@\xfd \xa9n\x98!\x18\x96\xdd\xfe\xf5\x8d\xe1" +
+	"\x10\xb5k\xf9\x08\x8c\xaaNn\x01\xcb\xa6\xa1\xf7S\xdc" +
+	"ua\xb2\xcdD\xe7\xd3\x8b\x96q\xf36\xf7FG'" +
+	"i\x10y\xc3\xb9\xae\xb4?\xde0\xdfc>\xbc\xc3\xf7" +
+	"I\x14\xac\xad\x1d\xeey\x0c\x87L\xfc?\xb5\xa7\xbd\xc1" +
+	"]m\xfa_\x00\x00\x00\xff\xff\xeb6\x92\xee"
 
 func RegisterSchema(reg *schemas.Registry) {
 	reg.Register(&schemas.Schema{

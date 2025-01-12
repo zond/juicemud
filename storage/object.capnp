@@ -36,6 +36,9 @@ struct Object {
 
         level @1 :Float32;
         # Level of challenge.
+
+        failMessage @2 :Text;
+        # Message, if applicable, when this challenge fails.
     }
 
     # Descriptions of something. Ordered by decreasing difficulty, the first one detected is the one shown.
@@ -63,10 +66,16 @@ struct Object {
         useChallenges @1 :List(Challenge);
         # Skill challenges to overcome to use this Exit.
 
-        useFailureDescription @2 :Text;
-        # Message shown when failing to use the Exit due to challenges.
+        lookChallenges @3 :List(Challenge);
+        # Skill challenges to overcome to look through this Exit.
 
-        destination @3 :Data;
+        sniffChallenges @4 :List(Challenge);
+        # Skill challenges to overcome to sniff through this Exit.
+
+        hearChallenges @5 :List(Challenge);
+        # Skill challenges to overcome to hear through this Exit.
+
+        destination @2 :Data;
         # Object this exit leads to.
     }
 

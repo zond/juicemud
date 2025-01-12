@@ -2,17 +2,16 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"os"
-	"reflect"
 	"testing"
-	"time"
 
 	"github.com/estraier/tkrzw-go"
+	"github.com/go-test/deep"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/glue"
-	"github.com/zond/juicemud/js"
 	"rogchap.com/v8go"
 )
 
@@ -117,85 +116,114 @@ func TestObjectHelper(t *testing.T) {
 	}
 }
 
-func TestObjectCopy(t *testing.T) {
-	ctx := context.Background()
-	obj, err := MakeObject(ctx)
-	if err != nil {
-		t.Fatal(err)
+const (
+	objectJSON = `{
+  "Id": "deadbeef",
+  "Location": "beefdead",
+  "Content": ["dead", "beef"],
+  "Callbacks": ["cb1", "cb2"],
+  "Skills": [
+    {
+      "Name": "skill1",
+	  "Theoretical": 2.0,
+	  "Practical": 1.5
+    },
+    {
+      "Name": "skill2",
+	  "Theoretical": 3.0,
+	  "Practical": 2.5
+    }
+  ],
+  "Descriptions": [
+    {
+      "Short": "short1",
+	  "Long": "long1",
+	  "Tags": ["tag11", "tag12"],
+	  "Challenges": [
+	    {
+	  	  "Skill": "skill1",
+		  "Level": 2.0,
+		  "FailMessage": "mess11"
+	    },
+		{
+	  	  "Skill": "skill2",
+		  "Level": 3.0,
+		  "FailMessage": "mess12"
+		}
+	  ]
+    },
+	{
+      "Short": "short2",
+	  "Long": "long2",
+	  "Tags": ["tag21", "tag22"],
+	  "Challenges": [
+	    {
+	  	  "Skill": "skill1",
+		  "Level": 3.0,
+		  "FailMessage": "mess21"
+	    },
+		{
+	  	  "Skill": "skill2",
+		  "Level": 4.0,
+		  "FailMessage": "mess22"
+		}
+	  ]
 	}
-	target := js.Target{
-		Source: `
-set(["a", "b"]);
-`,
-		Origin: "test",
-		Callbacks: map[string]func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value{
-			"set": func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-				if err := glue.CreateAndCopy(obj.NewCallbacks, info.Args()[0]); err != nil {
-					rc.Throw("trying to copy from %v: %v", info.Args()[0], err)
-				}
-				return nil
-			},
-		},
-	}
-	if _, err := target.Call(ctx, "", "", time.Second); err != nil {
-		log.Print(juicemud.StackTrace(err))
-		t.Fatal(err)
-	}
-	wantCB := []string{"a", "b"}
-	if gotCB, err := OH(obj).Callbacks().All(); err != nil || !reflect.DeepEqual(gotCB, wantCB) {
-		t.Errorf("got %+v, %v, want %+v, nil", gotCB, err, wantCB)
-	}
+  ],
+  "State": "",
+  "Exits": [],
+  "Source": ""
+}`
+)
 
-	target = js.Target{
-		Source: `
-set([{"Name": "a", "Theoretical": 1.5, "Practical": 1.0}, {"Name": "b", "Theoretical": 2.3, "Practical": 2.1}]);
-`,
-		Origin: "test",
-		Callbacks: map[string]func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value{
-			"set": func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-				if err := glue.CreateAndCopy(obj.NewSkills, info.Args()[0]); err != nil {
-					rc.Throw("trying to copy from %v: %v", info.Args()[0], err)
-				}
-				return nil
-			},
-		},
+func TestObjectCreateAndCopy(t *testing.T) {
+	iso := v8go.NewIsolate()
+	ctx := v8go.NewContext(iso)
+	wantV8, err := v8go.JSONParse(ctx, objectJSON)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := target.Call(ctx, "", "", time.Second); err != nil {
+	obj, err := MakeObject(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := glue.Copy(*obj, wantV8); err != nil {
+		t.Fatal(err)
+	}
+	gotV8, err := glue.ToV8(ctx, *obj)
+	if err != nil {
 		log.Print(juicemud.StackTrace(err))
 		t.Fatal(err)
 	}
-	skills, err := obj.Skills()
+	wantJSON, err := v8go.JSONStringify(ctx, wantV8)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if skills.Len() != 2 {
-		t.Errorf("wanted 2, got %v", skills.Len())
+	wantDec := map[string]any{}
+	if err := json.Unmarshal([]byte(wantJSON), &wantDec); err != nil {
+		t.Fatal(err)
 	}
-	skillList, err := obj.Skills()
+	wantIndentJSON, err := json.MarshalIndent(wantDec, "  ", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if skillList.Len() != 2 {
-		t.Errorf("got %v, want 2", skillList.Len())
+	gotJSON, err := v8go.JSONStringify(ctx, gotV8)
+	if err != nil {
+		t.Fatal(err)
 	}
-	skill0 := skillList.At(0)
-	if name, err := skill0.Name(); err != nil || name != "a" {
-		t.Errorf("got %v, %v, want 'a', nil", name, err)
+	gotDec := map[string]any{}
+	if err := json.Unmarshal([]byte(gotJSON), &gotDec); err != nil {
+		t.Fatal(err)
 	}
-	if theo := skill0.Theoretical(); theo != 1.5 {
-		t.Errorf("got %v, want 1.5", theo)
+	gotIndentJSON, err := json.MarshalIndent(gotDec, "  ", "  ")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if prac := skill0.Practical(); prac != 1.0 {
-		t.Errorf("got %v, want 1.0", prac)
-	}
-	skill1 := skillList.At(1)
-	if name, err := skill1.Name(); err != nil || name != "b" {
-		t.Errorf("got %v, %v, want 'b', nil", name, err)
-	}
-	if theo := skill1.Theoretical(); theo != 2.3 {
-		t.Errorf("got %v, want 2.3", theo)
-	}
-	if prac := skill1.Practical(); prac != 2.1 {
-		t.Errorf("got %v, want 2.1", prac)
+	diff := deep.Equal(wantDec, gotDec)
+	if len(diff) > 0 {
+		t.Logf("--- Wanted ---\n%s\n--- but got ---\n%s", string(wantIndentJSON), string(gotIndentJSON))
+		for _, d := range diff {
+			t.Error(d)
+		}
 	}
 }
