@@ -18,10 +18,22 @@ const (
 	genesisSource = "/genesis.js"
 )
 
+const (
+	genesisID = "genesis"
+)
+
 var (
-	initialContent = map[string]string{
+	initialSources = map[string]string{
 		userSource:    "// This code runs all connected users.",
 		genesisSource: "// This code runs the room where newly created users are dropped.",
+	}
+	initialObjects = map[string]func(*storage.Object) error{
+		genesisID: func(o *storage.Object) error {
+			if err := o.SetId([]byte(genesisID)); err != nil {
+				return juicemud.WithStack(err)
+			}
+			return nil
+		},
 	}
 )
 
@@ -30,13 +42,18 @@ type Game struct {
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
-	for _, path := range []string{userSource, genesisSource} {
+	for path, source := range initialSources {
 		if _, created, err := s.EnsureFile(ctx, path); err != nil {
 			return nil, juicemud.WithStack(err)
 		} else if created {
-			if err := s.SetSource(ctx, path, []byte(initialContent[path])); err != nil {
+			if err := s.SetSource(ctx, path, []byte(source)); err != nil {
 				return nil, juicemud.WithStack(err)
 			}
+		}
+	}
+	for idString, setup := range initialObjects {
+		if err := s.EnsureObject(ctx, []byte(idString), setup); err != nil {
+			return nil, juicemud.WithStack(err)
 		}
 	}
 	return &Game{

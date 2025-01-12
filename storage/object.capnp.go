@@ -15,12 +15,12 @@ type Object capnp.Struct
 const Object_TypeID = 0xbc7ab37c3dc9daa6
 
 func NewObject(s *capnp.Segment) (Object, error) {
-	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 8})
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 9})
 	return Object(st), err
 }
 
 func NewRootObject(s *capnp.Segment) (Object, error) {
-	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 8})
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 9})
 	return Object(st), err
 }
 
@@ -174,40 +174,63 @@ func (s Object) NewDescriptions(n int32) (Object_Description_List, error) {
 	err = capnp.Struct(s).SetPtr(5, l.ToPtr())
 	return l, err
 }
-func (s Object) State() (string, error) {
+func (s Object) Exits() (Object_Exit_List, error) {
 	p, err := capnp.Struct(s).Ptr(6)
+	return Object_Exit_List(p.List()), err
+}
+
+func (s Object) HasExits() bool {
+	return capnp.Struct(s).HasPtr(6)
+}
+
+func (s Object) SetExits(v Object_Exit_List) error {
+	return capnp.Struct(s).SetPtr(6, v.ToPtr())
+}
+
+// NewExits sets the exits field to a newly
+// allocated Object_Exit_List, preferring placement in s's segment.
+func (s Object) NewExits(n int32) (Object_Exit_List, error) {
+	l, err := NewObject_Exit_List(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return Object_Exit_List{}, err
+	}
+	err = capnp.Struct(s).SetPtr(6, l.ToPtr())
+	return l, err
+}
+func (s Object) State() (string, error) {
+	p, err := capnp.Struct(s).Ptr(7)
 	return p.Text(), err
 }
 
 func (s Object) HasState() bool {
-	return capnp.Struct(s).HasPtr(6)
+	return capnp.Struct(s).HasPtr(7)
 }
 
 func (s Object) StateBytes() ([]byte, error) {
-	p, err := capnp.Struct(s).Ptr(6)
+	p, err := capnp.Struct(s).Ptr(7)
 	return p.TextBytes(), err
 }
 
 func (s Object) SetState(v string) error {
-	return capnp.Struct(s).SetText(6, v)
+	return capnp.Struct(s).SetText(7, v)
 }
 
 func (s Object) Source() (string, error) {
-	p, err := capnp.Struct(s).Ptr(7)
+	p, err := capnp.Struct(s).Ptr(8)
 	return p.Text(), err
 }
 
 func (s Object) HasSource() bool {
-	return capnp.Struct(s).HasPtr(7)
+	return capnp.Struct(s).HasPtr(8)
 }
 
 func (s Object) SourceBytes() ([]byte, error) {
-	p, err := capnp.Struct(s).Ptr(7)
+	p, err := capnp.Struct(s).Ptr(8)
 	return p.TextBytes(), err
 }
 
 func (s Object) SetSource(v string) error {
-	return capnp.Struct(s).SetText(7, v)
+	return capnp.Struct(s).SetText(8, v)
 }
 
 // Object_List is a list of Object.
@@ -215,7 +238,7 @@ type Object_List = capnp.StructList[Object]
 
 // NewObject creates a new list of Object.
 func NewObject_List(s *capnp.Segment, sz int32) (Object_List, error) {
-	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 8}, sz)
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 9}, sz)
 	return capnp.StructList[Object](l), err
 }
 
@@ -390,11 +413,11 @@ func (s Object_Challenge) SetSkill(v string) error {
 	return capnp.Struct(s).SetText(0, v)
 }
 
-func (s Object_Challenge) Legel() float32 {
+func (s Object_Challenge) Level() float32 {
 	return math.Float32frombits(capnp.Struct(s).Uint32(0))
 }
 
-func (s Object_Challenge) SetLegel(v float32) {
+func (s Object_Challenge) SetLevel(v float32) {
 	capnp.Struct(s).SetUint32(0, math.Float32bits(v))
 }
 
@@ -562,49 +585,199 @@ func (f Object_Description_Future) Struct() (Object_Description, error) {
 	return Object_Description(p.Struct()), err
 }
 
-const schema_d258d93c56221e58 = "x\xdal\x93Kh\xdcV\x18\x85\xcf\xb9W\x9aq\xcd" +
-	"\x8cm!\xadJ\xdb1\xa6\x8b\xb6\xe0\xe2Wiml" +
-	"l\xfa\x00\x8f)\xd4\xd7\xd3\x16S\xbc\xa8F\x163\xb2" +
-	"Ui\x98Q)-.\xed\xb2\xdd\xb5\x85B7]$" +
-	"\x8bd\x11B\x16\x01\xaf\xb2\x0c8\x81d\x11\x93\x80\x1d" +
-	"\x08d\x97,\xb2\xc8k\x1d\x85;\x8e4\"x\xa7{" +
-	"\xee\xaf\xff\xf1\x9d\xffN\xfd\xcf\x15c\xbaz  \xd4" +
-	"\xb8YJ\x1f\xad\xcd\xee_\xf8\xe3\xaf\xf3\xb0\x1c\xa6\xe7" +
-	"\xee^_\xda\xbb\xfc\xcb\x15\x98F\x19\x98\xadS\xd0\xfe" +
-	"\x86e\xc0V|\x80\xc2\xbdUe\xba\xf9\xce\xc4\xb7\x8b" +
-	"\xc7\x9b\x870\x87tD]\x9c\xb5\x95\xf8\x18\x98\xfdY" +
-	"\x1c\x10L\xeb\x13\x17_l\xae\xee_\x83rXL\xdd" +
-	"\xcf\xf7\xa7qh\xff\xab\x8b\xd8\x7f\x1b\x97\xc0\xb4u\xf5" +
-	"\xd9\xc3\x7fn\x9e9>5x\xda|j/\x99\xfak" +
-	"\xde\xfc\x09\x93i\xdc\xdc\xf1\xbd\xe4CO\xba\x9d\xa8\xb3" +
-	"\xf0\xd5\xc9\xe9s\xbf\xe7u\x83N\x12\xc4\x11\xd6I5" +
-	"&\x0d\xc0 `\xb93\x80\xda\x92TmA\x8bt\xa8" +
-	"E\xff\x03@}/\xa9BAK\x08\x87\x02\xb0\x02-" +
-	"nK\xaa\xdf\x05-)\x1dJ\xc0\xfa\xf5;@\xedI" +
-	"\xaa\xff\x04k\xbdv\xdcMX\x81`\x05\x1c\x0d\xe3\xa8" +
-	"\x95\x1f\x12\xb7\xd5\xe3\x08\xb8.\xd9\xd7F\xc0\xd4k\xbb" +
-	"a\xe8G-H?\xbf\x1b\x1b\x0c\x0b\xf6\xa3\xb2y\x98" +
-	"\xcdS\xf6\xbdDUX`hY3\x83\xdf\xac\xeaF" +
-	"\xc1\xb7j\xb3\xd6\xd8\x0d\xc20\xfd,+F?\xcdh" +
-	"\xa0\x1c\xc4\x91\x1a\xcfY\xdcz\x13P7$\xd5Q\x81" +
-	"\xc5\x9d5@\xdd\x96T\xf7\x0b,\xee}\x0a\xa8#I" +
-	"\xf5\xbc\xc0\xe2\xc9\x06\xa0\x1eK6*\x14\xb4\x0c\xc3\xa1" +
-	"\x01\xd8op\x01h\x18\x94l\x8ck\xdd4\x1d\x9a\x80" +
-	"\xfd6w\x80\xc6[Z\xffD\xeb\xa5\x92\xc3\x12`\x7f" +
-	"\xc4\x19\xa01\xa5\xf5E\xad\x97\xcbN\xdf\xe7\xf9~\x9e" +
-	"9\xad\xafPP\x06\xdb\xacB\xb0\x0a\xa6a\xec\xb9}" +
-	"k\x81L\xfb\xcd\x8b\xa3\xc4\x8f\x92\x8ck5c\xee\x86" +
-	"a\xd3\xf5v\xc1\xd7\xedX\xeeiN\x05#r\xbc\xaf" +
-	"\x8c\xd8\xce\xa8\x8d\x06qT\x88\xcba\x9f\xc4\xd5z\x89" +
-	"\x9b\xf8\x99\xf1\xcb\xbd\xf8\xc7\xae\x97\x1fs7Eq;" +
-	"\xb5C\x0c\xf5^Vr/\xbe\xd0\xdb\xb6\"\xa9\xbe\x14" +
-	"\xcc\xac\xa87\x01\xb5*\xa9\xbe\xd6V\xf0\xc4\x0a\xa5\xa9" +
-	"\xafK\xaa-\xc1\xd1\xc8\xfdaP+i\xfbq\xd7O" +
-	"\x02\x94=7\xe40\x04\x87\xc1\xb4\xd3u\xbd$\xf0\\" +
-	"p\xa0\x9d\xda\x95\xde\x98\x9a^\x19_w6\x94w\xf6" +
-	"\xbe~1\xefJ\xaa\xa9Ag\x93Z{OR\xcd\xe9" +
-	"g\xa0Af]\xd4B\xbf\xe5\xe7\x95^\x06\x00\x00\xff" +
-	"\xff!\x81\xfep"
+type Object_Exit capnp.Struct
+
+// Object_Exit_TypeID is the unique identifier for the type Object_Exit.
+const Object_Exit_TypeID = 0xdd6ce297dd67d15e
+
+func NewObject_Exit(s *capnp.Segment) (Object_Exit, error) {
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 4})
+	return Object_Exit(st), err
+}
+
+func NewRootObject_Exit(s *capnp.Segment) (Object_Exit, error) {
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 0, PointerCount: 4})
+	return Object_Exit(st), err
+}
+
+func ReadRootObject_Exit(msg *capnp.Message) (Object_Exit, error) {
+	root, err := msg.Root()
+	return Object_Exit(root.Struct()), err
+}
+
+func (s Object_Exit) String() string {
+	str, _ := text.Marshal(0xdd6ce297dd67d15e, capnp.Struct(s))
+	return str
+}
+
+func (s Object_Exit) EncodeAsPtr(seg *capnp.Segment) capnp.Ptr {
+	return capnp.Struct(s).EncodeAsPtr(seg)
+}
+
+func (Object_Exit) DecodeFromPtr(p capnp.Ptr) Object_Exit {
+	return Object_Exit(capnp.Struct{}.DecodeFromPtr(p))
+}
+
+func (s Object_Exit) ToPtr() capnp.Ptr {
+	return capnp.Struct(s).ToPtr()
+}
+func (s Object_Exit) IsValid() bool {
+	return capnp.Struct(s).IsValid()
+}
+
+func (s Object_Exit) Message() *capnp.Message {
+	return capnp.Struct(s).Message()
+}
+
+func (s Object_Exit) Segment() *capnp.Segment {
+	return capnp.Struct(s).Segment()
+}
+func (s Object_Exit) Descriptions() (Object_Description_List, error) {
+	p, err := capnp.Struct(s).Ptr(0)
+	return Object_Description_List(p.List()), err
+}
+
+func (s Object_Exit) HasDescriptions() bool {
+	return capnp.Struct(s).HasPtr(0)
+}
+
+func (s Object_Exit) SetDescriptions(v Object_Description_List) error {
+	return capnp.Struct(s).SetPtr(0, v.ToPtr())
+}
+
+// NewDescriptions sets the descriptions field to a newly
+// allocated Object_Description_List, preferring placement in s's segment.
+func (s Object_Exit) NewDescriptions(n int32) (Object_Description_List, error) {
+	l, err := NewObject_Description_List(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return Object_Description_List{}, err
+	}
+	err = capnp.Struct(s).SetPtr(0, l.ToPtr())
+	return l, err
+}
+func (s Object_Exit) UseChallenges() (Object_Challenge_List, error) {
+	p, err := capnp.Struct(s).Ptr(1)
+	return Object_Challenge_List(p.List()), err
+}
+
+func (s Object_Exit) HasUseChallenges() bool {
+	return capnp.Struct(s).HasPtr(1)
+}
+
+func (s Object_Exit) SetUseChallenges(v Object_Challenge_List) error {
+	return capnp.Struct(s).SetPtr(1, v.ToPtr())
+}
+
+// NewUseChallenges sets the useChallenges field to a newly
+// allocated Object_Challenge_List, preferring placement in s's segment.
+func (s Object_Exit) NewUseChallenges(n int32) (Object_Challenge_List, error) {
+	l, err := NewObject_Challenge_List(capnp.Struct(s).Segment(), n)
+	if err != nil {
+		return Object_Challenge_List{}, err
+	}
+	err = capnp.Struct(s).SetPtr(1, l.ToPtr())
+	return l, err
+}
+func (s Object_Exit) UseFailureDescription() (string, error) {
+	p, err := capnp.Struct(s).Ptr(2)
+	return p.Text(), err
+}
+
+func (s Object_Exit) HasUseFailureDescription() bool {
+	return capnp.Struct(s).HasPtr(2)
+}
+
+func (s Object_Exit) UseFailureDescriptionBytes() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(2)
+	return p.TextBytes(), err
+}
+
+func (s Object_Exit) SetUseFailureDescription(v string) error {
+	return capnp.Struct(s).SetText(2, v)
+}
+
+func (s Object_Exit) Destination() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(3)
+	return []byte(p.Data()), err
+}
+
+func (s Object_Exit) HasDestination() bool {
+	return capnp.Struct(s).HasPtr(3)
+}
+
+func (s Object_Exit) SetDestination(v []byte) error {
+	return capnp.Struct(s).SetData(3, v)
+}
+
+// Object_Exit_List is a list of Object_Exit.
+type Object_Exit_List = capnp.StructList[Object_Exit]
+
+// NewObject_Exit creates a new list of Object_Exit.
+func NewObject_Exit_List(s *capnp.Segment, sz int32) (Object_Exit_List, error) {
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 0, PointerCount: 4}, sz)
+	return capnp.StructList[Object_Exit](l), err
+}
+
+// Object_Exit_Future is a wrapper for a Object_Exit promised by a client call.
+type Object_Exit_Future struct{ *capnp.Future }
+
+func (f Object_Exit_Future) Struct() (Object_Exit, error) {
+	p, err := f.Future.Ptr()
+	return Object_Exit(p.Struct()), err
+}
+
+const schema_d258d93c56221e58 = "x\xda\x8c\x94O\x88\x1cE\x18\xc5\xdf\xab\x9a\x9eY\xc3" +
+	"Nv\x9b\xee=\xac\x07[\xc3\x06b \x12w=h" +
+	"\x88$\xa8\xd1$\x04\xdc\xda\x09\xb2H\x90\xf4\xf4\x143" +
+	"\xbdi\xbb\x87\xe9\x1e]e\x17\xf5\xe6Q%\xa0\x07\x05" +
+	"\xf5\xa0\x82\x88\xa8\x98\x93\x1e\x04\x0f*x0\xb7\x08\xb9" +
+	"xI\x0e\x0a\xfe\xc9E\x10[\xaag\xbb\xa7Y\x16\xf5" +
+	"\xd6\xf5\xabo\xaa\xbez\xef}s\xb4-N6\xeem" +
+	"{\x12B-Y\xcd\xfc\xe7\xb3+W>|\xf9\x95\xf7" +
+	"a\xbb\xcc\xdf\xfb\xf1\xdb\x07\xb7>{\xfe\x0bX\x8d\x16" +
+	"\xb02\xa6\xa0\xf3\x12[\x80\xb3\xcd\x1b\xa8\xed\xdbm\xe6" +
+	"\xebw\x1cx\xe2\xf8\xb5\xf5\xab\xb0n3\x15c\xf1\xae" +
+	"\xb3-\x1e\x03V>\x119\xc1\xfc\xcc\x81\x8f\xfe^?" +
+	"}\xe5\x1b(\x97\xf5\xa3\x8b\xf3\xda\xd6Ug\xd12_" +
+	"\x0b\xd6\xc7`\xde\xff\xfa\x8f\x9b\xaf}\xff\xce\xb5=\x8b" +
+	"?\xb7~w\xbe*\x8a\xbf\xb4\x9e\x05\xf3\xa7~\xe8_" +
+	"\x7f\xfd\xa7\xe8\xfa\x1e=;\x8b\xcd\xef\x9c\x83M\xf3u" +
+	"W\xf3\x06\x8e\xe4IwC\x07\xd9=\x81\xf4\x87\xf1\xf0" +
+	"\xd8\xe3\x93\xd5#:\x0dF\xe10\x0b\x93\x18\xab\xa4\x9a" +
+	"\x97\x0d\xa0A\xc0\xf6\x97\x01uAR\x0d\x04m\xd2\xa5" +
+	"\x81\xfa0\xa0.J\xaaH\xd0\x16\xc2\xa5\x00\xec\xd0\xc0" +
+	"\x9e\xa4zQ\xd0\x96\xd2\xa5\x04\xec\xed'\x01\xb5%\xa9" +
+	"\xde\x10\xf4\xd2A2\xca8\x0b\xc1Yp.J\xe2~" +
+	"\xb5\xc8\xfc~\xca\xfd\xe0\xaad\xc1\xf6\x83y0\xf0\xa3" +
+	"H\xc7}H]\xed\xcdO\x85\x01\x8b\xaa\xf2=,\xdf" +
+	"\xd3\xd2A\xa6\xe6Y\xd3\xdb^\\\x9e\xfe\xcc^X\xab" +
+	"y\xbc\xd0\xad\x89\xb7p\xd8\xeb\\\x0a\xa3(\x7f\xb8\xbc" +
+	"\x99:/\xa5A+L\xe2\xb9S\x9ba\xa6\x96*u" +
+	"~\xb9\x1dP7%\xd5\xad\x9a:\xbf\x9d\x05\xd4\xaf\x92" +
+	"\xea\xaf\x9a:\x7f>\x04\xa8[\x92\x9dyN\xe5q\xda" +
+	"\\\x03:\xb3\x94\xec\x1c2\xbc\xd1p\xd9\x00\x9c\x83<" +
+	"\x06t\xee4\xfc\xb8\xe1\x96\xe5\xd2\x02\x9c\x07\xb8\x01t" +
+	"\xee7\xfc\xbc\xe1\xcd\xa6\xcb&\xe0(.\x03\x9ds\x86" +
+	"\x0f\x0co\xb5\xdc\"(\xba\xe0\x17\x0d\x8f\x0c\x9f\x99q" +
+	"9\x038aq~\xcf\xf0!\x05e\xd8c\x1b\x82m" +
+	"0\x8f\x92\xc0/r\x00\x94\xec\x85 \x893\x1dg\xa5" +
+	"\x09\xed\xd2 ?\x8a\xba~p\x09\xdc\xed\xdd\x89\xd4\xe8" +
+	"Xs\xad\xf2b\xc7\xb5^\xa9\xea\\\x98\xc4\xb5\xba\xca" +
+	"\x99I\x9d\xa77\xc3\xac\xb6]y\xb5\xb3\x9df~\xa6" +
+	"\xcb\x10\x9dH\x93\xf1(\xa8\x96U2D=\xe9\xc6`" +
+	"F&\xe3\xb3\x95\x8b\xa7LrOJ\xaas\x82\xa5\x89" +
+	"g\xba\x80:-\xa9\xce\x1b\x1391Q\xad\x01jU" +
+	"R]\x10\x9c\x8b\xfd\xa7\xa7we\x03\x9d\x8ct\x16\xa2" +
+	"\x15\xf8\x11\xf7Ap\x1f\x98\x0fG~\x90\x85\x81\x0fN" +
+	"\xd9\x9e]\x99\xc0y&q\xdat6Suv\xb7\x99" +
+	"\xbe%Iut\xda\xd9\x11\xc3\x0eI\xaa\xfb\xccH\x19" +
+	"\x9d\xcb.\xbcH?\xa3\xff\xe3&\x13`\xec\x9e\xf1\x8d" +
+	"\x9dq\xde\xaa\xa5\xf8\xb9\x11\xa06%\xd5\xe5Z\x8a_" +
+	"\xfd\x14P\x97%\xd5\xdb\xb5\x19\x7f\xcbH\xf5\xa6\xa4\xfa" +
+	"@\xfcoc\xf3q\xaa\x8b)\x83g^\xfd/\xf3=" +
+	"N\xf5\xa3~\x18\x8d9\xd2\x93Q\xf4\x8a\xbf\xa9J\xf9" +
+	"\x9eN\xb30\xf6'\xf3Y&\xf6\x9f\x00\x00\x00\xff\xff" +
+	"\x94\x95a_"
 
 func RegisterSchema(reg *schemas.Registry) {
 	reg.Register(&schemas.Schema{
@@ -614,6 +787,7 @@ func RegisterSchema(reg *schemas.Registry) {
 			0xbc7ab37c3dc9daa6,
 			0xc8b64858fead2249,
 			0xd9a1cd92e8f3c467,
+			0xdd6ce297dd67d15e,
 		},
 		Compressed: true,
 	})

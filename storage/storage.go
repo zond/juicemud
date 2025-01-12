@@ -4,6 +4,7 @@ package storage
 // TODO(zond): Implement read/write group access restrictions.
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -122,18 +123,35 @@ func (s *Storage) GetObject(ctx context.Context, id []byte) (*Object, error) {
 	} else if !stat.IsOK() {
 		return nil, juicemud.WithStack(stat)
 	}
-	msg, err := capnp.Unmarshal(b)
-	if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	result, err := ReadRootObject(msg)
-	if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	return &result, nil
+	return readObject(b)
 }
 
-func (s *Storage) CreateObject(ctx context.Context) (*Object, error) {
+func (s *Storage) EnsureObject(ctx context.Context, id []byte, setup func(*Object) error) error {
+	return juicemud.WithStack(processMulti(s.objects, []funcPair{
+		{
+			Key: id,
+			Func: func(k, v []byte) (any, error) {
+				if v != nil {
+					return nil, nil
+				}
+				object, err := MakeObject(ctx)
+				if err != nil {
+					return nil, juicemud.WithStack(err)
+				}
+				if err := setup(object); err != nil {
+					return nil, juicemud.WithStack(err)
+				}
+				marshalledObject, err := object.Message().Marshal()
+				if err != nil {
+					return nil, juicemud.WithStack(err)
+				}
+				return marshalledObject, nil
+			},
+		},
+	}, true))
+}
+
+func MakeObject(ctx context.Context) (*Object, error) {
 	arena := capnp.SingleSegment(nil)
 	_, seg, err := capnp.NewMessage(arena)
 	if err != nil {
@@ -151,20 +169,151 @@ func (s *Storage) CreateObject(ctx context.Context) (*Object, error) {
 	return &object, nil
 }
 
-func (s *Storage) SetObject(ctx context.Context, object *Object) error {
+type funcPair struct {
+	Key  any
+	Func func(k, v []byte) (any, error)
+}
+
+func processMulti(dbm *tkrzw.DBM, funcPairs []funcPair, write bool) (err error) {
+	procPairs := make([]tkrzw.KeyProcPair, len(funcPairs))
+	for index, fpIter := range funcPairs {
+		fp := fpIter
+		procPairs[index] = tkrzw.KeyProcPair{
+			Key: fp.Key,
+			Proc: func(k, v []byte) any {
+				if err != nil {
+					return tkrzw.NilString
+				}
+				var res any
+				if res, err = fp.Func(k, v); err != nil {
+					return tkrzw.NilString
+				}
+				return res
+			},
+		}
+	}
+	if stat := dbm.ProcessMulti(procPairs, write); !stat.IsOK() {
+		return juicemud.WithStack(stat)
+	}
+	return juicemud.WithStack(err)
+}
+
+func (s *Storage) SetObject(ctx context.Context, claimedOldLocation []byte, object *Object) error {
 	id, err := object.Id()
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if len(id) != objectIDLen {
-		return errors.Errorf("Object ID %+v isn't %v long", id, objectIDLen)
-	}
-	b, err := object.Message().Marshal()
+	newLocation, err := object.Location()
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if stat := s.objects.Set(id, b, false); !stat.IsOK() {
-		return juicemud.WithStack(stat)
+	marshalledObject, err := object.Message().Marshal()
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	var pairs []funcPair
+	if claimedOldLocation == nil || bytes.Equal(claimedOldLocation, newLocation) {
+		// Loc is unchanged, just verify that it's what's there right now.
+		pairs = []funcPair{
+			{
+				Key: id,
+				Func: func(key []byte, value []byte) (any, error) {
+					oldObject, err := readObject(value)
+					if err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					realOldLocation, err := oldObject.Location()
+					if err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					if !bytes.Equal(realOldLocation, newLocation) {
+						return nil, errors.Errorf("object is moved without updating old location")
+					}
+					return marshalledObject, nil
+				},
+			},
+		}
+	} else {
+		// Loc is changed, verify that the old one is what's there right now, that obj can
+		// be removed from old loc, and added to new loc, before all are saved.
+		var marshalledNewContainer []byte
+		pairs = []funcPair{
+			{
+				Key: id,
+				Func: func(key []byte, value []byte) (any, error) {
+					oldObject, err := readObject(value)
+					if err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					realOldLocation, err := oldObject.Location()
+					if err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					if !bytes.Equal(realOldLocation, newLocation) {
+						return nil, errors.Errorf("object is moved without updating old location")
+					}
+					return nil, nil
+				},
+			},
+			{
+				Key: newLocation,
+				Func: func(key []byte, value []byte) (any, error) {
+					newContainer, err := readObject(value)
+					if err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					if err = OH(newContainer).Content().Append(id); err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					if marshalledNewContainer, err = newContainer.Message().Marshal(); err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					return nil, nil
+				},
+			},
+		}
+		if claimedOldLocation != nil {
+			pairs = append(pairs, funcPair{
+				Key: claimedOldLocation,
+				Func: func(key []byte, value []byte) (any, error) {
+					oldContainer, err := readObject(value)
+					if err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					var found bool
+					if found, err = OH(oldContainer).Content().Has(id); err != nil {
+						return nil, juicemud.WithStack(err)
+					} else if !found {
+						return nil, errors.Errorf("object claimed to be contained by %+v, but wasn't", claimedOldLocation)
+					}
+					if err = OH(oldContainer).Content().Remove(id); err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					if b, err := oldContainer.Message().Marshal(); err != nil {
+						return nil, juicemud.WithStack(err)
+					} else {
+						return b, nil
+					}
+				},
+			})
+		}
+		pairs = append(pairs,
+			funcPair{
+				Key: newLocation,
+				Func: func(key []byte, value []byte) (any, error) {
+					return marshalledNewContainer, nil
+				},
+			},
+			funcPair{
+				Key: id,
+				Func: func(key []byte, value []byte) (any, error) {
+					return marshalledObject, nil
+				},
+			},
+		)
+	}
+	if err := processMulti(s.objects, pairs, true); err != nil {
+		return juicemud.WithStack(err)
 	}
 	return nil
 }
@@ -475,4 +624,16 @@ type GroupMember struct {
 	Id    int64 `sqly:"pkey"`
 	User  int64 `sqly:"index"`
 	Group int64 `sqly:"uniqueWith(User)"`
+}
+
+func readObject(b []byte) (*Object, error) {
+	msg, err := capnp.Unmarshal(b)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	object, err := ReadRootObject(msg)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return &object, nil
 }

@@ -267,7 +267,7 @@ func (e *Env) createUser() error {
 			fmt.Fprintln(e.term, "Passwords don't match!")
 		}
 	}
-	object, err := e.game.storage.CreateObject(e.sess.Context())
+	object, err := storage.MakeObject(e.sess.Context())
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -287,7 +287,7 @@ func (e *Env) createUser() error {
 		return juicemud.WithStack(err)
 	}
 
-	if err := e.game.storage.SetObject(e.sess.Context(), object); err != nil {
+	if err := e.game.storage.SetObject(e.sess.Context(), nil, object); err != nil {
 		return juicemud.WithStack(err)
 	}
 
@@ -317,15 +317,18 @@ func call(ctx context.Context, object *storage.Object, callbackName string, mess
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	callbacks := map[string]func(fctx *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value{}
-	if console, found := consoleByObjectID.GetHas(sid); found {
-		callbacks["log"] = js.Log(console)
+	callbacks := map[string]func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value{
+		"setDescriptions": func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+			// TODO
+			return nil
+		},
 	}
 	target := js.Target{
 		Source:    string(source),
 		Origin:    origin,
 		State:     state,
 		Callbacks: callbacks,
+		Console:   consoleByObjectID.Get(sid),
 	}
 	res, err := target.Call(ctx, callbackName, message, 200*time.Millisecond)
 	if err != nil {
@@ -334,16 +337,7 @@ func call(ctx context.Context, object *storage.Object, callbackName string, mess
 	if err := object.SetState(res.State); err != nil {
 		return juicemud.WithStack(err)
 	}
-	newCallbacks, err := object.NewCallbacks(int32(len(res.Callbacks)))
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	for index, cb := range res.Callbacks {
-		if err := newCallbacks.Set(index, cb); err != nil {
-			return juicemud.WithStack(err)
-		}
-	}
-	if err := object.SetCallbacks(newCallbacks); err != nil {
+	if err := storage.ObjectHelper(*object).Callbacks().Set(res.Callbacks); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return nil
@@ -362,8 +356,12 @@ func loadAndCall(ctx context.Context, id []byte, callbackName string, message st
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
+	oldLocation, err := object.Location()
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
 	if err := call(ctx, object, callbackName, message); err != nil {
 		return juicemud.WithStack(err)
 	}
-	return juicemud.WithStack(game.storage.SetObject(ctx, object))
+	return juicemud.WithStack(game.storage.SetObject(ctx, oldLocation, object))
 }

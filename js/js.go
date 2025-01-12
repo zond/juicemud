@@ -33,6 +33,7 @@ func init() {
 
 type machine struct {
 	iso                    *v8go.Isolate
+	vctx                   *v8go.Context
 	unableToGenerateString *v8go.Value
 }
 
@@ -41,6 +42,9 @@ func newMachine() (*machine, error) {
 		iso: v8go.NewIsolate(),
 	}
 	var err error
+	if m.vctx = v8go.NewContext(m.iso); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	if m.unableToGenerateString, err = v8go.NewValue(m.iso, "unable to generate exception"); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -52,22 +56,29 @@ type Target struct {
 	Origin    string
 	State     string
 	Callbacks map[string]func(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value
+	Console   io.Writer
 }
 
 type Result struct {
 	State     string
 	Callbacks []string
+	Value     string
 }
 
 type RunContext struct {
 	m         *machine
-	vctx      *v8go.Context
 	t         *Target
 	callbacks map[string]*v8go.Function
 }
 
 func (rc *RunContext) Context() *v8go.Context {
-	return rc.vctx
+	return rc.m.vctx
+}
+
+func (rc *RunContext) log(format string, args ...any) {
+	if rc.t.Console != nil {
+		log.New(rc.t.Console, "", 0).Printf(format, args...)
+	}
 }
 
 func (rc *RunContext) String(s string) *v8go.Value {
@@ -77,18 +88,22 @@ func (rc *RunContext) String(s string) *v8go.Value {
 	return rc.m.unableToGenerateString
 }
 
+func (rc *RunContext) Throw(format string, args ...any) *v8go.Value {
+	return rc.Context().Isolate().ThrowException(rc.String(fmt.Sprintf(format, args...)))
+}
+
 func addJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 	args := info.Args()
 	if len(args) == 2 && args[0].IsString() && args[1].IsFunction() {
 		eventType := args[0].String()
 		fun, err := args[1].AsFunction()
 		if err != nil {
-			return rc.Context().Isolate().ThrowException(rc.String("unable to cast callback to *v8go.Function"))
+			return rc.Throw("trying to cast %v to *v8go.Function: %v", args[1], err)
 		}
 		rc.callbacks[eventType] = fun
 		return nil
 	}
-	return rc.Context().Isolate().ThrowException(rc.String("addEventListener takes [string, function] arguments"))
+	return rc.Throw("addEventListener takes [string, function] arguments")
 }
 
 func removeJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
@@ -97,170 +112,10 @@ func removeJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Val
 		delete(rc.callbacks, args[0].String())
 		return nil
 	}
-	return rc.Context().Isolate().ThrowException(rc.String("removeEventListener takes [string] arguments"))
+	return rc.Throw("removeEventListener takes [string] arguments")
 }
 
-func (rc *RunContext) addCallback(
-	tmpl *v8go.ObjectTemplate,
-	name string,
-	f func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value,
-) error {
-	return juicemud.WithStack(
-		tmpl.Set(
-			name,
-			v8go.NewFunctionTemplate(
-				rc.m.iso,
-				func(info *v8go.FunctionCallbackInfo) *v8go.Value {
-					return f(rc, info)
-				},
-			),
-			v8go.ReadOnly,
-		),
-	)
-}
-
-func (rc *RunContext) createV8Context(iso *v8go.Isolate, timeout *time.Duration) (*v8go.Context, error) {
-	globalTemplate := v8go.NewObjectTemplate(iso)
-
-	for name, fun := range rc.t.Callbacks {
-		if err := rc.addCallback(
-			globalTemplate,
-			name,
-			fun,
-		); err != nil {
-			return nil, juicemud.WithStack(err)
-		}
-	}
-	for _, cb := range []struct {
-		name string
-		fun  func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value
-	}{
-		{
-			name: "addCallback",
-			fun:  addJSCallback,
-		},
-		{
-			name: "removeCallback",
-			fun:  removeJSCallback,
-		},
-	} {
-		if err := rc.addCallback(globalTemplate, cb.name, cb.fun); err != nil {
-			return nil, juicemud.WithStack(err)
-		}
-	}
-
-	vctx := v8go.NewContext(rc.m.iso, globalTemplate)
-
-	stateJSON := rc.t.State
-	if stateJSON == "" {
-		stateJSON = "{}"
-	}
-	startTime := time.Now()
-	stateValue, err := v8go.JSONParse(vctx, stateJSON)
-	*timeout -= time.Since(startTime)
-	if err != nil {
-		vctx.Close()
-		return nil, juicemud.WithStack(err)
-	}
-	if err := vctx.Global().Set(stateName, stateValue); err != nil {
-		vctx.Close()
-		return nil, juicemud.WithStack(err)
-	}
-
-	return vctx, nil
-}
-
-var (
-	ErrTimeout = fmt.Errorf("Timeout")
-)
-
-func (rc *RunContext) withTimeout(_ context.Context, f func() error, timeout *time.Duration) error {
-	errs := make(chan error, 1)
-	go func() {
-		t := time.Now()
-		errs <- f()
-		*timeout -= time.Since(t)
-	}()
-
-	select {
-	case err := <-errs:
-		return juicemud.WithStack(err)
-	case <-time.After(*timeout):
-		rc.m.iso.TerminateExecution()
-		return juicemud.WithStack(ErrTimeout)
-	}
-}
-
-func (t Target) Call(ctx context.Context, callbackName string, message string, timeout time.Duration) (*Result, error) {
-	m := <-machines
-	defer func() { machines <- m }()
-
-	rc := &RunContext{
-		m:         m,
-		t:         &t,
-		callbacks: map[string]*v8go.Function{},
-	}
-
-	vctx, err := rc.createV8Context(m.iso, &timeout)
-	if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	defer vctx.Close()
-
-	rc.vctx = vctx
-
-	if err := rc.withTimeout(ctx, func() error {
-		_, err := vctx.RunScript(t.Source, t.Origin)
-		return err
-	}, &timeout); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-
-	jsCB, found := rc.callbacks[callbackName]
-	if !found {
-		return collectResult(rc)
-	}
-
-	var val *v8go.Value
-	if message != "" {
-		var err error
-		start := time.Now()
-		if val, err = v8go.JSONParse(rc.vctx, message); err != nil {
-			return nil, juicemud.WithStack(err)
-		}
-		timeout -= time.Since(start)
-	}
-
-	if err := rc.withTimeout(ctx, func() error {
-		var err error
-		if val != nil {
-			_, err = jsCB.Call(rc.vctx.Global(), val)
-		} else {
-			_, err = jsCB.Call(rc.vctx.Global())
-		}
-		return juicemud.WithStack(err)
-	}, &timeout); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	return collectResult(rc)
-}
-
-func collectResult(rc *RunContext) (*Result, error) {
-	result := &Result{}
-	stateValue, err := rc.vctx.Global().Get(stateName)
-	if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	if result.State, err = v8go.JSONStringify(rc.vctx, stateValue); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	for name := range rc.callbacks {
-		result.Callbacks = append(result.Callbacks, name)
-	}
-	return result, nil
-}
-
-func Log(w io.Writer) func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value {
+func logFunc(w io.Writer) func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value {
 	return func(ctx *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		anyArgs := []any{}
 		for _, arg := range info.Args() {
@@ -276,4 +131,173 @@ func Log(w io.Writer) func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value 
 		log.New(w, "", 0).Println(anyArgs...)
 		return nil
 	}
+}
+
+func (rc *RunContext) addCallback(
+	name string,
+	f func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value,
+) error {
+	return juicemud.WithStack(
+		rc.m.vctx.Global().Set(
+			name,
+			v8go.NewFunctionTemplate(
+				rc.m.iso,
+				func(info *v8go.FunctionCallbackInfo) *v8go.Value {
+					return f(rc, info)
+				},
+			).GetFunction(rc.m.vctx),
+		),
+	)
+}
+
+func (rc *RunContext) prepareV8Context(timeout *time.Duration) error {
+	for name, fun := range rc.t.Callbacks {
+		if err := rc.addCallback(
+			name,
+			fun,
+		); err != nil {
+			return juicemud.WithStack(err)
+		}
+	}
+	for _, cb := range []struct {
+		name string
+		fun  func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value
+	}{
+		{
+			name: "addCallback",
+			fun:  addJSCallback,
+		},
+		{
+			name: "removeCallback",
+			fun:  removeJSCallback,
+		},
+	} {
+		if err := rc.addCallback(cb.name, cb.fun); err != nil {
+			return juicemud.WithStack(err)
+		}
+	}
+	if rc.t.Console != nil {
+		if err := rc.addCallback("log", logFunc(rc.t.Console)); err != nil {
+			return juicemud.WithStack(err)
+		}
+	}
+
+	stateJSON := rc.t.State
+	if stateJSON == "" {
+		stateJSON = "{}"
+	}
+	startTime := time.Now()
+	stateValue, err := v8go.JSONParse(rc.m.vctx, stateJSON)
+	*timeout -= time.Since(startTime)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := rc.m.vctx.Global().Set(stateName, stateValue); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	return nil
+}
+
+var (
+	ErrTimeout = fmt.Errorf("Timeout")
+)
+
+type result struct {
+	value *v8go.Value
+	err   error
+}
+
+func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, error), timeout *time.Duration) (*v8go.Value, error) {
+	results := make(chan result, 1)
+	go func() {
+		t := time.Now()
+		val, err := f()
+		*timeout -= time.Since(t)
+		results <- result{value: val, err: err}
+	}()
+
+	select {
+	case res := <-results:
+		if res.err != nil {
+			rc.log("-- error in %q --\n%v\n", rc.t.Origin, res.err)
+		}
+		return res.value, juicemud.WithStack(res.err)
+	case <-time.After(*timeout):
+		rc.m.iso.TerminateExecution()
+		return nil, juicemud.WithStack(ErrTimeout)
+	}
+}
+
+func (t Target) Call(ctx context.Context, callbackName string, message string, timeout time.Duration) (*Result, error) {
+	m := <-machines
+	defer func() { machines <- m }()
+
+	rc := &RunContext{
+		m:         m,
+		t:         &t,
+		callbacks: map[string]*v8go.Function{},
+	}
+
+	if err := rc.prepareV8Context(&timeout); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+
+	if _, err := rc.withTimeout(ctx, func() (*v8go.Value, error) {
+		return rc.m.vctx.RunScript(t.Source, t.Origin)
+	}, &timeout); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+
+	jsCB, found := rc.callbacks[callbackName]
+	if !found {
+		return collectResult(rc, nil)
+	}
+
+	var val *v8go.Value
+	if message != "" {
+		var err error
+		start := time.Now()
+		if val, err = v8go.JSONParse(rc.m.vctx, message); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+		timeout -= time.Since(start)
+	}
+
+	if val, err := rc.withTimeout(ctx, func() (*v8go.Value, error) {
+		if val != nil {
+			return jsCB.Call(rc.m.vctx.Global(), val)
+		} else {
+			return jsCB.Call(rc.m.vctx.Global())
+		}
+	}, &timeout); err != nil {
+		return nil, juicemud.WithStack(err)
+	} else {
+		return collectResult(rc, val)
+	}
+}
+
+func collectResult(rc *RunContext, value *v8go.Value) (*Result, error) {
+	valueJSON := "{}"
+	if value != nil && !value.IsNull() {
+		var err error
+		valueJSON, err = v8go.JSONStringify(rc.m.vctx, value)
+		if err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+	}
+	result := &Result{
+		Value: valueJSON,
+	}
+	stateValue, err := rc.m.vctx.Global().Get(stateName)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	if result.State, err = v8go.JSONStringify(rc.m.vctx, stateValue); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	for name := range rc.callbacks {
+		result.Callbacks = append(result.Callbacks, name)
+	}
+	return result, nil
 }

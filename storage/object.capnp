@@ -34,10 +34,11 @@ struct Object {
         skill @0 :Text;
         # Name of the skill this challenges.
 
-        legel @1 :Float32;
+        level @1 :Float32;
         # Level of challenge.
     }
 
+    # Descriptions of something. Ordered by decreasing difficulty, the first one detected is the one shown.
     struct Description {
         short @0 :Text;
         # Short description text (when not being actively looked at).
@@ -53,11 +54,28 @@ struct Object {
     }
 
     descriptions @5 :List(Description);
-    # Descriptions of this Object. Ordered by decreasing difficulty, the first one detected is the one shown.
+    # Descriptions of this Object. If none is detected then this Object is not detected.
 
-    state @6 :Text;
+    struct Exit {
+        descriptions @0 :List(Description);
+        # Descriptions of this exit. If none is detected then this Exit is not detected.
+
+        useChallenges @1 :List(Challenge);
+        # Skill challenges to overcome to use this Exit.
+
+        useFailureDescription @2 :Text;
+        # Message shown when failing to use the Exit due to challenges.
+
+        destination @3 :Data;
+        # Object this exit leads to.
+    }
+
+    exits @6 :List(Exit);
+    # The exits from this object.
+
+    state @7 :Text;
     # The global variables of the Object as JSON.
 
-    source @7 :Text;
+    source @8 :Text;
     # Path to the JavaScript source controlling this Object.
 }

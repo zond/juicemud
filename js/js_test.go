@@ -9,6 +9,37 @@ import (
 	"rogchap.com/v8go"
 )
 
+func TestArrays(t *testing.T) {
+	iso := v8go.NewIsolate()
+	defer iso.Dispose()
+	ctx := v8go.NewContext(iso)
+	defer ctx.Close()
+	if _, err := ctx.RunScript("a = ['a', 'b', 'c', 'd', 'e'];", "test"); err != nil {
+		t.Fatal(err)
+	}
+	a, err := ctx.Global().Get("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.IsArray() {
+		t.Fatalf("%s is no Array", a)
+	}
+	aObj, err := a.AsObject()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx2, err := aObj.Get("2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !idx2.IsString() {
+		t.Errorf("%v is no string", idx2)
+	}
+	if v := idx2.String(); v != "c" {
+		t.Errorf("wanted 'c', got %v", v)
+	}
+}
+
 func TestBasics(t *testing.T) {
 	ctx := context.Background()
 	result := ""
@@ -43,6 +74,39 @@ addCallback("test", (arg) => {
 	}
 }
 
+func BenchmarkV8(b *testing.B) {
+	b.StopTimer()
+	iso := v8go.NewIsolate()
+	defer iso.Dispose()
+	ctx := v8go.NewContext(iso)
+	defer ctx.Close()
+	result := ""
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		glob := ctx.Global()
+		setResult := v8go.NewFunctionTemplate(iso, func(info *v8go.FunctionCallbackInfo) *v8go.Value {
+			result = info.Args()[0].String()
+			return nil
+		}).GetFunction(ctx)
+		if err := glob.Set("setResult", setResult); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := ctx.RunScript(`
+var b = 4;
+function test(arg) {
+  setResult(b + 1 + arg.c);
+}
+test({"c": 15});
+`, "test"); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	if result != "20" {
+		b.Fatalf("wanted 20, got %q", result)
+	}
+}
+
 func BenchmarkCall(b *testing.B) {
 	b.StopTimer()
 	ctx := context.Background()
@@ -70,6 +134,7 @@ addCallback("test", (arg) => {
 			b.Fatal(err)
 		}
 	}
+	b.StopTimer()
 	if result != "20" {
 		b.Fatalf("got %q, want \"20\"", result)
 	}
