@@ -1,42 +1,193 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"os"
+	"reflect"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/bxcodec/faker/v4"
+	"github.com/bxcodec/faker/v4/pkg/options"
 	"github.com/estraier/tkrzw-go"
-	"github.com/go-test/deep"
 	"github.com/pkg/errors"
+	"github.com/sugawarayuuta/sonnet"
 	"github.com/zond/juicemud"
-	"github.com/zond/juicemud/glue"
+	"github.com/zond/juicemud/structs"
 	"rogchap.com/v8go"
+
+	crand "crypto/rand"
+
+	goccy "github.com/goccy/go-json"
+)
+
+var (
+	fakeObjectJSON []byte
 )
 
 func withHash(t *testing.T, f func(db *tkrzw.DBM)) {
 	t.Helper()
-	dbm := tkrzw.NewDBM()
 	tmpFile, err := os.CreateTemp("", "*.tkh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	tmpFile.Close()
-	defer os.Remove(tmpFile.Name())
-	stat := dbm.Open(tmpFile.Name(), true, map[string]string{
-		"update_mode":      "UPDATE_APPENDING",
-		"record_comp_mode": "RECORD_COMP_NONE",
-		"restore_mode":     "RESTORE_SYNC|RESTORE_NO_SHORTCUTS|RESTORE_WITH_HARDSYNC",
-	})
-	if !stat.IsOK() {
-		t.Fatal(stat)
+	if err := os.Remove(tmpFile.Name()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(tmpFile.Name(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpFile.Name())
+	o := &opener{Dir: tmpFile.Name()}
+	dbm := o.OpenHash("test")
+	if o.Err != nil {
+		t.Fatal(err)
 	}
 	f(dbm)
 }
 
-func TestTkrzw(t *testing.T) {
-	withHash(t, func(db *tkrzw.DBM) {
+func withTree(t *testing.T, f func(db *tkrzw.DBM)) {
+	t.Helper()
+	tmpFile, err := os.CreateTemp("", "*.tkh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpFile.Close()
+	if err := os.Remove(tmpFile.Name()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(tmpFile.Name(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpFile.Name())
+	o := &opener{Dir: tmpFile.Name()}
+	dbm := o.OpenTree("test")
+	if o.Err != nil {
+		t.Fatal(err)
+	}
+	f(dbm)
+}
+
+func init() {
+	if err := faker.AddProvider("ByteStringMap", func(v reflect.Value) (any, error) {
+		log.Printf("calling ByteStringMap provider")
+		t := v.Type()
+		mapType := reflect.MapOf(reflect.TypeOf(structs.ByteString("")), t.Elem())
+		result := reflect.MakeMap(mapType)
+		size := rand.Intn(10)
+		for i := 0; i < size; i++ {
+			key := make([]byte, 64)
+			if _, err := crand.Read(key); err != nil {
+				return nil, juicemud.WithStack(err)
+			}
+			val := reflect.New(t.Elem())
+			if err := faker.FakeData(val.Interface()); err != nil {
+				return nil, juicemud.WithStack(err)
+			}
+			result.SetMapIndex(reflect.ValueOf(structs.ByteString(key)), val.Elem())
+		}
+		return result.Interface(), nil
+	}); err != nil {
+		log.Panic(err)
+	}
+	fakeObject := &structs.Object{}
+	err := faker.FakeData(fakeObject, options.WithRandomMapAndSliceMaxSize(10))
+	if err != nil {
+		log.Panic(err)
+	}
+	if fakeObjectJSON, err = json.Marshal(fakeObject); err != nil {
+		log.Panic(err)
+	}
+}
+
+func WithHash(t *testing.T, f func(db *tkrzw.DBM)) {
+	t.Helper()
+	tmpFile, err := os.CreateTemp("", "*.tkh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpFile.Close()
+	if err := os.Remove(tmpFile.Name()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(tmpFile.Name(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpFile.Name())
+	o := &opener{Dir: tmpFile.Name()}
+	dbm := o.OpenHash("test")
+	if o.Err != nil {
+		t.Fatal(err)
+	}
+	f(dbm)
+}
+
+func WithTree(t *testing.T, f func(db *tkrzw.DBM)) {
+	t.Helper()
+	tmpFile, err := os.CreateTemp("", "*.tkh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpFile.Close()
+	if err := os.Remove(tmpFile.Name()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(tmpFile.Name(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpFile.Name())
+	o := &opener{Dir: tmpFile.Name()}
+	dbm := o.OpenTree("test")
+	if o.Err != nil {
+		t.Fatal(err)
+	}
+	f(dbm)
+}
+
+func TestFirst(t *testing.T) {
+	WithTree(t, func(db *tkrzw.DBM) {
+		for _, vInt := range rand.Perm(100) {
+			v := uint32(vInt)
+			key := make([]byte, binary.Size(v))
+			binary.BigEndian.PutUint32(key, v)
+			if stat := db.Set(key, key, true); !stat.IsOK() {
+				t.Fatal(stat)
+			}
+		}
+		for want := 0; want < 100; want++ {
+			v := uint32(want)
+			wantKey := make([]byte, binary.Size(v))
+			binary.BigEndian.PutUint32(wantKey, v)
+			func() {
+				iter := db.MakeIterator()
+				defer iter.Destruct()
+				if stat := iter.First(); !stat.IsOK() {
+					t.Fatal(stat)
+				}
+				gotKey, stat := iter.GetKey()
+				if !stat.IsOK() {
+					t.Fatal(stat)
+				}
+				if !bytes.Equal(gotKey, wantKey) {
+					t.Errorf("got %+v, want %+v", gotKey, wantKey)
+				}
+			}()
+			if stat := db.Remove(wantKey); !stat.IsOK() {
+				t.Fatal(stat)
+			}
+		}
+	})
+}
+
+func TestProcessMulti(t *testing.T) {
+	WithHash(t, func(db *tkrzw.DBM) {
 		if stat := db.Set("a", "b", true); !stat.IsOK() {
 			t.Fatal(stat)
 		}
@@ -86,144 +237,110 @@ func TestTkrzw(t *testing.T) {
 	})
 }
 
-func TestObjectHelper(t *testing.T) {
-	ctx := context.Background()
-	o, err := MakeObject(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oh := OH(o)
-	if has, err := oh.Content().Has([]byte("a")); err != nil || has {
-		t.Errorf("got %v, %v, wanted false, nil", has, err)
-	}
-	if err := oh.Content().Append([]byte("a")); err != nil {
-		t.Errorf("got %v, want nil", err)
-	}
-	if has, err := oh.Content().Has([]byte("a")); err != nil || !has {
-		t.Errorf("got %v, %v, want true, nil", has, err)
-	}
-	if err := oh.Content().Remove([]byte("a")); err != nil {
-		t.Errorf("got %v, want nil", err)
-	}
-	if has, err := oh.Content().Has([]byte("a")); err != nil || has {
-		t.Errorf("got %v, %v, want false, nil", has, err)
-	}
-	if err := oh.Content().Set([][]byte{[]byte("b")}); err != nil {
-		t.Errorf("got %v, want nil", err)
-	}
-	if has, err := oh.Content().Has([]byte("b")); err != nil || !has {
-		t.Errorf("got %v, %v, want true, nil", has, err)
+func BenchmarkV8JSON(b *testing.B) {
+	b.StopTimer()
+	iso := v8go.NewIsolate()
+	ctx := v8go.NewContext(iso)
+	b.StartTimer()
+	js := string(fakeObjectJSON)
+	for i := 0; i < b.N; i++ {
+		o, err := v8go.JSONParse(ctx, js)
+		if err != nil {
+			b.Fatal(err)
+		}
+		ser, err := v8go.JSONStringify(ctx, o)
+		if err != nil {
+			b.Fatal(err)
+		}
+		js = ser
 	}
 }
 
-const (
-	objectJSON = `{
-  "Id": "deadbeef",
-  "Location": "beefdead",
-  "Content": ["dead", "beef"],
-  "Callbacks": ["cb1", "cb2"],
-  "Skills": [
-    {
-      "Name": "skill1",
-	  "Theoretical": 2.0,
-	  "Practical": 1.5
-    },
-    {
-      "Name": "skill2",
-	  "Theoretical": 3.0,
-	  "Practical": 2.5
-    }
-  ],
-  "Descriptions": [
-    {
-      "Short": "short1",
-	  "Long": "long1",
-	  "Tags": ["tag11", "tag12"],
-	  "Challenges": [
-	    {
-	  	  "Skill": "skill1",
-		  "Level": 2.0,
-		  "FailMessage": "mess11"
-	    },
-		{
-	  	  "Skill": "skill2",
-		  "Level": 3.0,
-		  "FailMessage": "mess12"
+func BenchmarkEncodingJSON(b *testing.B) {
+	b.StopTimer()
+	o := &structs.Object{}
+	js := fakeObjectJSON
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		if err := json.Unmarshal(js, o); err != nil {
+			b.Fatal(err)
 		}
-	  ]
-    },
-	{
-      "Short": "short2",
-	  "Long": "long2",
-	  "Tags": ["tag21", "tag22"],
-	  "Challenges": [
-	    {
-	  	  "Skill": "skill1",
-		  "Level": 3.0,
-		  "FailMessage": "mess21"
-	    },
-		{
-	  	  "Skill": "skill2",
-		  "Level": 4.0,
-		  "FailMessage": "mess22"
+		by, err := json.Marshal(o)
+		if err != nil {
+			b.Fatal(err)
 		}
-	  ]
+		js = by
 	}
-  ],
-  "State": "",
-  "Exits": [],
-  "Source": ""
-}`
-)
+}
 
-func TestObjectCreateAndCopy(t *testing.T) {
-	iso := v8go.NewIsolate()
-	ctx := v8go.NewContext(iso)
-	wantV8, err := v8go.JSONParse(ctx, objectJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	obj, err := MakeObject(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := glue.Copy(*obj, wantV8); err != nil {
-		t.Fatal(err)
-	}
-	gotV8, err := glue.ToV8(ctx, *obj)
-	if err != nil {
-		log.Print(juicemud.StackTrace(err))
-		t.Fatal(err)
-	}
-	wantJSON, err := v8go.JSONStringify(ctx, wantV8)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantDec := map[string]any{}
-	if err := json.Unmarshal([]byte(wantJSON), &wantDec); err != nil {
-		t.Fatal(err)
-	}
-	wantIndentJSON, err := json.MarshalIndent(wantDec, "  ", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotJSON, err := v8go.JSONStringify(ctx, gotV8)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotDec := map[string]any{}
-	if err := json.Unmarshal([]byte(gotJSON), &gotDec); err != nil {
-		t.Fatal(err)
-	}
-	gotIndentJSON, err := json.MarshalIndent(gotDec, "  ", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	diff := deep.Equal(wantDec, gotDec)
-	if len(diff) > 0 {
-		t.Logf("--- Wanted ---\n%s\n--- but got ---\n%s", string(wantIndentJSON), string(gotIndentJSON))
-		for _, d := range diff {
-			t.Error(d)
+func BenchmarkSonnet(b *testing.B) {
+	b.StopTimer()
+	o := &structs.Object{}
+	js := fakeObjectJSON
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		if err := sonnet.Unmarshal(js, o); err != nil {
+			b.Fatal(err)
 		}
+		by, err := sonnet.Marshal(o)
+		if err != nil {
+			b.Fatal(err)
+		}
+		js = by
 	}
+}
+
+func BenchmarkGoccy(b *testing.B) {
+	b.StopTimer()
+	o := &structs.Object{}
+	js := fakeObjectJSON
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		if err := goccy.Unmarshal(js, o); err != nil {
+			b.Fatal(err)
+		}
+		by, err := goccy.Marshal(o)
+		if err != nil {
+			b.Fatal(err)
+		}
+		js = by
+	}
+}
+
+func TestQueue(t *testing.T) {
+	ctx := context.Background()
+	withTree(t, func(db *tkrzw.DBM) {
+		got := []string{}
+		mut := &sync.Mutex{}
+		taskWG := &sync.WaitGroup{}
+		q := NewQueue(ctx, db, func(b []byte) {
+			mut.Lock()
+			defer mut.Unlock()
+			got = append(got, string(b))
+		})
+		runWG := &sync.WaitGroup{}
+		runWG.Add(1)
+		go func() {
+			if err := q.Start(ctx); err != nil {
+				log.Fatal(err)
+			}
+			runWG.Done()
+		}()
+		if err := q.Push(ctx, q.After(100*time.Millisecond), []byte("a")); err != nil {
+			t.Fatal(err)
+		}
+		if err := q.Push(ctx, q.After(10*time.Millisecond), []byte("b")); err != nil {
+			t.Fatal(err)
+		}
+		if err := q.Push(ctx, q.After(200*time.Millisecond), []byte("c")); err != nil {
+			t.Fatal(err)
+		}
+		q.Close()
+		runWG.Wait()
+		taskWG.Wait()
+		want := []string{"b", "a", "c"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
 }

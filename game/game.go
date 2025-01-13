@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"time"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/storage"
+	"github.com/zond/juicemud/structs"
 	"golang.org/x/term"
+
+	goccy "github.com/goccy/go-json"
 )
 
 const (
@@ -27,11 +31,9 @@ var (
 		userSource:    "// This code runs all connected users.",
 		genesisSource: "// This code runs the room where newly created users are dropped.",
 	}
-	initialObjects = map[string]func(*storage.Object) error{
-		genesisID: func(o *storage.Object) error {
-			if err := o.SetId([]byte(genesisID)); err != nil {
-				return juicemud.WithStack(err)
-			}
+	initialObjects = map[string]func(*structs.Object) error{
+		genesisID: func(o *structs.Object) error {
+			o.Id = []byte(genesisID)
 			return nil
 		},
 	}
@@ -39,6 +41,29 @@ var (
 
 type Game struct {
 	storage *storage.Storage
+	queue   *storage.Queue
+}
+
+type event struct {
+	ID        []byte
+	EventType string
+	Message   string
+}
+
+func (g *Game) enqueueAt(ctx context.Context, ev event, t time.Time) error {
+	b, err := goccy.Marshal(ev)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	return g.queue.Push(ctx, g.queue.At(t), b)
+}
+
+func (g *Game) enqueueAfter(ctx context.Context, ev event, d time.Duration) error {
+	b, err := goccy.Marshal(ev)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	return g.queue.Push(ctx, g.queue.After(d), b)
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
@@ -56,9 +81,25 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			return nil, juicemud.WithStack(err)
 		}
 	}
-	return &Game{
+	result := &Game{
 		storage: s,
-	}, nil
+	}
+	var err error
+	result.queue = s.Queue(ctx, func(b []byte) {
+		go func() {
+			ev := &event{}
+			if err := goccy.Unmarshal(b, ev); err != nil {
+				log.Panic(err)
+			}
+			if loadAndCall(ctx, ev.ID, ev.EventType, ev.Message); err != nil {
+				log.Printf("trying to call %+v.%v(%q): %v", ev.ID, ev.EventType, ev.Message, err)
+			}
+		}()
+	})
+	go func() {
+		log.Panic(result.queue.Start(ctx))
+	}()
+	return result, nil
 }
 
 type contextKey int
@@ -92,4 +133,24 @@ func (g *Game) HandleSession(sess ssh.Session) {
 			log.Println(juicemud.StackTrace(err))
 		}
 	}
+}
+
+func (g *Game) createUser(ctx context.Context, user *storage.User) error {
+	object, err := structs.MakeObject(ctx)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	object.SourcePath = userSource
+	if err := call(ctx, object, "", ""); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	user.Object = object.Id
+	if err := g.storage.SetUser(ctx, user, false); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := g.storage.SetObject(ctx, nil, object); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return nil
 }

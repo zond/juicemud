@@ -51,11 +51,13 @@ func newMachine() (*machine, error) {
 	return m, nil
 }
 
+type Callbacks map[string]func(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value
+
 type Target struct {
 	Source    string
 	Origin    string
 	State     string
-	Callbacks map[string]func(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value
+	Callbacks Callbacks
 	Console   io.Writer
 }
 

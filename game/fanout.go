@@ -7,12 +7,20 @@ import (
 
 type Fanout map[*term.Terminal]bool
 
-func (f Fanout) Push(t *term.Terminal) {
-	f[t] = true
+func (f *Fanout) Push(t *term.Terminal) *Fanout {
+	if f == nil {
+		return &Fanout{t: true}
+	}
+	(*f)[t] = true
+	return f
 }
 
-func (f Fanout) Drop(t *term.Terminal) {
-	delete(f, t)
+func (f *Fanout) Drop(t *term.Terminal) *Fanout {
+	if f == nil {
+		return nil
+	}
+	delete(*f, t)
+	return f
 }
 
 func (f *Fanout) Write(b []byte) (int, error) {

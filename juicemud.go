@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -38,12 +40,14 @@ func StackTrace(err error) string {
 
 type SyncMap[K comparable, V comparable] struct {
 	m     map[K]V
+	locks map[K]*sync.WaitGroup
 	mutex sync.RWMutex
 }
 
 func NewSyncMap[K comparable, V comparable]() *SyncMap[K, V] {
 	return &SyncMap[K, V]{
-		m: map[K]V{},
+		m:     map[K]V{},
+		locks: map[K]*sync.WaitGroup{},
 	}
 }
 
@@ -89,38 +93,46 @@ func (s *SyncMap[K, V]) Swap(key K, oldValue V, newValue V) bool {
 	return false
 }
 
-type LockMap[K comparable] struct {
-	sm *SyncMap[K, *sync.WaitGroup]
-}
-
-func NewLockMap[K comparable]() *LockMap[K] {
-	sm := NewSyncMap[K, *sync.WaitGroup]()
-	return &LockMap[K]{sm: sm}
-}
-
-func (l *LockMap[K]) WithLock(key K, f func()) {
+func (l *SyncMap[K, V]) WithLock(key K, f func()) {
 	l.Lock(key)
 	defer l.Unlock(key)
 	f()
 }
 
-func (l *LockMap[K]) Lock(key K) {
-	for {
+func (l *SyncMap[K, V]) Lock(key K) {
+	trylock := func() *sync.WaitGroup {
+		l.mutex.Lock()
+		defer l.mutex.Unlock()
+		if wg, found := l.locks[key]; found {
+			return wg
+		}
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
-		if l.sm.Swap(key, nil, wg) {
-			break
-		}
-		otherWg, found := l.sm.GetHas(key)
-		if found {
-			otherWg.Wait()
-		}
+		l.locks[key] = wg
+		return nil
+	}
+	for wg := trylock(); wg != nil; wg = trylock() {
+		wg.Wait()
 	}
 }
 
-func (l *LockMap[K]) Unlock(key K) {
-	if wg, found := l.sm.GetHas(key); found {
-		l.sm.Del(key)
+func (l *SyncMap[K, V]) Unlock(key K) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	if wg, found := l.locks[key]; found {
+		delete(l.locks, key)
 		wg.Done()
 	}
+}
+
+func Increment(prevPointer *uint64) uint64 {
+	next := uint64(0)
+	for {
+		next = uint64(time.Now().UnixNano())
+		previous := atomic.LoadUint64(prevPointer)
+		if next > previous && atomic.CompareAndSwapUint64(prevPointer, previous, next) {
+			break
+		}
+	}
+	return next
 }

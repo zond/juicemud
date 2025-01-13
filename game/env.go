@@ -1,7 +1,6 @@
 package game
 
 import (
-	"context"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -10,17 +9,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/digest"
-	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
 	"golang.org/x/term"
-	"rogchap.com/v8go"
 )
 
 var (
@@ -32,21 +28,20 @@ const (
 )
 
 var (
-	envByObjectID         = juicemud.NewSyncMap[string, *Env]()
-	consoleByObjectID     = juicemud.NewSyncMap[string, *Fanout]()
-	consoleByObjectIDLock = juicemud.NewLockMap[string]()
-	jsContextLocks        = juicemud.NewLockMap[string]()
+	envByObjectID     = juicemud.NewSyncMap[string, *Env]()
+	consoleByObjectID = juicemud.NewSyncMap[string, *Fanout]()
+	jsContextLocks    = juicemud.NewSyncMap[string, bool]()
 )
 
 func addConsole(id string, term *term.Terminal) {
-	consoleByObjectIDLock.WithLock(id, func() {
-		consoleByObjectID.Get(id).Push(term)
+	consoleByObjectID.WithLock(id, func() {
+		consoleByObjectID.Set(id, consoleByObjectID.Get(id).Push(term))
 	})
 }
 
 func delConsole(id string, term *term.Terminal) {
-	consoleByObjectIDLock.WithLock(id, func() {
-		consoleByObjectID.Get(id).Drop(term)
+	consoleByObjectID.WithLock(id, func() {
+		consoleByObjectID.Set(id, consoleByObjectID.Get(id).Drop(term))
 	})
 }
 
@@ -165,10 +160,11 @@ func (e *Env) Connect() error {
 			"create user": e.createUser,
 		})
 	}
-	for err := sel(); err != nil && e.user == nil; err = sel() {
-		if !errors.Is(err, OperationAborted) {
-			fmt.Fprintln(e.term, err)
-		}
+	var err error
+	for err = sel(); errors.Is(err, OperationAborted); err = sel() {
+	}
+	if err != nil {
+		return juicemud.WithStack(err)
 	}
 	b, err := json.Marshal(map[string]any{
 		"remote":   e.sess.RemoteAddr(),
@@ -267,101 +263,8 @@ func (e *Env) createUser() error {
 			fmt.Fprintln(e.term, "Passwords don't match!")
 		}
 	}
-	object, err := storage.MakeObject(e.sess.Context())
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	if err := object.SetSource(userSource); err != nil {
-		return juicemud.WithStack(err)
-	}
-	if err := call(e.sess.Context(), object, "", ""); err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	objectID, err := object.Id()
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	e.user.Object = objectID
-	if err := e.game.storage.SetUser(e.sess.Context(), e.user, false); err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	if err := e.game.storage.SetObject(e.sess.Context(), nil, object); err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	fmt.Fprintf(e.term, "Welcome, %v!\n", e.user.Name)
-	return nil
-}
-
-func call(ctx context.Context, object *storage.Object, callbackName string, message string) error {
-	id, err := object.Id()
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	sid := string(id)
-	origin, err := object.Source()
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	state, err := object.State()
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	game, err := GetGame(ctx)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	source, err := game.storage.GetSource(ctx, origin)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	callbacks := map[string]func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value{
-		"setDescriptions": func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-			// TODO
-			return nil
-		},
-	}
-	target := js.Target{
-		Source:    string(source),
-		Origin:    origin,
-		State:     state,
-		Callbacks: callbacks,
-		Console:   consoleByObjectID.Get(sid),
-	}
-	res, err := target.Call(ctx, callbackName, message, 200*time.Millisecond)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	if err := object.SetState(res.State); err != nil {
-		return juicemud.WithStack(err)
-	}
-	if err := storage.ObjectHelper(*object).Callbacks().Set(res.Callbacks); err != nil {
+	if err := e.game.createUser(e.sess.Context(), e.user); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return nil
-}
-
-func loadAndCall(ctx context.Context, id []byte, callbackName string, message string) error {
-	sid := string(id)
-	jsContextLocks.Lock(sid)
-	defer jsContextLocks.Unlock(sid)
-
-	game, err := GetGame(ctx)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	object, err := game.storage.GetObject(ctx, id)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	oldLocation, err := object.Location()
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	if err := call(ctx, object, callbackName, message); err != nil {
-		return juicemud.WithStack(err)
-	}
-	return juicemud.WithStack(game.storage.SetObject(ctx, oldLocation, object))
 }
