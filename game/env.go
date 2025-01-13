@@ -211,7 +211,7 @@ func (e *Env) loginUser() error {
 			e.user = user
 		}
 	}
-	fmt.Fprintf(e.term, "Welcome back, %v!\n", e.user.Name)
+	fmt.Fprintf(e.term, "Welcome back, %v %+v!\n", e.user.Name, e.user.Object)
 	return nil
 }
 
@@ -266,5 +266,6 @@ func (e *Env) createUser() error {
 	if err := e.game.createUser(e.sess.Context(), e.user); err != nil {
 		return juicemud.WithStack(err)
 	}
+	fmt.Fprintf(e.term, "Welcome %s!\n", e.user.Name)
 	return nil
 }

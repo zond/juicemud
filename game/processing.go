@@ -10,6 +10,8 @@ import (
 	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/structs"
 	"rogchap.com/v8go"
+
+	goccy "github.com/goccy/go-json"
 )
 
 func jsFromGo(rc *js.RunContext, x any) *v8go.Value {
@@ -48,7 +50,7 @@ func addGetSetPair(name string, source any, callbacks js.Callbacks) {
 	}
 }
 
-func objectCallbacks(object *structs.Object) js.Callbacks {
+func objectCallbacks(ctx context.Context, object *structs.Object) js.Callbacks {
 	result := js.Callbacks{}
 	addGetSetPair("Location", &object.Location, result)
 	addGetSetPair("Content", &object.Content, result)
@@ -65,8 +67,40 @@ func objectCallbacks(object *structs.Object) js.Callbacks {
 		return nil
 	}
 	result["getEnvironment"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		// TODO: Get access to pre-saved data about parent, siblings, and content.
-		return nil
+		game, err := GetGame(ctx)
+		if err != nil {
+			return rc.Throw("trying to locate Game instance in Context: %v", err)
+		}
+		location, err := game.storage.GetObject(ctx, object.Location)
+		if err != nil {
+			return rc.Throw("trying to load Object Location: %v", err)
+		}
+		keys := make([][]byte, 0, len(object.Content)+len(location.Content))
+		for bs := range object.Content {
+			keys = append(keys, []byte(bs))
+		}
+		for bs := range location.Content {
+			keys = append(keys, []byte(bs))
+		}
+		loaded, err := game.storage.GetObjects(ctx, keys)
+		if err != nil {
+			return rc.Throw("trying to load Object and Location Content: %v", err)
+		}
+		content := loaded[:len(object.Content)]
+		siblings := loaded[len(object.Content):]
+		js, err := goccy.Marshal(map[string]any{
+			"Location": location,
+			"Content":  content,
+			"Siblings": siblings,
+		})
+		if err != nil {
+			return rc.Throw("trying to serialize Object Location, Content and siblings: %v", err)
+		}
+		result, err := v8go.JSONParse(rc.Context(), string(js))
+		if err != nil {
+			return rc.Throw("trying to unserialize Object Location, Content and siblings: %v", err)
+		}
+		return result
 	}
 	return result
 }
@@ -82,7 +116,7 @@ func call(ctx context.Context, object *structs.Object, callbackName string, mess
 		return juicemud.WithStack(err)
 	}
 
-	callbacks := objectCallbacks(object)
+	callbacks := objectCallbacks(ctx, object)
 	target := js.Target{
 		Source:    string(source),
 		Origin:    object.SourcePath,

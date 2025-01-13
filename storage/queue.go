@@ -28,10 +28,10 @@ type Queue struct {
 	closed    bool
 	nextEvent *event
 	offset    uint64
-	fun       func([]byte)
+	fun       func(context.Context, []byte)
 }
 
-func NewQueue(ctx context.Context, dbm *tkrzw.DBM, fun func([]byte)) *Queue {
+func NewQueue(ctx context.Context, dbm *tkrzw.DBM, fun func(context.Context, []byte)) *Queue {
 	mut := &sync.Mutex{}
 	return &Queue{
 		cond: sync.NewCond(mut),
@@ -123,7 +123,7 @@ func (q *Queue) Start(ctx context.Context) error {
 	defer q.cond.L.Unlock()
 	for !q.closed || q.nextEvent != nil {
 		for q.nextEvent != nil && q.nextEvent.at <= q.now() {
-			q.fun(q.nextEvent.content)
+			q.fun(ctx, q.nextEvent.content)
 			if stat := q.tree.Remove(q.nextEvent.key); !stat.IsOK() {
 				return juicemud.WithStack(err)
 			}

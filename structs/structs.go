@@ -56,13 +56,13 @@ type Exit struct {
 
 type ByteString string
 
-func (bs ByteString) MarshalJSON() ([]byte, error) {
+func (bs ByteString) MarshalText() (text []byte, err error) {
 	return json.Marshal([]byte(bs))
 }
 
-func (bs *ByteString) UnmarshalJSON(js []byte) error {
+func (bs *ByteString) UnmarshalText(text []byte) error {
 	b := []byte{}
-	if err := json.Unmarshal(js, &b); err != nil {
+	if err := json.Unmarshal(text, &b); err != nil {
 		return err
 	}
 	*bs = ByteString(b)

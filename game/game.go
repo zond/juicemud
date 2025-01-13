@@ -85,7 +85,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		storage: s,
 	}
 	var err error
-	result.queue = s.Queue(ctx, func(b []byte) {
+	result.queue = s.Queue(ctx, func(ctx context.Context, b []byte) {
 		go func() {
 			ev := &event{}
 			if err := goccy.Unmarshal(b, ev); err != nil {
@@ -97,7 +97,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		}()
 	})
 	go func() {
-		log.Panic(result.queue.Start(ctx))
+		log.Panic(result.queue.Start(context.WithValue(ctx, gameContextKey, result)))
 	}()
 	return result, nil
 }
@@ -141,6 +141,7 @@ func (g *Game) createUser(ctx context.Context, user *storage.User) error {
 		return juicemud.WithStack(err)
 	}
 	object.SourcePath = userSource
+	object.Location = []byte(genesisID)
 	if err := call(ctx, object, "", ""); err != nil {
 		return juicemud.WithStack(err)
 	}

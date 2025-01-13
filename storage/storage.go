@@ -52,7 +52,7 @@ type Storage struct {
 	queue   *tkrzw.DBM
 }
 
-func (s *Storage) Queue(ctx context.Context, fun func([]byte)) *Queue {
+func (s *Storage) Queue(ctx context.Context, fun func(context.Context, []byte)) *Queue {
 	return NewQueue(ctx, s.queue, fun)
 }
 
@@ -90,6 +90,30 @@ func (s *Storage) SetSource(ctx context.Context, path string, content []byte) er
 		return juicemud.WithStack(err)
 	}
 	return s.sync(ctx)
+}
+
+func (s *Storage) GetObjects(ctx context.Context, ids [][]byte) ([]structs.Object, error) {
+	pairs := make([]funcPair, len(ids))
+	resultBytes := make([][]byte, len(ids))
+	for index, id := range ids {
+		pairs[index] = funcPair{
+			Key: id,
+			Func: func(k, v []byte) (any, error) {
+				resultBytes[index] = v
+				return nil, nil
+			},
+		}
+	}
+	if err := processMulti(s.objects, pairs, false); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	results := make([]structs.Object, len(ids))
+	for index, b := range resultBytes {
+		if err := goccy.Unmarshal(b, &results[index]); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+	}
+	return results, nil
 }
 
 func (s *Storage) GetObject(ctx context.Context, id []byte) (*structs.Object, error) {
@@ -162,12 +186,33 @@ func (s *Storage) SetObject(ctx context.Context, claimedOldLocation []byte, obje
 		return juicemud.WithStack(err)
 	}
 	var pairs []funcPair
+	var marshalledNewContainer []byte
 	if claimedOldLocation == nil || bytes.Equal(claimedOldLocation, object.Location) {
 		// Loc is unchanged, just verify that it's what's there right now.
 		pairs = []funcPair{
 			{
+				Key: object.Location,
+				Func: func(key []byte, value []byte) (any, error) {
+					container, err := readObject(value)
+					if err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					if _, found := container.Content[structs.ByteString(object.Id)]; found {
+						return nil, nil
+					}
+					container.Content[structs.ByteString(object.Id)] = true
+					if marshalledNewContainer, err = goccy.Marshal(container); err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					return nil, nil
+				},
+			},
+			{
 				Key: object.Id,
 				Func: func(key []byte, value []byte) (any, error) {
+					if value == nil {
+						return marshalledObject, nil
+					}
 					oldObject, err := readObject(value)
 					if err != nil {
 						return nil, juicemud.WithStack(err)
@@ -178,11 +223,16 @@ func (s *Storage) SetObject(ctx context.Context, claimedOldLocation []byte, obje
 					return marshalledObject, nil
 				},
 			},
+			{
+				Key: object.Location,
+				Func: func(key []byte, value []byte) (any, error) {
+					return marshalledNewContainer, nil
+				},
+			},
 		}
 	} else {
 		// Loc is changed, verify that the old one is what's there right now, that obj can
 		// be removed from old loc, and added to new loc, before all are saved.
-		var marshalledNewContainer []byte
 		pairs = []funcPair{
 			{
 				Key: object.Id,
