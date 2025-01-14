@@ -3,7 +3,6 @@ package game
 import (
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -17,6 +16,8 @@ import (
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
 	"golang.org/x/term"
+
+	goccy "github.com/goccy/go-json"
 )
 
 var (
@@ -176,7 +177,7 @@ func (e *Env) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	b, err := json.Marshal(map[string]any{
+	b, err := goccy.Marshal(map[string]any{
 		"remote":   e.sess.RemoteAddr(),
 		"username": e.user.Name,
 		"object":   e.user.Object,
@@ -185,7 +186,7 @@ func (e *Env) Connect() error {
 		return juicemud.WithStack(err)
 	}
 	// TODO: This, and all future Object calls, should not return an error - just write to the terminal.
-	if err := loadAndCall(e.sess.Context(), e.user.Object, connectedEventType, string(b)); err != nil {
+	if err := e.game.loadAndCall(e.sess.Context(), e.user.Object, connectedEventType, string(b)); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return e.Process()

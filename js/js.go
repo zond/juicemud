@@ -10,6 +10,8 @@ import (
 
 	"github.com/zond/juicemud"
 	"rogchap.com/v8go"
+
+	goccy "github.com/goccy/go-json"
 )
 
 const (
@@ -63,14 +65,38 @@ type Target struct {
 
 type Result struct {
 	State     string
-	Callbacks []string
+	Callbacks map[string]map[string]bool
 	Value     string
 }
 
 type RunContext struct {
 	m         *machine
+	r         *Result
 	t         *Target
 	callbacks map[string]*v8go.Function
+}
+
+func (rc *RunContext) JSFromGo(x any) (*v8go.Value, error) {
+	b, err := goccy.Marshal(x)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	res, err := v8go.JSONParse(rc.Context(), string(b))
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return res, nil
+}
+
+func (rc *RunContext) Copy(dst any, src *v8go.Value) error {
+	s, err := v8go.JSONStringify(rc.Context(), src)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := goccy.Unmarshal([]byte(s), dst); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return nil
 }
 
 func (rc *RunContext) Context() *v8go.Context {
@@ -96,25 +122,35 @@ func (rc *RunContext) Throw(format string, args ...any) *v8go.Value {
 
 func addJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 	args := info.Args()
-	if len(args) == 2 && args[0].IsString() && args[1].IsFunction() {
+	if len(args) == 3 && args[0].IsString() && args[1].IsArray() && args[2].IsFunction() {
 		eventType := args[0].String()
-		fun, err := args[1].AsFunction()
+		tags := []string{}
+		if err := rc.Copy(&tags, args[1]); err != nil {
+			return rc.Throw("trying to copy %v to a &[]byte{}: %v", args[1], err)
+		}
+		fun, err := args[2].AsFunction()
 		if err != nil {
-			return rc.Throw("trying to cast %v to *v8go.Function: %v", args[1], err)
+			return rc.Throw("trying to cast %v to *v8go.Function: %v", args[2], err)
 		}
 		rc.callbacks[eventType] = fun
+		rc.r.Callbacks[eventType] = map[string]bool{}
+		for _, tag := range tags {
+			rc.r.Callbacks[eventType][tag] = true
+		}
 		return nil
 	}
-	return rc.Throw("addEventListener takes [string, function] arguments")
+	return rc.Throw("addCallback takes [string, []string, function] arguments")
 }
 
 func removeJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 	args := info.Args()
 	if len(args) == 1 && args[0].IsString() {
-		delete(rc.callbacks, args[0].String())
+		eventType := args[0].String()
+		delete(rc.callbacks, eventType)
+		delete(rc.r.Callbacks, eventType)
 		return nil
 	}
-	return rc.Throw("removeEventListener takes [string] arguments")
+	return rc.Throw("removeCallback takes [string] arguments")
 }
 
 func logFunc(w io.Writer) func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value {
@@ -231,12 +267,15 @@ func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, erro
 	}
 }
 
-func (t Target) Call(ctx context.Context, callbackName string, message string, timeout time.Duration) (*Result, error) {
+func (t Target) Call(ctx context.Context, name string, message string, timeout time.Duration) (*Result, error) {
 	m := <-machines
 	defer func() { machines <- m }()
 
 	rc := &RunContext{
-		m:         m,
+		m: m,
+		r: &Result{
+			Callbacks: map[string]map[string]bool{},
+		},
 		t:         &t,
 		callbacks: map[string]*v8go.Function{},
 	}
@@ -251,9 +290,9 @@ func (t Target) Call(ctx context.Context, callbackName string, message string, t
 		return nil, juicemud.WithStack(err)
 	}
 
-	jsCB, found := rc.callbacks[callbackName]
+	jsCB, found := rc.callbacks[name]
 	if !found {
-		return collectResult(rc, nil)
+		return rc.collectResult(nil)
 	}
 
 	var val *v8go.Value
@@ -275,31 +314,24 @@ func (t Target) Call(ctx context.Context, callbackName string, message string, t
 	}, &timeout); err != nil {
 		return nil, juicemud.WithStack(err)
 	} else {
-		return collectResult(rc, val)
+		return rc.collectResult(val)
 	}
 }
 
-func collectResult(rc *RunContext, value *v8go.Value) (*Result, error) {
-	valueJSON := "{}"
+func (rc *RunContext) collectResult(value *v8go.Value) (*Result, error) {
+	rc.r.Value = "{}"
 	if value != nil && !value.IsNull() {
 		var err error
-		valueJSON, err = v8go.JSONStringify(rc.m.vctx, value)
-		if err != nil {
+		if rc.r.Value, err = v8go.JSONStringify(rc.m.vctx, value); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
-	}
-	result := &Result{
-		Value: valueJSON,
 	}
 	stateValue, err := rc.m.vctx.Global().Get(stateName)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	if result.State, err = v8go.JSONStringify(rc.m.vctx, stateValue); err != nil {
+	if rc.r.State, err = v8go.JSONStringify(rc.m.vctx, stateValue); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	for name := range rc.callbacks {
-		result.Callbacks = append(result.Callbacks, name)
-	}
-	return result, nil
+	return rc.r, nil
 }

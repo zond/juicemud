@@ -3,8 +3,8 @@ package game
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/zond/juicemud"
@@ -15,43 +15,31 @@ import (
 	goccy "github.com/goccy/go-json"
 )
 
-func jsFromGo(rc *js.RunContext, x any) *v8go.Value {
-	b, err := json.Marshal(x)
-	if err != nil {
-		return rc.Throw("trying to marshal %v: %v", x, err)
-	}
-	res, err := v8go.JSONParse(rc.Context(), string(b))
-	if err != nil {
-		return rc.Throw("trying to unmarshal %v: %v", string(b), err)
-	}
-	return res
-}
-
 func copyToGo(rc *js.RunContext, dst any, srcInfo *v8go.FunctionCallbackInfo) *v8go.Value {
 	args := srcInfo.Args()
 	if len(args) != 1 {
 		return rc.Throw("function takes 1 argument, not %+v", args)
 	}
-	s, err := v8go.JSONStringify(rc.Context(), args[0])
-	if err != nil {
-		return rc.Throw("trying to marshal %v: %v", args[0], err)
-	}
-	if err := json.Unmarshal([]byte(s), dst); err != nil {
-		return rc.Throw("trying to unmarshal %v: %v", s, err)
+	if err := rc.Copy(dst, args[0]); err != nil {
+		return rc.Throw("trying to copy %v to a %v: %v", args[0], reflect.TypeOf(dst), err)
 	}
 	return nil
 }
 
 func addGetSetPair(name string, source any, callbacks js.Callbacks) {
 	callbacks[fmt.Sprintf("get%s", name)] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		return jsFromGo(rc, source)
+		res, err := rc.JSFromGo(source)
+		if err != nil {
+			return rc.Throw("trying to convert %v to *v8go.Value: %v", source, err)
+		}
+		return res
 	}
 	callbacks[fmt.Sprintf("set%s", name)] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		return copyToGo(rc, source, info)
 	}
 }
 
-func objectCallbacks(ctx context.Context, object *structs.Object) js.Callbacks {
+func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.Callbacks {
 	result := js.Callbacks{}
 	addGetSetPair("Location", &object.Location, result)
 	addGetSetPair("Content", &object.Content, result)
@@ -64,15 +52,33 @@ func objectCallbacks(ctx context.Context, object *structs.Object) js.Callbacks {
 		return nil
 	}
 	result["setInterval"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		// TODO: Set repeating events in the future.
+		// TODO: Set repeating events in the future - or is that too risky?
+		return nil
+	}
+	result["emit"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 3 || !args[0].IsString() || !args[1].IsString() {
+			return rc.Throw("emit takes [string, string, any] arguments")
+		}
+		id := []byte{}
+		if err := goccy.Unmarshal([]byte(args[0].String()), &id); err != nil {
+			return rc.Throw("trying to unserialize %v: %v", args[0].String(), err)
+		}
+		message, err := v8go.JSONStringify(rc.Context(), args[1])
+		if err != nil {
+			return rc.Throw("trying to serialize %v: %v", args[1], err)
+		}
+		if err := g.enqueueAfter(ctx, event{
+			ID:        id,
+			EventType: args[1].String(),
+			Message:   message,
+		}, time.Millisecond*100); err != nil {
+			return rc.Throw("trying to enqueue %v for %v: %v", message, args[0].String(), err)
+		}
 		return nil
 	}
 	result["getEnvironment"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		game, err := GetGame(ctx)
-		if err != nil {
-			return rc.Throw("trying to locate Game instance in Context: %v", err)
-		}
-		location, err := game.storage.GetObject(ctx, object.Location)
+		location, err := g.storage.GetObject(ctx, object.Location)
 		if err != nil {
 			return rc.Throw("trying to load Object Location: %v", err)
 		}
@@ -85,7 +91,7 @@ func objectCallbacks(ctx context.Context, object *structs.Object) js.Callbacks {
 				keys = append(keys, []byte(bs))
 			}
 		}
-		loaded, err := game.storage.GetObjects(ctx, keys)
+		loaded, err := g.storage.GetObjects(ctx, keys)
 		if err != nil {
 			return rc.Throw("trying to load Object and Location Content: %v", err)
 		}
@@ -118,18 +124,14 @@ TODO: Make this return nil if the callbackName isn't registered in the Object.
 
 TODO: Make all errors here log to the console of the object.
 */
-func call(ctx context.Context, object *structs.Object, callbackName string, message string) error {
+func (g *Game) call(ctx context.Context, object *structs.Object, callbackName string, message string) error {
 	sid := string(object.Id)
-	game, err := GetGame(ctx)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	source, err := game.storage.GetSource(ctx, object.SourcePath)
+	source, err := g.storage.GetSource(ctx, object.SourcePath)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
 
-	callbacks := objectCallbacks(ctx, object)
+	callbacks := g.objectCallbacks(ctx, object)
 	target := js.Target{
 		Source:    string(source),
 		Origin:    object.SourcePath,
@@ -142,29 +144,22 @@ func call(ctx context.Context, object *structs.Object, callbackName string, mess
 		return juicemud.WithStack(err)
 	}
 	object.State = res.State
-	clear(object.Callbacks)
-	for _, cb := range res.Callbacks {
-		object.Callbacks[cb] = true
-	}
+	object.Callbacks = res.Callbacks
 	return nil
 }
 
-func loadAndCall(ctx context.Context, id []byte, callbackName string, message string) error {
+func (g *Game) loadAndCall(ctx context.Context, id []byte, callbackName string, message string) error {
 	sid := string(id)
 	jsContextLocks.Lock(sid)
 	defer jsContextLocks.Unlock(sid)
 
-	game, err := GetGame(ctx)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	object, err := game.storage.GetObject(ctx, id)
+	object, err := g.storage.GetObject(ctx, id)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
 	oldLocation := object.Location
-	if err := call(ctx, object, callbackName, message); err != nil {
+	if err := g.call(ctx, object, callbackName, message); err != nil {
 		return juicemud.WithStack(err)
 	}
-	return juicemud.WithStack(game.storage.SetObject(ctx, oldLocation, object))
+	return juicemud.WithStack(g.storage.SetObject(ctx, oldLocation, object))
 }

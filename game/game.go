@@ -91,36 +91,18 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			if err := goccy.Unmarshal(b, ev); err != nil {
 				log.Panic(err)
 			}
-			if loadAndCall(ctx, ev.ID, ev.EventType, ev.Message); err != nil {
+			if result.loadAndCall(ctx, ev.ID, ev.EventType, ev.Message); err != nil {
 				log.Printf("trying to call %+v.%v(%q): %v", ev.ID, ev.EventType, ev.Message, err)
 			}
 		}()
 	})
 	go func() {
-		log.Panic(result.queue.Start(context.WithValue(ctx, gameContextKey, result)))
+		log.Panic(result.queue.Start(ctx))
 	}()
 	return result, nil
 }
 
-type contextKey int
-
-var (
-	gameContextKey contextKey = 0
-)
-
-func GetGame(ctx context.Context) (*Game, error) {
-	contextValue := ctx.Value(gameContextKey)
-	if contextValue == nil {
-		return nil, errors.New("context doesn't contain a game instance")
-	}
-	if game, ok := contextValue.(*Game); ok {
-		return game, nil
-	}
-	return nil, errors.Errorf("context value at game key %v isn't a game instance", contextValue)
-}
-
 func (g *Game) HandleSession(sess ssh.Session) {
-	sess.Context().SetValue(gameContextKey, g)
 	env := &Env{
 		game: g,
 		term: term.NewTerminal(sess, "> "),
@@ -142,7 +124,7 @@ func (g *Game) createUser(ctx context.Context, user *storage.User) error {
 	}
 	object.SourcePath = userSource
 	object.Location = []byte(genesisID)
-	if err := call(ctx, object, "", ""); err != nil {
+	if err := g.call(ctx, object, "", ""); err != nil {
 		return juicemud.WithStack(err)
 	}
 

@@ -62,7 +62,7 @@ func TestBasics(t *testing.T) {
 	result := ""
 	target := Target{
 		Source: `
-addCallback("test", (arg) => {
+addCallback("test", [], (arg) => {
   setResult(state.b + 1 + arg.c);
   state.b += 1;
 });
@@ -86,7 +86,7 @@ addCallback("test", (arg) => {
 	if wantState := "{\"b\":5}"; res.State != wantState {
 		t.Errorf("got %q, want %q", res.State, wantState)
 	}
-	if wantCallbacks := []string{"test"}; !reflect.DeepEqual(res.Callbacks, wantCallbacks) {
+	if wantCallbacks := map[string]map[string]bool{"test": map[string]bool{}}; !reflect.DeepEqual(res.Callbacks, wantCallbacks) {
 		t.Errorf("got %+v, want %+v", res.Callbacks, wantCallbacks)
 	}
 }
@@ -130,7 +130,7 @@ func BenchmarkCall(b *testing.B) {
 	result := ""
 	target := Target{
 		Source: `
-addCallback("test", (arg) => {
+addCallback("test", [], (arg) => {
   setResult(state.b + 1 + arg.c);
   state.b += 1;
 });

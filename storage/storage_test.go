@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"log"
 	"math/rand"
 	"os"
@@ -102,7 +101,7 @@ func init() {
 	if err != nil {
 		log.Panic(err)
 	}
-	if fakeObjectJSON, err = json.Marshal(fakeObject); err != nil {
+	if fakeObjectJSON, err = goccy.Marshal(fakeObject); err != nil {
 		log.Panic(err)
 	}
 }
@@ -262,10 +261,10 @@ func BenchmarkEncodingJSON(b *testing.B) {
 	js := fakeObjectJSON
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		if err := json.Unmarshal(js, o); err != nil {
+		if err := goccy.Unmarshal(js, o); err != nil {
 			b.Fatal(err)
 		}
-		by, err := json.Marshal(o)
+		by, err := goccy.Marshal(o)
 		if err != nil {
 			b.Fatal(err)
 		}

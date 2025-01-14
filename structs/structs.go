@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 
 	"github.com/zond/juicemud"
+
+	goccy "github.com/goccy/go-json"
 )
 
 var (
@@ -57,12 +58,12 @@ type Exit struct {
 type ByteString string
 
 func (bs ByteString) MarshalText() (text []byte, err error) {
-	return json.Marshal([]byte(bs))
+	return goccy.Marshal([]byte(bs))
 }
 
 func (bs *ByteString) UnmarshalText(text []byte) error {
 	b := []byte{}
-	if err := json.Unmarshal(text, &b); err != nil {
+	if err := goccy.Unmarshal(text, &b); err != nil {
 		return err
 	}
 	*bs = ByteString(b)
@@ -71,8 +72,7 @@ func (bs *ByteString) UnmarshalText(text []byte) error {
 
 type Object struct {
 	Id        []byte
-	Callbacks map[string]bool
-	Commands  map[string]bool
+	Callbacks map[string]map[string]bool // map[event_type]map[tag]bool where tag is e.g. command or event.
 	State     string
 
 	Location     []byte
@@ -85,8 +85,8 @@ type Object struct {
 
 func MakeObject(ctx context.Context) (*Object, error) {
 	object := &Object{
+		Callbacks: map[string]map[string]bool{},
 		Content:   map[ByteString]bool{},
-		Callbacks: map[string]bool{},
 		Skills:    map[string]Skill{},
 	}
 	newID, err := NextObjectID()
