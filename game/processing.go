@@ -1,6 +1,7 @@
 package game
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -80,7 +81,9 @@ func objectCallbacks(ctx context.Context, object *structs.Object) js.Callbacks {
 			keys = append(keys, []byte(bs))
 		}
 		for bs := range location.Content {
-			keys = append(keys, []byte(bs))
+			if !bytes.Equal([]byte(bs), object.Id) {
+				keys = append(keys, []byte(bs))
+			}
 		}
 		loaded, err := game.storage.GetObjects(ctx, keys)
 		if err != nil {
@@ -105,6 +108,16 @@ func objectCallbacks(ctx context.Context, object *structs.Object) js.Callbacks {
 	return result
 }
 
+/*
+Some events we should send to objects:
+- moved: Object changed Location.
+- received: Object got new Content.
+- transmitted: Object lost Content.
+
+TODO: Make this return nil if the callbackName isn't registered in the Object.
+
+TODO: Make all errors here log to the console of the object.
+*/
 func call(ctx context.Context, object *structs.Object, callbackName string, message string) error {
 	sid := string(object.Id)
 	game, err := GetGame(ctx)

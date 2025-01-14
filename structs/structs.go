@@ -72,6 +72,7 @@ func (bs *ByteString) UnmarshalText(text []byte) error {
 type Object struct {
 	Id        []byte
 	Callbacks map[string]bool
+	Commands  map[string]bool
 	State     string
 
 	Location     []byte

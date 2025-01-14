@@ -129,6 +129,16 @@ var (
 	whitespacePattern = regexp.MustCompile("\\s+")
 )
 
+/*
+Command priority:
+- debug command (defined here as Go, examples: "debug", "undebug")
+- self commands  (defined in the User Object as JS, examples: "emote", "say", "kill")
+- env commands (defined here as Go, examples: "l", "look", "inv")
+- location directions (defined in Location Object as JS, examples: "n", "se")
+- location commands  (defined in Location Object as JS, examples: "open door", "pull switch")
+- sibling commands (defined in sibling Objects as JS, examples: "turn on robot", "give money")
+All commands should be in the Object so that we don't need to run JS to find matches.
+*/
 func (e *Env) Process() error {
 	if e.user == nil {
 		return errors.New("can't process without user")
@@ -174,6 +184,7 @@ func (e *Env) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
+	// TODO: This, and all future Object calls, should not return an error - just write to the terminal.
 	if err := loadAndCall(e.sess.Context(), e.user.Object, connectedEventType, string(b)); err != nil {
 		return juicemud.WithStack(err)
 	}
