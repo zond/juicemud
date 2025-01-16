@@ -177,6 +177,25 @@ type Tree struct {
 	Hash
 }
 
+func (t Tree) FirstJSON(v any) (string, error) {
+	iter := t.dbm.MakeIterator()
+	defer iter.Destruct()
+	if stat := iter.First(); !stat.IsOK() {
+		return "", juicemud.WithStack(stat)
+	}
+	k, b, stat := iter.Get()
+	if stat.GetCode() == tkrzw.StatusNotFoundError {
+		return "", juicemud.WithStack(os.ErrNotExist)
+	} else if !stat.IsOK() {
+		return "", juicemud.WithStack(stat)
+	}
+	if err := goccy.Unmarshal(b, v); err != nil {
+		return "", juicemud.WithStack(err)
+	}
+	return string(k), nil
+
+}
+
 type Opener struct {
 	Dir string
 	Err error

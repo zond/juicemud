@@ -6,70 +6,81 @@ import (
 	"sync"
 	"time"
 
-	"github.com/estraier/tkrzw-go"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
+	"github.com/zond/juicemud/js"
+	"github.com/zond/juicemud/storage/dbm"
+
+	goccy "github.com/goccy/go-json"
 )
 
 var (
 	lastEventCounter = uint64(0)
 )
 
-type event struct {
-	at      uint64
-	key     []byte
-	content []byte
+type Timestamp uint64
+
+type Event struct {
+	At     Timestamp
+	Object string
+	Call   *js.Call
+
+	key string
+}
+
+func (e *Event) createKey() {
+	eventCounter := juicemud.Increment(&lastEventCounter)
+	atSize := binary.Size(e.At)
+	k := make([]byte, atSize+binary.Size(eventCounter))
+	binary.BigEndian.PutUint64(k, uint64(e.At))
+	binary.BigEndian.PutUint64(k[atSize:], eventCounter)
+	e.key = string(k)
 }
 
 type Queue struct {
-	tree      *tkrzw.DBM
+	tree      dbm.Tree
 	cond      *sync.Cond
 	err       chan error
 	closed    bool
-	nextEvent *event
-	offset    uint64
-	fun       func(context.Context, []byte)
+	nextEvent *Event
+	offset    Timestamp
+	handler   func(context.Context, *Event)
 }
 
-func NewQueue(ctx context.Context, dbm *tkrzw.DBM, fun func(context.Context, []byte)) *Queue {
+func NewQueue(ctx context.Context, t dbm.Tree, handler func(context.Context, *Event)) *Queue {
 	mut := &sync.Mutex{}
 	return &Queue{
-		cond: sync.NewCond(mut),
-		tree: dbm,
-		err:  make(chan error, 1),
-		fun:  fun,
+		cond:    sync.NewCond(mut),
+		tree:    t,
+		err:     make(chan error, 1),
+		handler: handler,
 	}
 }
 
-func (q *Queue) After(dur time.Duration) uint64 {
-	return uint64(time.Now().Add(dur).UnixNano()) + q.offset
+func (q *Queue) After(dur time.Duration) Timestamp {
+	return Timestamp(time.Now().Add(dur).UnixNano()) + q.offset
 }
 
-func (q *Queue) At(t time.Time) uint64 {
-	return uint64(t.UnixNano()) + q.offset
+func (q *Queue) At(t time.Time) Timestamp {
+	return Timestamp(t.UnixNano()) + q.offset
 }
 
-func (q *Queue) until(at uint64) time.Duration {
+func (q *Queue) until(at Timestamp) time.Duration {
 	return time.Nanosecond * time.Duration(int64(at)-int64(q.now()))
 }
 
-func (q *Queue) now() uint64 {
-	return uint64(time.Now().UnixNano()) + q.offset
+func (q *Queue) now() Timestamp {
+	return Timestamp(time.Now().UnixNano()) + q.offset
 }
 
-func (q *Queue) peekFirst(_ context.Context) (*event, error) {
-	iter := q.tree.MakeIterator()
-	defer iter.Destruct()
-	if stat := iter.First(); !stat.IsOK() {
-		return nil, juicemud.WithStack(stat)
+func (q *Queue) peekFirst(_ context.Context) (*Event, error) {
+	res := &Event{}
+	key, err := q.tree.FirstJSON(res)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
 	}
-	k, v, stat := iter.Get()
-	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, nil
-	} else if !stat.IsOK() {
-		return nil, juicemud.WithStack(stat)
-	}
-	return &event{at: binary.BigEndian.Uint64(k[:binary.Size(uint64(0))]), key: k, content: v}, nil
+	res.key = key
+	return res, nil
 }
 
 func (q *Queue) Close() {
@@ -79,7 +90,7 @@ func (q *Queue) Close() {
 	q.cond.Broadcast()
 }
 
-func (q *Queue) Push(ctx context.Context, at uint64, content []byte) error {
+func (q *Queue) Push(ctx context.Context, ev *Event) error {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 
@@ -87,23 +98,19 @@ func (q *Queue) Push(ctx context.Context, at uint64, content []byte) error {
 		return errors.Errorf("queue is closed")
 	}
 
-	eventCounter := juicemud.Increment(&lastEventCounter)
-	atSize := binary.Size(at)
-	key := make([]byte, atSize+binary.Size(eventCounter))
-	binary.BigEndian.PutUint64(key, at)
-	binary.BigEndian.PutUint64(key[atSize:], eventCounter)
-
-	if stat := q.tree.Set(key, content, false); !stat.IsOK() {
-		return juicemud.WithStack(stat)
+	ev.createKey()
+	b, err := goccy.Marshal(ev)
+	if err != nil {
+		return juicemud.WithStack(err)
 	}
 
-	if q.nextEvent == nil || at < q.nextEvent.at {
-		q.nextEvent = &event{
-			at:      at,
-			key:     key,
-			content: content,
-		}
-		if q.nextEvent.at >= q.now() {
+	if err := q.tree.Set(ev.key, b, false); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	if q.nextEvent == nil || ev.At < q.nextEvent.At {
+		q.nextEvent = ev
+		if ev.At >= q.now() {
 			q.cond.Broadcast()
 		}
 	}
@@ -117,14 +124,14 @@ func (q *Queue) Start(ctx context.Context) error {
 		return juicemud.WithStack(err)
 	}
 	if q.nextEvent != nil {
-		q.offset = q.nextEvent.at
+		q.offset = q.nextEvent.At
 	}
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 	for !q.closed || q.nextEvent != nil {
-		for q.nextEvent != nil && q.nextEvent.at <= q.now() {
-			q.fun(ctx, q.nextEvent.content)
-			if stat := q.tree.Remove(q.nextEvent.key); !stat.IsOK() {
+		for q.nextEvent != nil && q.nextEvent.At <= q.now() {
+			q.handler(ctx, q.nextEvent)
+			if err := q.tree.Del(q.nextEvent.key); err != nil {
 				return juicemud.WithStack(err)
 			}
 			if q.nextEvent, err = q.peekFirst(ctx); err != nil {
@@ -132,7 +139,7 @@ func (q *Queue) Start(ctx context.Context) error {
 			}
 		}
 		if q.nextEvent != nil {
-			if toSleep := q.until(q.nextEvent.at); toSleep > 0 {
+			if toSleep := q.until(q.nextEvent.At); toSleep > 0 {
 				go func() {
 					time.Sleep(toSleep)
 					q.cond.Broadcast()

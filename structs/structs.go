@@ -3,30 +3,30 @@ package structs
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 
 	"github.com/zond/juicemud"
-
-	goccy "github.com/goccy/go-json"
 )
 
 var (
 	lastObjectCounter uint64 = 0
+	encoding                 = base64.StdEncoding.WithPadding(base64.NoPadding)
 )
 
 const (
 	objectIDLen = 16
 )
 
-func NextObjectID() ([]byte, error) {
+func NextObjectID() (string, error) {
 	objectCounter := juicemud.Increment(&lastObjectCounter)
 	timeSize := binary.Size(objectCounter)
 	result := make([]byte, objectIDLen)
 	binary.BigEndian.PutUint64(result, objectCounter)
 	if _, err := rand.Read(result[timeSize:]); err != nil {
-		return nil, juicemud.WithStack(err)
+		return "", juicemud.WithStack(err)
 	}
-	return result, nil
+	return encoding.EncodeToString(result), nil
 }
 
 type Skill struct {
@@ -52,31 +52,16 @@ type Exit struct {
 	LookChallenges  []Challenge
 	SniffChallenges []Challenge
 	HearChallenges  []Challenge
-	Destination     []byte
-}
-
-type ByteString string
-
-func (bs ByteString) MarshalText() (text []byte, err error) {
-	return goccy.Marshal([]byte(bs))
-}
-
-func (bs *ByteString) UnmarshalText(text []byte) error {
-	b := []byte{}
-	if err := goccy.Unmarshal(text, &b); err != nil {
-		return err
-	}
-	*bs = ByteString(b)
-	return nil
+	Destination     string
 }
 
 type Object struct {
-	Id        []byte
+	Id        string
 	Callbacks map[string]map[string]bool // map[event_type]map[tag]bool where tag is e.g. command or event.
 	State     string
 
-	Location     []byte
-	Content      map[ByteString]bool `faker:"ByteStringMap"`
+	Location     string
+	Content      map[string]bool
 	Skills       map[string]Skill
 	Descriptions []Description
 	Exits        []Exit
@@ -86,7 +71,7 @@ type Object struct {
 func MakeObject(ctx context.Context) (*Object, error) {
 	object := &Object{
 		Callbacks: map[string]map[string]bool{},
-		Content:   map[ByteString]bool{},
+		Content:   map[string]bool{},
 		Skills:    map[string]Skill{},
 	}
 	newID, err := NextObjectID()

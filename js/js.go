@@ -103,12 +103,6 @@ func (rc *RunContext) Context() *v8go.Context {
 	return rc.m.vctx
 }
 
-func (rc *RunContext) log(format string, args ...any) {
-	if rc.t.Console != nil {
-		log.New(rc.t.Console, "", 0).Printf(format, args...)
-	}
-}
-
 func (rc *RunContext) String(s string) *v8go.Value {
 	if res, err := v8go.NewValue(rc.m.iso, s); err == nil {
 		return res
@@ -126,7 +120,7 @@ func addJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value 
 		eventType := args[0].String()
 		tags := []string{}
 		if err := rc.Copy(&tags, args[1]); err != nil {
-			return rc.Throw("trying to copy %v to a &[]byte{}: %v", args[1], err)
+			return rc.Throw("trying to copy %v to a &[]string{}: %v", args[1], err)
 		}
 		fun, err := args[2].AsFunction()
 		if err != nil {
@@ -134,8 +128,12 @@ func addJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value 
 		}
 		rc.callbacks[eventType] = fun
 		rc.r.Callbacks[eventType] = map[string]bool{}
-		for _, tag := range tags {
-			rc.r.Callbacks[eventType][tag] = true
+		if len(tags) == 0 {
+			rc.r.Callbacks[eventType][""] = true
+		} else {
+			for _, tag := range tags {
+				rc.r.Callbacks[eventType][tag] = true
+			}
 		}
 		return nil
 	}
@@ -257,9 +255,6 @@ func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, erro
 
 	select {
 	case res := <-results:
-		if res.err != nil {
-			rc.log("-- error in %q --\n%v\n", rc.t.Origin, res.err)
-		}
 		return res.value, juicemud.WithStack(res.err)
 	case <-time.After(*timeout):
 		rc.m.iso.TerminateExecution()
@@ -267,7 +262,13 @@ func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, erro
 	}
 }
 
-func (t Target) Call(ctx context.Context, name string, message string, timeout time.Duration) (*Result, error) {
+type Call struct {
+	Name    string
+	Message string
+	Tag     string
+}
+
+func (t Target) Run(ctx context.Context, call *Call, timeout time.Duration) (*Result, error) {
 	m := <-machines
 	defer func() { machines <- m }()
 
@@ -290,16 +291,26 @@ func (t Target) Call(ctx context.Context, name string, message string, timeout t
 		return nil, juicemud.WithStack(err)
 	}
 
-	jsCB, found := rc.callbacks[name]
+	if call == nil {
+		return rc.collectResult(nil)
+	}
+
+	if tags, found := rc.r.Callbacks[call.Name]; !found {
+		return rc.collectResult(nil)
+	} else if _, found = tags[call.Tag]; !found {
+		return rc.collectResult(nil)
+	}
+
+	jsCB, found := rc.callbacks[call.Name]
 	if !found {
 		return rc.collectResult(nil)
 	}
 
 	var val *v8go.Value
-	if message != "" {
+	if call.Message != "" {
 		var err error
 		start := time.Now()
-		if val, err = v8go.JSONParse(rc.m.vctx, message); err != nil {
+		if val, err = v8go.JSONParse(rc.m.vctx, call.Message); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 		timeout -= time.Since(start)

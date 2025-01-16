@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"os"
 	"regexp"
 	"sort"
@@ -13,19 +14,17 @@ import (
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/digest"
+	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
 	"golang.org/x/term"
+	"rogchap.com/v8go"
 
 	goccy "github.com/goccy/go-json"
 )
 
 var (
 	OperationAborted = errors.New("operation aborted")
-)
-
-const (
-	connectedEventType = "connected"
 )
 
 var (
@@ -185,11 +184,33 @@ func (e *Env) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	// TODO: This, and all future Object calls, should not return an error - just write to the terminal.
-	if err := e.game.loadAndCall(e.sess.Context(), e.user.Object, connectedEventType, string(b)); err != nil {
+	if err := e.loadAndRun(e.user.Object, &js.Call{
+		Name:    connectedEventType,
+		Message: string(b),
+		Tag:     emitEventTag,
+	}); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return e.Process()
+}
+
+func (e *Env) loadAndRun(id string, call *js.Call) error {
+	if err := e.game.loadAndRun(e.sess.Context(), id, call); err != nil {
+		jserr := &v8go.JSError{}
+		if errors.As(err, &jserr) {
+			switch rand.Intn(3) {
+			case 0:
+				fmt.Fprintln(e.term, "[reality stutters]")
+			case 1:
+				fmt.Fprintln(e.term, "[reality flickers]")
+			case 2:
+				fmt.Fprintln(e.term, "[reality jitters]")
+			}
+		} else {
+			return juicemud.WithStack(err)
+		}
+	}
+	return nil
 }
 
 func (e *Env) loginUser() error {
@@ -223,7 +244,10 @@ func (e *Env) loginUser() error {
 			e.user = user
 		}
 	}
-	fmt.Fprintf(e.term, "Welcome back, %v %+v!\n", e.user.Name, e.user.Object)
+	if err := e.loadAndRun(user.Object, nil); err != nil {
+		return juicemud.WithStack(err)
+	}
+	fmt.Fprintf(e.term, "Welcome back, %v!\n", e.user.Name)
 	return nil
 }
 
@@ -276,6 +300,9 @@ func (e *Env) createUser() error {
 		}
 	}
 	if err := e.game.createUser(e.sess.Context(), e.user); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := e.loadAndRun(user.Object, nil); err != nil {
 		return juicemud.WithStack(err)
 	}
 	fmt.Fprintf(e.term, "Welcome %s!\n", e.user.Name)

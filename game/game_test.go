@@ -5,10 +5,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/storage"
 )
 
-func withGame(b *testing.B, f func(*Game, context.Context)) {
+func withGame(b *testing.B, f func(*Game)) {
 	b.Helper()
 	tmpFile, err := os.CreateTemp("", "")
 	if err != nil {
@@ -31,12 +32,13 @@ func withGame(b *testing.B, f func(*Game, context.Context)) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	f(g, context.WithValue(ctx, gameContextKey, g))
+	f(g)
 }
 
 func BenchmarkCall(b *testing.B) {
 	b.StopTimer()
-	withGame(b, func(g *Game, ctx context.Context) {
+	ctx := context.Background()
+	withGame(b, func(g *Game) {
 		user := &storage.User{
 			Name:         "tester",
 			PasswordHash: "blapp",
@@ -47,7 +49,7 @@ func BenchmarkCall(b *testing.B) {
 		}
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if err := loadAndCall(ctx, user.Object, "", ""); err != nil {
+			if err := g.loadAndRun(ctx, user.Object, &js.Call{}); err != nil {
 				b.Fatal(err)
 			}
 		}

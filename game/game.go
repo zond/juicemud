@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"time"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/errors"
@@ -13,8 +12,14 @@ import (
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 	"golang.org/x/term"
+)
 
-	goccy "github.com/goccy/go-json"
+const (
+	connectedEventType = "connected"
+)
+
+const (
+	emitEventTag = "emit"
 )
 
 const (
@@ -33,7 +38,7 @@ var (
 	}
 	initialObjects = map[string]func(*structs.Object) error{
 		genesisID: func(o *structs.Object) error {
-			o.Id = []byte(genesisID)
+			o.Id = genesisID
 			return nil
 		},
 	}
@@ -42,28 +47,6 @@ var (
 type Game struct {
 	storage *storage.Storage
 	queue   *storage.Queue
-}
-
-type event struct {
-	ID        []byte
-	EventType string
-	Message   string
-}
-
-func (g *Game) enqueueAt(ctx context.Context, ev event, t time.Time) error {
-	b, err := goccy.Marshal(ev)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	return g.queue.Push(ctx, g.queue.At(t), b)
-}
-
-func (g *Game) enqueueAfter(ctx context.Context, ev event, d time.Duration) error {
-	b, err := goccy.Marshal(ev)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	return g.queue.Push(ctx, g.queue.After(d), b)
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
@@ -77,7 +60,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		}
 	}
 	for idString, setup := range initialObjects {
-		if err := s.EnsureObject(ctx, []byte(idString), setup); err != nil {
+		if err := s.EnsureObject(ctx, idString, setup); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}
@@ -85,14 +68,10 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		storage: s,
 	}
 	var err error
-	result.queue = s.Queue(ctx, func(ctx context.Context, b []byte) {
+	result.queue = s.Queue(ctx, func(ctx context.Context, ev *storage.Event) {
 		go func() {
-			ev := &event{}
-			if err := goccy.Unmarshal(b, ev); err != nil {
-				log.Panic(err)
-			}
-			if result.loadAndCall(ctx, ev.ID, ev.EventType, ev.Message); err != nil {
-				log.Printf("trying to call %+v.%v(%q): %v", ev.ID, ev.EventType, ev.Message, err)
+			if result.loadAndRun(ctx, ev.Object, ev.Call); err != nil {
+				log.Printf("trying to execute %+v: %v", ev, err)
 			}
 		}()
 	})
@@ -123,10 +102,7 @@ func (g *Game) createUser(ctx context.Context, user *storage.User) error {
 		return juicemud.WithStack(err)
 	}
 	object.SourcePath = userSource
-	object.Location = []byte(genesisID)
-	if err := g.call(ctx, object, "", ""); err != nil {
-		return juicemud.WithStack(err)
-	}
+	object.Location = genesisID
 
 	user.Object = object.Id
 	if err := g.storage.SetUser(ctx, user, false); err != nil {

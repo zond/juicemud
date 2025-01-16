@@ -1,34 +1,13 @@
 package dbm
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
+	"math/rand/v2"
 	"reflect"
 	"testing"
 )
-
-func withHash(t *testing.T, f func(h Hash)) {
-	t.Helper()
-	tmpFile, err := os.CreateTemp("", "*.tkh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpFile.Close()
-	if err := os.Remove(tmpFile.Name()); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(tmpFile.Name(), 0700); err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpFile.Name())
-	o := Opener{Dir: tmpFile.Name()}
-	dbm := o.Hash("test")
-	if o.Err != nil {
-		t.Fatal(err)
-	}
-	f(dbm)
-}
 
 type testObj struct {
 	I int
@@ -36,7 +15,7 @@ type testObj struct {
 }
 
 func TestGetJSON(t *testing.T) {
-	withHash(t, func(h Hash) {
+	WithHash(t, func(h Hash) {
 		want := &testObj{I: 1, S: "s"}
 		if err := h.SetJSON("a", want, true); err != nil {
 			t.Fatal(err)
@@ -52,7 +31,7 @@ func TestGetJSON(t *testing.T) {
 }
 
 func TestGetJSONMulti(t *testing.T) {
-	withHash(t, func(h Hash) {
+	WithHash(t, func(h Hash) {
 		want := []testObj{{I: 1, S: "s"}, {I: 2, S: "s2"}}
 		for _, obj := range want {
 			if err := h.SetJSON(obj.S, obj, true); err != nil {
@@ -70,7 +49,7 @@ func TestGetJSONMulti(t *testing.T) {
 }
 
 func TestProc(t *testing.T) {
-	withHash(t, func(h Hash) {
+	WithHash(t, func(h Hash) {
 		want := []testObj{{I: 1, S: "s"}, {I: 2, S: "s2"}}
 		for _, obj := range want {
 			if err := h.SetJSON(obj.S, obj, true); err != nil {
@@ -127,6 +106,38 @@ func TestProc(t *testing.T) {
 		want[1].I = 44
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+}
+
+func TestFirst(t *testing.T) {
+	WithTree(t, func(tr Tree) {
+		for _, vInt := range rand.Perm(100) {
+			v := uint32(vInt)
+			key := make([]byte, binary.Size(v))
+			binary.BigEndian.PutUint32(key, v)
+			if err := tr.SetJSON(string(key), testObj{I: vInt}, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for want := 0; want < 100; want++ {
+			v := uint32(want)
+			wantKey := make([]byte, binary.Size(v))
+			binary.BigEndian.PutUint32(wantKey, v)
+			obj := &testObj{}
+			k, err := tr.FirstJSON(obj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if k != string(wantKey) {
+				t.Errorf("got %q, want %q", k, wantKey)
+			}
+			if obj.I != want {
+				t.Errorf("got %v, want %v", obj.I, want)
+			}
+			if err := tr.Del(string(wantKey)); err != nil {
+				t.Fatal(err)
+			}
 		}
 	})
 }

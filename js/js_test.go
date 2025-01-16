@@ -66,6 +66,9 @@ addCallback("test", [], (arg) => {
   setResult(state.b + 1 + arg.c);
   state.b += 1;
 });
+addCallback("test2", ["x"], (arg) => {
+  setResult(state.b + 10 + arg.c);
+});
 `,
 		Origin: "TestBasics",
 		State:  "{\"b\": 4}",
@@ -76,17 +79,55 @@ addCallback("test", [], (arg) => {
 			},
 		},
 	}
-	res, err := target.Call(ctx, "test", "{\"c\": 15}", time.Second)
+	res, err := target.Run(ctx, &Call{Name: "test", Message: "{\"c\": 15}"}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result != "20" {
 		t.Errorf("got %q, want 20", result)
 	}
-	if wantState := "{\"b\":5}"; res.State != wantState {
+	wantState := "{\"b\":5}"
+	if res.State != wantState {
 		t.Errorf("got %q, want %q", res.State, wantState)
 	}
-	if wantCallbacks := map[string]map[string]bool{"test": map[string]bool{}}; !reflect.DeepEqual(res.Callbacks, wantCallbacks) {
+	wantCallbacks := map[string]map[string]bool{
+		"test": map[string]bool{
+			"": true,
+		},
+		"test2": map[string]bool{
+			"x": true,
+		},
+	}
+	if !reflect.DeepEqual(res.Callbacks, wantCallbacks) {
+		t.Errorf("got %+v, want %+v", res.Callbacks, wantCallbacks)
+	}
+	target.State = res.State
+
+	res, err = target.Run(ctx, &Call{Name: "test2", Message: "{\"c\": 30}"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "20" {
+		t.Errorf("got %q, want 45", result)
+	}
+	if res.State != wantState {
+		t.Errorf("got %q, want %q", res.State, wantState)
+	}
+	if !reflect.DeepEqual(res.Callbacks, wantCallbacks) {
+		t.Errorf("got %+v, want %+v", res.Callbacks, wantCallbacks)
+	}
+
+	res, err = target.Run(ctx, &Call{Name: "test2", Message: "{\"c\": 30}", Tag: "x"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "45" {
+		t.Errorf("got %q, want 45", result)
+	}
+	if res.State != wantState {
+		t.Errorf("got %q, want %q", res.State, wantState)
+	}
+	if !reflect.DeepEqual(res.Callbacks, wantCallbacks) {
 		t.Errorf("got %+v, want %+v", res.Callbacks, wantCallbacks)
 	}
 }
@@ -146,7 +187,7 @@ addCallback("test", [], (arg) => {
 	}
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := target.Call(ctx, "test", "{\"c\": 15}", time.Second)
+		_, err := target.Run(ctx, &Call{Name: "test", Message: "{\"c\": 15}"}, time.Second)
 		if err != nil {
 			b.Fatal(err)
 		}

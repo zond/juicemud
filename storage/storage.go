@@ -4,17 +4,16 @@ package storage
 // TODO(zond): Implement read/write group access restrictions.
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/estraier/tkrzw-go"
 	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/digest"
+	"github.com/zond/juicemud/storage/dbm"
 	"github.com/zond/juicemud/structs"
 	"github.com/zond/sqly"
 
@@ -27,15 +26,15 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	o := &opener{Dir: dir}
+	o := dbm.Opener{Dir: dir}
 	s := &Storage{
 		sql:     sql,
-		sources: o.OpenHash("sources"),
-		objects: o.OpenHash("objects"),
-		queue:   o.OpenTree("queue"),
+		sources: o.Hash("sources"),
+		objects: o.Hash("objects"),
+		queue:   o.Tree("queue"),
 	}
 	if o.Err != nil {
-		return nil, o.Err
+		return nil, juicemud.WithStack(o.Err)
 	}
 	for _, prototype := range []any{File{}, FileSync{}, Group{}, User{}, GroupMember{}} {
 		if err := sql.CreateTableIfNotExists(ctx, prototype); err != nil {
@@ -47,12 +46,12 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 
 type Storage struct {
 	sql     *sqly.DB
-	sources *tkrzw.DBM
-	objects *tkrzw.DBM
-	queue   *tkrzw.DBM
+	sources dbm.Hash
+	objects dbm.Hash
+	queue   dbm.Tree
 }
 
-func (s *Storage) Queue(ctx context.Context, fun func(context.Context, []byte)) *Queue {
+func (s *Storage) Queue(ctx context.Context, fun func(context.Context, *Event)) *Queue {
 	return NewQueue(ctx, s.queue, fun)
 }
 
@@ -67,11 +66,11 @@ func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, para
 }
 
 func (s *Storage) GetSource(ctx context.Context, path string) ([]byte, error) {
-	value, stat := s.sources.Get([]byte(path))
-	if stat.GetCode() == tkrzw.StatusNotFoundError {
+	value, err := s.sources.Get(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return []byte{}, nil
-	} else if !stat.IsOK() {
-		return nil, juicemud.WithStack(stat)
+	} else if err != nil {
+		return nil, juicemud.WithStack(err)
 	}
 	return value, nil
 }
@@ -92,214 +91,114 @@ func (s *Storage) SetSource(ctx context.Context, path string, content []byte) er
 	return s.sync(ctx)
 }
 
-func (s *Storage) GetObjects(ctx context.Context, ids [][]byte) ([]structs.Object, error) {
-	pairs := make([]funcPair, len(ids))
-	resultBytes := make([][]byte, len(ids))
-	for index, id := range ids {
-		pairs[index] = funcPair{
-			Key: id,
-			Func: func(k, v []byte) (any, error) {
-				resultBytes[index] = v
-				return nil, nil
-			},
-		}
-	}
-	if err := processMulti(s.objects, pairs, false); err != nil {
+func (s *Storage) GetObjects(ctx context.Context, ids []string) ([]structs.Object, error) {
+	res := make([]structs.Object, len(ids))
+	if err := s.objects.GetJSONMulti(ids, res); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	results := make([]structs.Object, len(ids))
-	for index, b := range resultBytes {
-		if err := goccy.Unmarshal(b, &results[index]); err != nil {
-			return nil, juicemud.WithStack(err)
-		}
-	}
-	return results, nil
+	return res, nil
 }
 
-func (s *Storage) GetObject(ctx context.Context, id []byte) (*structs.Object, error) {
-	b, stat := s.objects.Get(id)
-	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(os.ErrNotExist)
-	} else if !stat.IsOK() {
-		return nil, juicemud.WithStack(stat)
+func (s *Storage) GetObject(ctx context.Context, id string) (*structs.Object, error) {
+	res := &structs.Object{}
+	if err := s.objects.GetJSON(id, res); err != nil {
+		return nil, juicemud.WithStack(err)
 	}
-	return readObject(b)
+	return res, nil
 }
 
-func (s *Storage) EnsureObject(ctx context.Context, id []byte, setup func(*structs.Object) error) error {
-	return juicemud.WithStack(processMulti(s.objects, []funcPair{
-		{
-			Key: id,
-			Func: func(k, v []byte) (any, error) {
+func (s *Storage) EnsureObject(ctx context.Context, id string, setup func(*structs.Object) error) error {
+	return juicemud.WithStack(s.objects.Proc([]dbm.Proc{
+		dbm.JProc[structs.Object]{
+			K: id,
+			F: func(k string, v *structs.Object) (*structs.Object, error) {
 				if v != nil {
-					return nil, nil
+					return v, nil
 				}
-				object, err := structs.MakeObject(ctx)
-				if err != nil {
-					return nil, juicemud.WithStack(err)
-				}
+				object := &structs.Object{Id: id}
 				if err := setup(object); err != nil {
 					return nil, juicemud.WithStack(err)
 				}
-				marshalledObject, err := goccy.Marshal(object)
-				if err != nil {
-					return nil, juicemud.WithStack(err)
-				}
-				return marshalledObject, nil
+				return object, nil
 			},
 		},
 	}, true))
 }
 
-type funcPair struct {
-	Key  any
-	Func func(k, v []byte) (any, error)
-}
-
-func processMulti(dbm *tkrzw.DBM, funcPairs []funcPair, write bool) (err error) {
-	procPairs := make([]tkrzw.KeyProcPair, len(funcPairs))
-	for index, fpIter := range funcPairs {
-		fp := fpIter
-		procPairs[index] = tkrzw.KeyProcPair{
-			Key: fp.Key,
-			Proc: func(k, v []byte) any {
-				if err != nil {
-					return tkrzw.NilString
-				}
-				var res any
-				if res, err = fp.Func(k, v); err != nil {
-					return tkrzw.NilString
-				}
-				return res
-			},
-		}
-	}
-	if stat := dbm.ProcessMulti(procPairs, write); !stat.IsOK() {
-		return juicemud.WithStack(stat)
-	}
-	return juicemud.WithStack(err)
-}
-
-func (s *Storage) SetObject(ctx context.Context, claimedOldLocation []byte, object *structs.Object) error {
-	marshalledObject, err := goccy.Marshal(object)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	var pairs []funcPair
-	var marshalledNewContainer []byte
-	if claimedOldLocation == nil || bytes.Equal(claimedOldLocation, object.Location) {
-		// Loc is unchanged, just verify that it's what's there right now.
-		pairs = []funcPair{
-			{
-				Key: object.Location,
-				Func: func(key []byte, value []byte) (any, error) {
-					container, err := readObject(value)
-					if err != nil {
-						return nil, juicemud.WithStack(err)
-					}
-					if _, found := container.Content[structs.ByteString(object.Id)]; found {
-						return nil, nil
-					}
-					container.Content[structs.ByteString(object.Id)] = true
-					if marshalledNewContainer, err = goccy.Marshal(container); err != nil {
-						return nil, juicemud.WithStack(err)
-					}
-					return nil, nil
-				},
-			},
-			{
-				Key: object.Id,
-				Func: func(key []byte, value []byte) (any, error) {
+func (s *Storage) SetObject(ctx context.Context, claimedOldLocation *string, object *structs.Object) error {
+	var pairs []dbm.Proc
+	if claimedOldLocation == nil || *claimedOldLocation == object.Location {
+		pairs = []dbm.Proc{
+			dbm.JProc[structs.Object]{
+				// Make sure location exists and has object.
+				K: object.Location,
+				F: func(key string, value *structs.Object) (*structs.Object, error) {
 					if value == nil {
-						return marshalledObject, nil
+						return nil, errors.Wrapf(os.ErrNotExist, "can't find location %q", object.Location)
 					}
-					oldObject, err := readObject(value)
-					if err != nil {
-						return nil, juicemud.WithStack(err)
-					}
-					if !bytes.Equal(oldObject.Location, object.Location) {
-						return nil, errors.Errorf("object is moved without updating old location")
-					}
-					return marshalledObject, nil
+					value.Content[object.Id] = true
+					return value, nil
 				},
 			},
-			{
-				Key: object.Location,
-				Func: func(key []byte, value []byte) (any, error) {
-					return marshalledNewContainer, nil
+			dbm.JProc[structs.Object]{
+				// Make sure object didn't exist, or was where it claimed to be.
+				K: object.Id,
+				F: func(key string, value *structs.Object) (*structs.Object, error) {
+					if value == nil {
+						return value, nil
+					}
+					if value.Location != object.Location {
+						return nil, errors.Errorf("object is moved from %q to %q without updating old location", value.Location, object.Location)
+					}
+					return value, nil
 				},
 			},
 		}
 	} else {
 		// Loc is changed, verify that the old one is what's there right now, that obj can
 		// be removed from old loc, and added to new loc, before all are saved.
-		pairs = []funcPair{
-			{
-				Key: object.Id,
-				Func: func(key []byte, value []byte) (any, error) {
-					oldObject, err := readObject(value)
-					if err != nil {
-						return nil, juicemud.WithStack(err)
+		pairs = []dbm.Proc{
+			// Make sure object exists and is where it claimed to be.
+			dbm.JProc[structs.Object]{
+				K: object.Id,
+				F: func(key string, value *structs.Object) (*structs.Object, error) {
+					if value == nil {
+						return nil, errors.Errorf("can't find old version of %q", object.Id)
 					}
-					if !bytes.Equal(oldObject.Location, object.Location) {
-						return nil, errors.Errorf("object is moved without updating old location")
+					if value.Location != object.Location {
+						return nil, errors.Errorf("object in %q claims to move from %q to %q", value.Location, *claimedOldLocation, object.Location)
 					}
-					return nil, nil
+					return value, nil
 				},
 			},
-			{
-				Key: object.Location,
-				Func: func(key []byte, value []byte) (any, error) {
-					newContainer, err := readObject(value)
-					if err != nil {
-						return nil, juicemud.WithStack(err)
+			dbm.JProc[structs.Object]{
+				// Make sure new location exists and contains object.
+				K: object.Location,
+				F: func(key string, value *structs.Object) (*structs.Object, error) {
+					if value == nil {
+						return nil, errors.Errorf("can't find new location %q", object.Location)
 					}
-					newContainer.Content[structs.ByteString(object.Id)] = true
-					if marshalledNewContainer, err = goccy.Marshal(newContainer); err != nil {
-						return nil, juicemud.WithStack(err)
+					value.Content[object.Id] = true
+					return value, nil
+				},
+			},
+			dbm.JProc[structs.Object]{
+				// Make sure old location exists and contained object (but no longer).
+				K: *claimedOldLocation,
+				F: func(key string, value *structs.Object) (*structs.Object, error) {
+					if value == nil {
+						return nil, errors.Errorf("can't find old location %q", object.Location)
 					}
-					return nil, nil
+					if _, found := value.Content[object.Id]; !found {
+						return nil, errors.Errorf("object claimed to be contained by %q, but wasn't", *claimedOldLocation)
+					}
+					delete(value.Content, object.Id)
+					return value, nil
 				},
 			},
 		}
-		if claimedOldLocation != nil {
-			pairs = append(pairs, funcPair{
-				Key: claimedOldLocation,
-				Func: func(key []byte, value []byte) (any, error) {
-					oldContainer, err := readObject(value)
-					if err != nil {
-						return nil, juicemud.WithStack(err)
-					}
-					if _, found := oldContainer.Content[structs.ByteString(object.Id)]; !found {
-						return nil, errors.Errorf("object claimed to be contained by %+v, but wasn't", claimedOldLocation)
-					}
-					if b, err := goccy.Marshal(oldContainer); err != nil {
-						return nil, juicemud.WithStack(err)
-					} else {
-						return b, nil
-					}
-				},
-			})
-		}
-		pairs = append(pairs,
-			funcPair{
-				Key: object.Location,
-				Func: func(key []byte, value []byte) (any, error) {
-					return marshalledNewContainer, nil
-				},
-			},
-			funcPair{
-				Key: object.Id,
-				Func: func(key []byte, value []byte) (any, error) {
-					return marshalledObject, nil
-				},
-			},
-		)
 	}
-	if err := processMulti(s.objects, pairs, true); err != nil {
-		return juicemud.WithStack(err)
-	}
-	return nil
+	return juicemud.WithStack(s.objects.Proc(pairs, true))
 }
 
 type FileSync struct {
@@ -324,12 +223,12 @@ func logSync(ctx context.Context, db sqlx.ExtContext, fileSync *FileSync) error 
 
 func (s *Storage) runSync(_ context.Context, fileSync *FileSync) error {
 	if fileSync.Remove != "" {
-		if stat := s.sources.Remove([]byte(fileSync.Remove)); !stat.IsOK() && stat.GetCode() != tkrzw.StatusNotFoundError {
-			return juicemud.WithStack(stat)
+		if err := s.sources.Del(fileSync.Remove); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return juicemud.WithStack(err)
 		}
 	} else if fileSync.Set != "" {
-		if stat := s.sources.Set([]byte(fileSync.Set), fileSync.Content, true); !stat.IsOK() {
-			return juicemud.WithStack(stat)
+		if err := s.sources.Set(fileSync.Set, fileSync.Content, true); err != nil {
+			return juicemud.WithStack(err)
 		}
 	}
 	return nil
@@ -556,7 +455,7 @@ type User struct {
 	Name         string `sqly:"unique"`
 	PasswordHash string
 	Owner        bool
-	Object       []byte
+	Object       string
 }
 
 func (s *Storage) GetUser(ctx context.Context, name string) (*User, error) {
