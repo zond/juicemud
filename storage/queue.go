@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/binary"
+	"os"
 	"sync"
 	"time"
 
@@ -10,8 +11,6 @@ import (
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/storage/dbm"
-
-	goccy "github.com/goccy/go-json"
 )
 
 var (
@@ -76,7 +75,9 @@ func (q *Queue) now() Timestamp {
 func (q *Queue) peekFirst(_ context.Context) (*Event, error) {
 	res := &Event{}
 	key, err := q.tree.FirstJSON(res)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	res.key = key
@@ -99,12 +100,8 @@ func (q *Queue) Push(ctx context.Context, ev *Event) error {
 	}
 
 	ev.createKey()
-	b, err := goccy.Marshal(ev)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
 
-	if err := q.tree.Set(ev.key, b, false); err != nil {
+	if err := q.tree.SetJSON(ev.key, ev, false); err != nil {
 		return juicemud.WithStack(err)
 	}
 
