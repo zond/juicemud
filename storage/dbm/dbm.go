@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 
 	"github.com/estraier/tkrzw-go"
-	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 
 	goccy "github.com/goccy/go-json"
@@ -27,27 +25,21 @@ func (h Hash) GetJSON(k string, v any) error {
 	return juicemud.WithStack(goccy.Unmarshal(b, v))
 }
 
-func (h Hash) GetJSONMulti(k []string, v any) error {
-	vVal := reflect.ValueOf(v)
-	if vVal.Kind() != reflect.Ptr {
-		return errors.Errorf("%v is no reflect.Ptr", v)
+func GetJSONMulti[T any](h Hash, keys map[string]bool) (map[string]*T, error) {
+	ids := make([]string, 0, len(keys))
+	for key := range keys {
+		ids = append(ids, key)
 	}
-	vVal = vVal.Elem()
-	if vVal.Kind() != reflect.Slice {
-		return errors.Errorf("%v is no pointer to reflect.Slice", v)
-	}
-	vVal.Set(reflect.MakeSlice(vVal.Type(), len(k), len(k)))
-	results := h.dbm.GetMulti(k)
-	for index, key := range k {
-		b, found := results[key]
-		if !found {
-			return errors.Wrapf(os.ErrNotExist, "key %q not found", key)
+	byteResults := h.dbm.GetMulti(ids)
+	results := map[string]*T{}
+	for key, byteResult := range byteResults {
+		result := new(T)
+		if err := goccy.Unmarshal(byteResult, result); err != nil {
+			return nil, juicemud.WithStack(err)
 		}
-		if err := goccy.Unmarshal(b, vVal.Index(index).Addr().Interface()); err != nil {
-			return juicemud.WithStack(err)
-		}
+		results[key] = result
 	}
-	return nil
+	return results, nil
 }
 
 func (h Hash) Get(k string) ([]byte, error) {

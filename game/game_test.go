@@ -49,7 +49,7 @@ func BenchmarkCall(b *testing.B) {
 		}
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if err := g.loadAndRun(ctx, user.Object, &js.Call{}); err != nil {
+			if err := g.loadRunSave(ctx, user.Object, &js.Call{}); err != nil {
 				b.Fatal(err)
 			}
 		}

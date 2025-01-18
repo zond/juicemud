@@ -16,6 +16,7 @@ import (
 
 const (
 	connectedEventType = "connected"
+	movementEventType  = "movement"
 )
 
 const (
@@ -70,7 +71,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	var err error
 	result.queue = s.Queue(ctx, func(ctx context.Context, ev *storage.Event) {
 		go func() {
-			if result.loadAndRun(ctx, ev.Object, ev.Call); err != nil {
+			if result.loadRunSave(ctx, ev.Object, ev.Call); err != nil {
 				log.Printf("trying to execute %+v: %v", ev, err)
 			}
 		}()

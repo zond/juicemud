@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"log"
 	"reflect"
 	"time"
@@ -17,16 +18,9 @@ import (
 	goccy "github.com/goccy/go-json"
 )
 
-func copyToGo(rc *js.RunContext, dst any, srcInfo *v8go.FunctionCallbackInfo) *v8go.Value {
-	args := srcInfo.Args()
-	if len(args) != 1 {
-		return rc.Throw("function takes 1 argument, not %+v", args)
-	}
-	if err := rc.Copy(dst, args[0]); err != nil {
-		return rc.Throw("trying to copy %v to a %v: %v", args[0], reflect.TypeOf(dst), err)
-	}
-	return nil
-}
+const (
+	defaultReactionDelay = 100 * time.Millisecond
+)
 
 func addGetSetPair(name string, source any, callbacks js.Callbacks) {
 	callbacks[fmt.Sprintf("get%s", name)] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
@@ -37,8 +31,150 @@ func addGetSetPair(name string, source any, callbacks js.Callbacks) {
 		return res
 	}
 	callbacks[fmt.Sprintf("set%s", name)] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		return copyToGo(rc, source, info)
+		args := info.Args()
+		if len(args) != 1 {
+			return rc.Throw("function takes 1 argument, not %+v", args)
+		}
+		if err := rc.Copy(source, args[0]); err != nil {
+			return rc.Throw("trying to copy %v to a %v: %v", args[0], reflect.TypeOf(source), err)
+		}
+		return nil
 	}
+}
+
+type location struct {
+	Container *structs.Object
+	Content   map[string]*structs.Object
+}
+
+func (l *location) all() iter.Seq2[string, *structs.Object] {
+	return func(yield func(string, *structs.Object) bool) {
+		if !yield(l.Container.Id, l.Container) {
+			return
+		}
+		for k, v := range l.Content {
+			if !yield(k, v) {
+				return
+			}
+		}
+	}
+}
+
+func except[K comparable, V any](i iter.Seq2[K, V], exception K) iter.Seq2[K, V] {
+	return func(yield func(K, V) bool) {
+		for k, v := range i {
+			if k != exception {
+				if !yield(k, v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+type neighbourhood struct {
+	Self       *location
+	Location   *location
+	Neighbours map[string]*location
+}
+
+func (n *neighbourhood) others() iter.Seq2[string, *structs.Object] {
+	return func(yield func(string, *structs.Object) bool) {
+		for k, v := range except(n.Location.all(), n.Self.Container.Id) {
+			if !yield(k, v) {
+				return
+			}
+		}
+		for _, loc := range n.Neighbours {
+			for k, v := range loc.all() {
+				if !yield(k, v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+type movement struct {
+	Object      string
+	Source      string
+	Destination string
+}
+
+func (g *Game) emitAny(ctx context.Context, at storage.Timestamp, id string, name string, message any) error {
+	b, err := goccy.Marshal(message)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	return juicemud.WithStack(g.emitJSON(ctx, at, id, name, string(b)))
+}
+func (g *Game) emitJSONIf(ctx context.Context, at storage.Timestamp, object *structs.Object, name string, json string) error {
+	if object.HasCallback(name, emitEventTag) {
+		return juicemud.WithStack(g.emitJSON(ctx, at, object.Id, name, json))
+	}
+	return nil
+}
+
+func (g *Game) emitJSON(ctx context.Context, at storage.Timestamp, id string, name string, json string) error {
+	return juicemud.WithStack(g.queue.Push(ctx, &storage.Event{
+		At:     at,
+		Object: id,
+		Call: &js.Call{
+			Name:    name,
+			Message: json,
+			Tag:     emitEventTag,
+		},
+	}))
+}
+
+func (g *Game) emitJSONToNeighbourhoodIf(ctx context.Context, at storage.Timestamp, n *neighbourhood, name string, json string) error {
+	for _, obj := range n.others() {
+		if err := g.emitJSONIf(ctx, at, obj, name, json); err != nil {
+			return juicemud.WithStack(err)
+		}
+	}
+	return nil
+}
+
+func (g *Game) emitMovementToNeighbourhood(ctx context.Context, n *neighbourhood, m *movement) error {
+	json, err := goccy.Marshal(m)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	at := g.queue.After(defaultReactionDelay)
+	return juicemud.WithStack(g.emitJSONToNeighbourhoodIf(ctx, at, n, movementEventType, string(json)))
+}
+
+func (g *Game) loadLocation(ctx context.Context, id string) (*location, error) {
+	result := &location{}
+	var err error
+	if result.Container, err = g.storage.GetObject(ctx, id); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	if result.Content, err = g.storage.GetObjects(ctx, result.Container.Content); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return result, nil
+}
+
+func (g *Game) loadNeighbourhood(ctx context.Context, object *structs.Object) (*neighbourhood, error) {
+	result := &neighbourhood{}
+	var err error
+	if result.Self, err = g.loadLocation(ctx, object.Id); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	if result.Location, err = g.loadLocation(ctx, object.Location); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	result.Neighbours = map[string]*location{}
+	for _, exit := range result.Location.Container.Exits {
+		neighbour, err := g.loadLocation(ctx, exit.Destination)
+		if err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+		result.Neighbours[exit.Destination] = neighbour
+	}
+	return result, nil
 }
 
 func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.Callbacks {
@@ -58,16 +194,9 @@ func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.C
 		if err != nil {
 			return rc.Throw("trying to serialize %v: %v", args[2], err)
 		}
-		if err := g.queue.Push(ctx, &storage.Event{
-			At:     g.queue.After(time.Duration(args[0].Integer()) * time.Millisecond),
-			Object: object.Id,
-			Call: &js.Call{
-				Name:    args[1].String(),
-				Message: message,
-				Tag:     emitEventTag,
-			},
-		}); err != nil {
-			return rc.Throw("trying to enqueue %v for %v: %v", message, object.Id)
+		delay := time.Duration(args[0].Integer()) * time.Millisecond
+		if err := g.emitJSON(ctx, g.queue.After(delay), object.Id, args[1].String(), message); err != nil {
+			return rc.Throw("trying to enqueue %v for %v: %v", message, object.Id, err)
 		}
 		return nil
 	}
@@ -80,56 +209,29 @@ func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.C
 		if len(args) != 3 || !args[0].IsString() || !args[1].IsString() {
 			return rc.Throw("emit takes [string, string, any] arguments")
 		}
-		message, err := v8go.JSONStringify(rc.Context(), args[1])
+		message, err := v8go.JSONStringify(rc.Context(), args[2])
 		if err != nil {
-			return rc.Throw("trying to serialize %v: %v", args[1], err)
+			return rc.Throw("trying to serialize %v: %v", args[2], err)
 		}
-		if err := g.queue.Push(ctx, &storage.Event{
-			At:     g.queue.After(100 * time.Millisecond),
-			Object: args[0].String(),
-			Call: &js.Call{
-				Name:    args[1].String(),
-				Message: message,
-				Tag:     emitEventTag,
-			},
-		}); err != nil {
+		if err := g.emitJSON(ctx, g.queue.After(defaultReactionDelay), args[0].String(), args[1].String(), message); err != nil {
 			return rc.Throw("trying to enqueue %v for %v: %v", message, args[0].String(), err)
 		}
 		return nil
 	}
-	result["getEnvironment"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		location, err := g.storage.GetObject(ctx, object.Location)
+	result["getNeighbourhood"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		object, err := g.storage.GetObject(ctx, object.Id)
 		if err != nil {
-			return rc.Throw("trying to load Object Location: %v", err)
+			return rc.Throw("trying to load Object: %v", err)
 		}
-		keys := make([]string, 0, len(object.Content)+len(location.Content))
-		for id := range object.Content {
-			keys = append(keys, id)
-		}
-		for id := range location.Content {
-			if id != object.Id {
-				keys = append(keys, id)
-			}
-		}
-		loaded, err := g.storage.GetObjects(ctx, keys)
+		neighbourhood, err := g.loadNeighbourhood(ctx, object)
 		if err != nil {
-			return rc.Throw("trying to load Object and Location Content: %v", err)
+			return rc.Throw("trying to load Object neighbourhood: %v", err)
 		}
-		content := loaded[:len(object.Content)]
-		siblings := loaded[len(object.Content):]
-		js, err := goccy.Marshal(map[string]any{
-			"Location": location,
-			"Content":  content,
-			"Siblings": siblings,
-		})
+		val, err := rc.JSFromGo(neighbourhood)
 		if err != nil {
-			return rc.Throw("trying to serialize Object Location, Content and siblings: %v", err)
+			return rc.Throw("trying to convert %v to *v8go.Value: %v", neighbourhood, err)
 		}
-		result, err := v8go.JSONParse(rc.Context(), string(js))
-		if err != nil {
-			return rc.Throw("trying to unserialize Object Location, Content and siblings: %v", err)
-		}
-		return result
+		return val
 	}
 	return result
 }
@@ -142,9 +244,7 @@ Some events we should send to objects:
 */
 func (g *Game) run(ctx context.Context, object *structs.Object, call *js.Call) error {
 	if call != nil {
-		if callbacks, found := object.Callbacks[call.Name]; !found {
-			return nil
-		} else if _, found = callbacks[call.Tag]; !found {
+		if !object.HasCallback(call.Name, call.Tag) {
 			return nil
 		}
 	}
@@ -176,7 +276,15 @@ func (g *Game) run(ctx context.Context, object *structs.Object, call *js.Call) e
 	return nil
 }
 
-func (g *Game) loadAndRun(ctx context.Context, id string, call *js.Call) error {
+func (g *Game) runSave(ctx context.Context, object *structs.Object, call *js.Call) error {
+	oldLocation := object.Location
+	if err := g.run(ctx, object, call); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return juicemud.WithStack(g.storage.SetObject(ctx, &oldLocation, object))
+}
+
+func (g *Game) loadRunSave(ctx context.Context, id string, call *js.Call) error {
 	sid := string(id)
 	jsContextLocks.Lock(sid)
 	defer jsContextLocks.Unlock(sid)
@@ -185,9 +293,5 @@ func (g *Game) loadAndRun(ctx context.Context, id string, call *js.Call) error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	oldLocation := object.Location
-	if err := g.run(ctx, object, call); err != nil {
-		return juicemud.WithStack(err)
-	}
-	return juicemud.WithStack(g.storage.SetObject(ctx, &oldLocation, object))
+	return juicemud.WithStack(g.runSave(ctx, object, call))
 }

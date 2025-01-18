@@ -91,12 +91,8 @@ func (s *Storage) SetSource(ctx context.Context, path string, content []byte) er
 	return s.sync(ctx)
 }
 
-func (s *Storage) GetObjects(ctx context.Context, ids []string) ([]structs.Object, error) {
-	res := make([]structs.Object, len(ids))
-	if err := s.objects.GetJSONMulti(ids, res); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	return res, nil
+func (s *Storage) GetObjects(ctx context.Context, ids map[string]bool) (map[string]*structs.Object, error) {
+	return dbm.GetJSONMulti[structs.Object](s.objects, ids)
 }
 
 func (s *Storage) GetObject(ctx context.Context, id string) (*structs.Object, error) {

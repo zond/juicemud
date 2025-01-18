@@ -19,8 +19,6 @@ import (
 	"github.com/zond/juicemud/storage"
 	"golang.org/x/term"
 	"rogchap.com/v8go"
-
-	goccy "github.com/goccy/go-json"
 )
 
 var (
@@ -176,18 +174,10 @@ func (e *Env) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	b, err := goccy.Marshal(map[string]any{
+	if err := e.game.emitAny(e.sess.Context(), 0, e.user.Object, emitEventTag, map[string]any{
 		"remote":   e.sess.RemoteAddr(),
 		"username": e.user.Name,
 		"object":   e.user.Object,
-	})
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	if err := e.loadAndRun(e.user.Object, &js.Call{
-		Name:    connectedEventType,
-		Message: string(b),
-		Tag:     emitEventTag,
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -195,7 +185,7 @@ func (e *Env) Connect() error {
 }
 
 func (e *Env) loadAndRun(id string, call *js.Call) error {
-	if err := e.game.loadAndRun(e.sess.Context(), id, call); err != nil {
+	if err := e.game.loadRunSave(e.sess.Context(), id, call); err != nil {
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {
 			switch rand.Intn(3) {

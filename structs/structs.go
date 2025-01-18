@@ -68,6 +68,15 @@ type Object struct {
 	SourcePath   string
 }
 
+func (o *Object) HasCallback(name string, tag string) bool {
+	tags, found := o.Callbacks[name]
+	if !found {
+		return false
+	}
+	_, found = tags[tag]
+	return found
+}
+
 func MakeObject(ctx context.Context) (*Object, error) {
 	object := &Object{
 		Callbacks: map[string]map[string]bool{},
