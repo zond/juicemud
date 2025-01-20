@@ -4,6 +4,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -25,15 +26,23 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	o := dbm.Opener{Dir: dir}
+	sources, err := dbm.OpenHash(filepath.Join(dir, fmt.Sprintf("source.tkh")))
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	objects, err := dbm.OpenStructHash[structs.Object](filepath.Join(dir, fmt.Sprintf("objects.tkh")))
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	queueTree, err := dbm.OpenTree(filepath.Join(dir, fmt.Sprintf("queue.tkt")))
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	s := &Storage{
 		sql:     sql,
-		sources: o.Hash("sources"),
-		objects: dbm.StructHash[structs.Object, *structs.Object]{Hash: o.Hash("objects")},
-		Queue:   queue.New(ctx, o.Tree("queue")),
-	}
-	if o.Err != nil {
-		return nil, juicemud.WithStack(o.Err)
+		sources: sources,
+		objects: objects,
+		Queue:   queue.New(ctx, queueTree),
 	}
 	for _, prototype := range []any{File{}, FileSync{}, Group{}, User{}, GroupMember{}} {
 		if err := sql.CreateTableIfNotExists(ctx, prototype); err != nil {

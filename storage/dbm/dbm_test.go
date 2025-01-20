@@ -13,8 +13,7 @@ import (
 )
 
 func TestGetStruct(t *testing.T) {
-	WithHash(t, func(h Hash) {
-		sh := StructHash[TestObj, *TestObj]{h}
+	WithStructHash[TestObj](t, func(sh StructHash[TestObj, *TestObj]) {
 		want := &TestObj{I: 1, S: "s"}
 		if err := sh.Set("a", want, true); err != nil {
 			t.Fatal(err)
@@ -30,8 +29,7 @@ func TestGetStruct(t *testing.T) {
 }
 
 func TestGetStructMulti(t *testing.T) {
-	WithHash(t, func(h Hash) {
-		sh := StructHash[TestObj, *TestObj]{h}
+	WithStructHash[TestObj](t, func(sh StructHash[TestObj, *TestObj]) {
 		want := map[string]*TestObj{"s": &TestObj{I: 1, S: "s"}, "s2": &TestObj{I: 2, S: "s2"}}
 		for _, obj := range want {
 			if err := sh.Set(obj.S, obj, true); err != nil {
@@ -49,8 +47,7 @@ func TestGetStructMulti(t *testing.T) {
 }
 
 func TestProc(t *testing.T) {
-	WithHash(t, func(h Hash) {
-		sh := StructHash[TestObj, *TestObj]{h}
+	WithStructHash(t, func(sh StructHash[TestObj, *TestObj]) {
 		want := map[string]*TestObj{"s": &TestObj{I: 1, S: "s"}, "s2": &TestObj{I: 2, S: "s2"}}
 		for _, obj := range want {
 			if err := sh.Set(obj.S, obj, true); err != nil {
@@ -58,7 +55,7 @@ func TestProc(t *testing.T) {
 			}
 		}
 		wantErr := fmt.Errorf("wantErr")
-		if err := h.Proc([]Proc{
+		if err := sh.Proc([]Proc{
 			sh.SProc("s", func(s string, to *TestObj) (*TestObj, error) {
 				to.I = 14
 				return to, nil
@@ -76,7 +73,7 @@ func TestProc(t *testing.T) {
 		if diff := cmp.Diff(got, want); diff != "" {
 			t.Errorf("got %+v, want %+v: %v", got, want, diff)
 		}
-		if err := h.Proc([]Proc{
+		if err := sh.Proc([]Proc{
 			sh.SProc("s", func(s string, to *TestObj) (*TestObj, error) {
 				to.I = 14
 				return to, nil
@@ -101,8 +98,7 @@ func TestProc(t *testing.T) {
 }
 
 func TestFirst(t *testing.T) {
-	WithTree(t, func(tr Tree) {
-		st := StructTree[TestObj, *TestObj]{StructHash[TestObj, *TestObj](tr)}
+	WithStructTree(t, func(st StructTree[TestObj, *TestObj]) {
 		for _, vInt := range rand.Perm(100) {
 			v := uint32(vInt)
 			key := make([]byte, binary.Size(v))
@@ -122,7 +118,7 @@ func TestFirst(t *testing.T) {
 			if obj.I != want {
 				t.Errorf("got %v, want %v", obj.I, want)
 			}
-			if err := tr.Del(string(wantKey)); err != nil {
+			if err := st.Del(string(wantKey)); err != nil {
 				t.Fatal(err)
 			}
 		}

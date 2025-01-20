@@ -2,6 +2,7 @@ package dbm
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 
 	"github.com/estraier/tkrzw-go"
@@ -213,4 +214,46 @@ func (t StructTree[T, S]) First() (*T, error) {
 		return nil, juicemud.WithStack(err)
 	}
 	return (*T)(first), nil
+}
+
+func OpenHash(path string) (Hash, error) {
+	dbm := tkrzw.NewDBM()
+	stat := dbm.Open(fmt.Sprintf("%s.tkh", path), true, map[string]string{
+		"update_mode":      "UPDATE_APPENDING",
+		"record_comp_mode": "RECORD_COMP_NONE",
+		"restore_mode":     "RESTORE_SYNC|RESTORE_NO_SHORTCUTS|RESTORE_WITH_HARDSYNC",
+	})
+	if !stat.IsOK() {
+		return Hash{}, juicemud.WithStack(stat)
+	}
+	return Hash{dbm}, nil
+}
+
+func OpenStructHash[T any, S Serializable[T]](path string) (StructHash[T, S], error) {
+	h, err := OpenHash(path)
+	if err != nil {
+		return StructHash[T, S]{}, juicemud.WithStack(err)
+	}
+	return StructHash[T, S]{h}, nil
+}
+
+func OpenTree(path string) (Tree, error) {
+	dbm := tkrzw.NewDBM()
+	stat := dbm.Open(fmt.Sprintf("%s.tkt", path), true, map[string]string{
+		"update_mode":      "UPDATE_APPENDING",
+		"record_comp_mode": "RECORD_COMP_NONE",
+		"key_comparator":   "SignedBigEndianKeyComparator",
+	})
+	if !stat.IsOK() {
+		return Tree{}, juicemud.WithStack(stat)
+	}
+	return Tree{Hash{dbm}}, nil
+}
+
+func OpenStructTree[T any, S Serializable[T]](path string) (StructTree[T, S], error) {
+	t, err := OpenTree(path)
+	if err != nil {
+		return StructTree[T, S]{}, juicemud.WithStack(err)
+	}
+	return StructTree[T, S]{StructHash[T, S](t)}, nil
 }
