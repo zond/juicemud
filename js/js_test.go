@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zond/juicemud/structs"
 	"rogchap.com/v8go"
 )
 
@@ -79,7 +80,7 @@ addCallback("test2", ["x"], (arg) => {
 			},
 		},
 	}
-	res, err := target.Run(ctx, &Call{Name: "test", Message: "{\"c\": 15}"}, time.Second)
+	res, err := target.Run(ctx, &structs.Call{Name: "test", Message: "{\"c\": 15}"}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ addCallback("test2", ["x"], (arg) => {
 	}
 	target.State = res.State
 
-	res, err = target.Run(ctx, &Call{Name: "test2", Message: "{\"c\": 30}"}, time.Second)
+	res, err = target.Run(ctx, &structs.Call{Name: "test2", Message: "{\"c\": 30}"}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +118,7 @@ addCallback("test2", ["x"], (arg) => {
 		t.Errorf("got %+v, want %+v", res.Callbacks, wantCallbacks)
 	}
 
-	res, err = target.Run(ctx, &Call{Name: "test2", Message: "{\"c\": 30}", Tag: "x"}, time.Second)
+	res, err = target.Run(ctx, &structs.Call{Name: "test2", Message: "{\"c\": 30}", Tag: "x"}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ addCallback("test", [], (arg) => {
 	}
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := target.Run(ctx, &Call{Name: "test", Message: "{\"c\": 15}"}, time.Second)
+		_, err := target.Run(ctx, &structs.Call{Name: "test", Message: "{\"c\": 15}"}, time.Second)
 		if err != nil {
 			b.Fatal(err)
 		}

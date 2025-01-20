@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zond/juicemud/storage/dbm"
+	"github.com/zond/juicemud/structs"
 )
 
 func TestQueue(t *testing.T) {
@@ -21,7 +22,7 @@ func TestQueue(t *testing.T) {
 		runWG := &sync.WaitGroup{}
 		runWG.Add(1)
 		go func() {
-			if err := q.Start(ctx, func(_ context.Context, ev *Event) {
+			if err := q.Start(ctx, func(_ context.Context, ev *structs.Event) {
 				mut.Lock()
 				defer mut.Unlock()
 				got = append(got, ev.Object)
@@ -30,20 +31,20 @@ func TestQueue(t *testing.T) {
 			}
 			runWG.Done()
 		}()
-		if err := q.Push(ctx, &Event{
-			At:     q.After(100 * time.Millisecond),
+		if err := q.Push(ctx, &structs.Event{
+			At:     int64(q.After(100 * time.Millisecond)),
 			Object: "a",
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := q.Push(ctx, &Event{
-			At:     q.After(10 * time.Millisecond),
+		if err := q.Push(ctx, &structs.Event{
+			At:     int64(q.After(10 * time.Millisecond)),
 			Object: "b",
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := q.Push(ctx, &Event{
-			At:     q.After(200 * time.Millisecond),
+		if err := q.Push(ctx, &structs.Event{
+			At:     int64(q.After(200 * time.Millisecond)),
 			Object: "c",
 		}); err != nil {
 			t.Fatal(err)

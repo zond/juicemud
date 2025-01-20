@@ -5,7 +5,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/storage"
 )
 
@@ -49,7 +48,7 @@ func BenchmarkCall(b *testing.B) {
 		}
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if err := g.loadRunSave(ctx, user.Object, &js.Call{}); err != nil {
+			if err := g.loadRunSave(ctx, user.Object, nil); err != nil {
 				b.Fatal(err)
 			}
 		}
