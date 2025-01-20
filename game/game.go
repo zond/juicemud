@@ -2,9 +2,14 @@ package game
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
+	"math"
+	"math/rand"
+	"time"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/errors"
@@ -114,4 +119,36 @@ func (g *Game) createUser(ctx context.Context, user *storage.User) error {
 		return juicemud.WithStack(err)
 	}
 	return nil
+}
+
+type skill struct {
+	subject  string
+	object   string
+	name     string
+	level    float32
+	duration time.Duration
+}
+
+func (s *skill) check(challenge float32) bool {
+	// Create rng based on subject, object, name, and time step.
+	h := fnv.New64()
+	h.Write([]byte(s.subject))
+	h.Write([]byte(s.object))
+	h.Write([]byte(s.name))
+	now1 := time.Now().UnixNano() / s.duration.Nanoseconds()
+	by := make([]byte, binary.Size(now1))
+	binary.BigEndian.PutUint64(by, uint64(now1))
+	h.Write(by)
+	rng1 := rand.New(rand.NewSource(int64(h.Sum64())))
+
+	// Offset the time step with the rng, and create another one.
+	offset := rng1.Int63n(s.duration.Nanoseconds())
+	now2 := (time.Now().UnixNano() + offset) / s.duration.Microseconds()
+	binary.BigEndian.PutUint64(by, uint64(now2))
+	h.Write(by)
+	rng2 := rand.New(rand.NewSource(int64(h.Sum64())))
+
+	// Win rate is ELO with 10 instead of 400 as "90% likely to win delta".
+	winRate := 1.0 / (1.0 + math.Pow(10, float64(challenge-s.level)*0.1))
+	return rng2.Float64() > winRate
 }
