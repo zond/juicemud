@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zond/juicemud"
+	"github.com/zond/juicemud/structs"
 	"rogchap.com/v8go"
 
 	goccy "github.com/goccy/go-json"
@@ -262,13 +263,7 @@ func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, erro
 	}
 }
 
-type Call struct {
-	Name    string
-	Message string
-	Tag     string
-}
-
-func (t Target) Run(ctx context.Context, call *Call, timeout time.Duration) (*Result, error) {
+func (t Target) Run(ctx context.Context, call *structs.Call, timeout time.Duration) (*Result, error) {
 	m := <-machines
 	defer func() { machines <- m }()
 

@@ -14,9 +14,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/digest"
-	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
+	"github.com/zond/juicemud/structs"
 	"golang.org/x/term"
 	"rogchap.com/v8go"
 )
@@ -184,7 +184,7 @@ func (e *Env) Connect() error {
 	return e.Process()
 }
 
-func (e *Env) loadAndRun(id string, call *js.Call) error {
+func (e *Env) loadAndRun(id string, call *structs.Call) error {
 	if err := e.game.loadRunSave(e.sess.Context(), id, call); err != nil {
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {

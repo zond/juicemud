@@ -47,7 +47,6 @@ var (
 
 type Game struct {
 	storage *storage.Storage
-	queue   *storage.Queue
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
@@ -65,21 +64,23 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			return nil, juicemud.WithStack(err)
 		}
 	}
-	result := &Game{
+	g := &Game{
 		storage: s,
 	}
-	var err error
-	result.queue = s.Queue(ctx, func(ctx context.Context, ev *storage.Event) {
-		go func() {
-			if result.loadRunSave(ctx, ev.Object, ev.Call); err != nil {
-				log.Printf("trying to execute %+v: %v", ev, err)
-			}
-		}()
-	})
 	go func() {
-		log.Panic(result.queue.Start(ctx))
+		log.Panic(g.storage.Start(ctx, func(ctx context.Context, ev *structs.Event) {
+			var call *structs.Call
+			if ev.Call.Name != "" {
+				call = &ev.Call
+			}
+			go func() {
+				if err := g.loadRunSave(ctx, ev.Object, call); err != nil {
+					log.Printf("trying to execute %+v: %v", ev, err)
+				}
+			}()
+		}, g.emitMovementToNeighbourhood))
 	}()
-	return result, nil
+	return g, nil
 }
 
 func (g *Game) HandleSession(sess ssh.Session) {

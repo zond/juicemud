@@ -1,3 +1,4 @@
+//go:generate bencgen --in schema.benc --out ./ --file schema --lang go
 package structs
 
 import (
@@ -10,6 +11,7 @@ import (
 )
 
 var (
+	lastEventCounter  uint64 = 0
 	lastObjectCounter uint64 = 0
 	encoding                 = base64.StdEncoding.WithPadding(base64.NoPadding)
 )
@@ -27,45 +29,6 @@ func NextObjectID() (string, error) {
 		return "", juicemud.WithStack(err)
 	}
 	return encoding.EncodeToString(result), nil
-}
-
-type Skill struct {
-	Theoretical float32
-	Practical   float32
-}
-
-type Challenge struct {
-	Skill string
-	Level float32
-}
-
-type Description struct {
-	Short      string
-	Long       string
-	Tags       []string
-	Challenges []Challenge
-}
-
-type Exit struct {
-	Descriptions    []Description
-	UseChallenges   []Challenge
-	LookChallenges  []Challenge
-	SniffChallenges []Challenge
-	HearChallenges  []Challenge
-	Destination     string
-}
-
-type Object struct {
-	Id        string
-	Callbacks map[string]map[string]bool // map[event_type]map[tag]bool where tag is e.g. command or event.
-	State     string
-
-	Location     string
-	Content      map[string]bool
-	Skills       map[string]Skill
-	Descriptions []Description
-	Exits        []Exit
-	SourcePath   string
 }
 
 func (o *Object) HasCallback(name string, tag string) bool {
@@ -89,4 +52,13 @@ func MakeObject(ctx context.Context) (*Object, error) {
 	}
 	object.Id = newID
 	return object, nil
+}
+
+func (e *Event) CreateKey() {
+	eventCounter := juicemud.Increment(&lastEventCounter)
+	atSize := binary.Size(e.At)
+	k := make([]byte, atSize+binary.Size(eventCounter))
+	binary.BigEndian.PutUint64(k, uint64(e.At))
+	binary.BigEndian.PutUint64(k[atSize:], eventCounter)
+	e.Key = string(k)
 }

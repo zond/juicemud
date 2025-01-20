@@ -1,17 +1,12 @@
 package storage
 
 import (
-	"context"
 	"log"
-	"reflect"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/bxcodec/faker/v4"
 	"github.com/bxcodec/faker/v4/pkg/options"
 	"github.com/sugawarayuuta/sonnet"
-	"github.com/zond/juicemud/storage/dbm"
 	"github.com/zond/juicemud/structs"
 	"rogchap.com/v8go"
 
@@ -52,23 +47,6 @@ func BenchmarkV8JSON(b *testing.B) {
 	}
 }
 
-func BenchmarkEncodingJSON(b *testing.B) {
-	b.StopTimer()
-	o := &structs.Object{}
-	js := fakeObjectJSON
-	b.StartTimer()
-	for i := 0; i < b.N; i++ {
-		if err := goccy.Unmarshal(js, o); err != nil {
-			b.Fatal(err)
-		}
-		by, err := goccy.Marshal(o)
-		if err != nil {
-			b.Fatal(err)
-		}
-		js = by
-	}
-}
-
 func BenchmarkSonnet(b *testing.B) {
 	b.StopTimer()
 	o := &structs.Object{}
@@ -101,51 +79,4 @@ func BenchmarkGoccy(b *testing.B) {
 		}
 		js = by
 	}
-}
-
-func TestQueue(t *testing.T) {
-	ctx := context.Background()
-	dbm.WithTree(t, func(tr dbm.Tree) {
-		got := []string{}
-		mut := &sync.Mutex{}
-		taskWG := &sync.WaitGroup{}
-		q := NewQueue(ctx, tr, func(_ context.Context, ev *Event) {
-			mut.Lock()
-			defer mut.Unlock()
-			got = append(got, ev.Object)
-		})
-		runWG := &sync.WaitGroup{}
-		runWG.Add(1)
-		go func() {
-			if err := q.Start(ctx); err != nil {
-				log.Fatal(err)
-			}
-			runWG.Done()
-		}()
-		if err := q.Push(ctx, &Event{
-			At:     q.After(100 * time.Millisecond),
-			Object: "a",
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if err := q.Push(ctx, &Event{
-			At:     q.After(10 * time.Millisecond),
-			Object: "b",
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if err := q.Push(ctx, &Event{
-			At:     q.After(200 * time.Millisecond),
-			Object: "c",
-		}); err != nil {
-			t.Fatal(err)
-		}
-		q.Close()
-		runWG.Wait()
-		taskWG.Wait()
-		want := []string{"b", "a", "c"}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("got %+v, want %+v", got, want)
-		}
-	})
 }

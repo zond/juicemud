@@ -4,9 +4,11 @@ go 1.23.4
 
 require (
 	github.com/bxcodec/faker/v4 v4.0.0-beta.3
+	github.com/deneonet/benc v1.1.2
 	github.com/estraier/tkrzw-go v0.0.0-20240603165139-89707b45d5ab
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/goccy/go-json v0.10.4
+	github.com/google/go-cmp v0.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/pkg/errors v0.9.1
 	github.com/sugawarayuuta/sonnet v0.0.0-20231004000330-239c7b6e4ce8
@@ -25,6 +27,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/tools v0.22.0 // indirect

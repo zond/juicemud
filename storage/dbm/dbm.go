@@ -1,45 +1,15 @@
 package dbm
 
 import (
-	"fmt"
+	"bytes"
 	"os"
-	"path/filepath"
 
 	"github.com/estraier/tkrzw-go"
 	"github.com/zond/juicemud"
-
-	goccy "github.com/goccy/go-json"
 )
 
 type Hash struct {
 	dbm *tkrzw.DBM
-}
-
-func (h Hash) GetJSON(k string, v any) error {
-	b, stat := h.dbm.Get(k)
-	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return juicemud.WithStack(os.ErrNotExist)
-	} else if !stat.IsOK() {
-		return juicemud.WithStack(stat)
-	}
-	return juicemud.WithStack(goccy.Unmarshal(b, v))
-}
-
-func GetJSONMulti[T any](h Hash, keys map[string]bool) (map[string]*T, error) {
-	ids := make([]string, 0, len(keys))
-	for key := range keys {
-		ids = append(ids, key)
-	}
-	byteResults := h.dbm.GetMulti(ids)
-	results := map[string]*T{}
-	for key, byteResult := range byteResults {
-		result := new(T)
-		if err := goccy.Unmarshal(byteResult, result); err != nil {
-			return nil, juicemud.WithStack(err)
-		}
-		results[key] = result
-	}
-	return results, nil
 }
 
 func (h Hash) Get(k string) ([]byte, error) {
@@ -52,23 +22,67 @@ func (h Hash) Get(k string) ([]byte, error) {
 	return b, nil
 }
 
-func (h Hash) SetJSON(k string, v any, overwrite bool) error {
-	b, err := goccy.Marshal(v)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	if stat := h.dbm.Set(k, b, overwrite); !stat.IsOK() {
-		return juicemud.WithStack(err)
+func (h Hash) Set(k string, v []byte, overwrite bool) error {
+	if stat := h.dbm.Set(k, v, overwrite); !stat.IsOK() {
+		return juicemud.WithStack(stat)
 	}
 	return nil
 }
 
-func (h Hash) Set(k string, v []byte, overwrite bool) error {
-	return juicemud.WithStack(h.dbm.Set(k, v, overwrite))
-}
-
 func (h Hash) Del(k string) error {
 	if stat := h.dbm.Remove(k); !stat.IsOK() {
+		return juicemud.WithStack(stat)
+	}
+	return nil
+}
+
+type Serializable[T any] interface {
+	Marshal([]byte)
+	Unmarshal([]byte) error
+	Size() int
+	*T
+}
+
+type StructHash[T any, S Serializable[T]] struct {
+	Hash
+}
+
+func (h StructHash[T, S]) Get(k string) (*T, error) {
+	b, stat := h.dbm.Get(k)
+	if stat.GetCode() == tkrzw.StatusNotFoundError {
+		return nil, juicemud.WithStack(os.ErrNotExist)
+	} else if !stat.IsOK() {
+		return nil, juicemud.WithStack(stat)
+	}
+	t := S(new(T))
+	if err := t.Unmarshal(b); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return (*T)(t), nil
+}
+
+func (h StructHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
+	ids := make([]string, 0, len(keys))
+	for key := range keys {
+		ids = append(ids, key)
+	}
+	byteResults := h.dbm.GetMulti(ids)
+	results := map[string]*T{}
+	for key, byteResult := range byteResults {
+		result := S(new(T))
+		if err := result.Unmarshal(byteResult); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+		results[key] = (*T)(result)
+	}
+	return results, nil
+}
+
+func (h StructHash[T, S]) Set(k string, v *T, overwrite bool) error {
+	s := S(v)
+	b := make([]byte, s.Size())
+	s.Marshal(b)
+	if stat := h.dbm.Set(k, b, overwrite); !stat.IsOK() {
 		return juicemud.WithStack(stat)
 	}
 	return nil
@@ -92,20 +106,27 @@ func (p *BProc) Proc(k string, v []byte) ([]byte, error) {
 	return p.F(k, v)
 }
 
-type JProc[T any] struct {
+func (h StructHash[T, S]) SProc(key string, fun func(string, *T) (*T, error)) SProc[T, S] {
+	return SProc[T, S]{
+		K: key,
+		F: fun,
+	}
+}
+
+type SProc[T any, S Serializable[T]] struct {
 	K string
 	F func(string, *T) (*T, error)
 }
 
-func (j JProc[T]) Key() string {
+func (j SProc[T, S]) Key() string {
 	return j.K
 }
 
-func (j JProc[T]) Proc(k string, v []byte) ([]byte, error) {
+func (j SProc[T, S]) Proc(k string, v []byte) ([]byte, error) {
 	var input *T
 	if v != nil {
 		input = new(T)
-		if err := goccy.Unmarshal(v, input); err != nil {
+		if err := S(input).Unmarshal(v); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}
@@ -114,9 +135,9 @@ func (j JProc[T]) Proc(k string, v []byte) ([]byte, error) {
 		return nil, juicemud.WithStack(err)
 	}
 	if output != nil {
-		if v, err = goccy.Marshal(output); err != nil {
-			return nil, juicemud.WithStack(err)
-		}
+		outputS := S(output)
+		v = make([]byte, outputS.Size())
+		outputS.Marshal(v)
 	} else {
 		v = nil
 	}
@@ -153,8 +174,10 @@ func (h Hash) Proc(pairs []Proc, write bool) error {
 				}
 				if outputs[index] == nil {
 					return tkrzw.RemoveBytes
-				} else {
+				} else if !bytes.Equal(value, outputs[index]) {
 					return outputs[index]
+				} else {
+					return nil
 				}
 			},
 		}
@@ -169,58 +192,25 @@ type Tree struct {
 	Hash
 }
 
-func (t Tree) FirstJSON(v any) (string, error) {
+type StructTree[T any, S Serializable[T]] struct {
+	StructHash[T, S]
+}
+
+func (t StructTree[T, S]) First() (*T, error) {
 	iter := t.dbm.MakeIterator()
 	defer iter.Destruct()
 	if stat := iter.First(); !stat.IsOK() {
-		return "", juicemud.WithStack(stat)
+		return nil, juicemud.WithStack(stat)
 	}
-	k, b, stat := iter.Get()
+	_, b, stat := iter.Get()
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return "", juicemud.WithStack(os.ErrNotExist)
+		return nil, juicemud.WithStack(os.ErrNotExist)
 	} else if !stat.IsOK() {
-		return "", juicemud.WithStack(stat)
+		return nil, juicemud.WithStack(stat)
 	}
-	if err := goccy.Unmarshal(b, v); err != nil {
-		return "", juicemud.WithStack(err)
+	first := S(new(T))
+	if err := first.Unmarshal(b); err != nil {
+		return nil, juicemud.WithStack(err)
 	}
-	return string(k), nil
-
-}
-
-type Opener struct {
-	Dir string
-	Err error
-}
-
-func (o *Opener) Hash(name string) Hash {
-	if o.Err != nil {
-		return Hash{}
-	}
-	dbm := tkrzw.NewDBM()
-	stat := dbm.Open(filepath.Join(o.Dir, fmt.Sprintf("%s.tkh", name)), true, map[string]string{
-		"update_mode":      "UPDATE_APPENDING",
-		"record_comp_mode": "RECORD_COMP_NONE",
-		"restore_mode":     "RESTORE_SYNC|RESTORE_NO_SHORTCUTS|RESTORE_WITH_HARDSYNC",
-	})
-	if !stat.IsOK() {
-		o.Err = juicemud.WithStack(stat)
-	}
-	return Hash{dbm}
-}
-
-func (o *Opener) Tree(name string) Tree {
-	if o.Err != nil {
-		return Tree{}
-	}
-	dbm := tkrzw.NewDBM()
-	stat := dbm.Open(filepath.Join(o.Dir, fmt.Sprintf("%s.tkt", name)), true, map[string]string{
-		"update_mode":      "UPDATE_APPENDING",
-		"record_comp_mode": "RECORD_COMP_NONE",
-		"key_comparator":   "SignedBigEndianKeyComparator",
-	})
-	if !stat.IsOK() {
-		o.Err = juicemud.WithStack(stat)
-	}
-	return Tree{Hash{dbm}}
+	return (*T)(first), nil
 }

@@ -1,58 +1,34 @@
-package storage
+package queue
 
 import (
 	"context"
-	"encoding/binary"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
-	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/storage/dbm"
+	"github.com/zond/juicemud/structs"
 )
-
-var (
-	lastEventCounter = uint64(0)
-)
-
-type Timestamp uint64
-
-type Event struct {
-	At     Timestamp
-	Object string
-	Call   *js.Call
-
-	key string
-}
-
-func (e *Event) createKey() {
-	eventCounter := juicemud.Increment(&lastEventCounter)
-	atSize := binary.Size(e.At)
-	k := make([]byte, atSize+binary.Size(eventCounter))
-	binary.BigEndian.PutUint64(k, uint64(e.At))
-	binary.BigEndian.PutUint64(k[atSize:], eventCounter)
-	e.key = string(k)
-}
 
 type Queue struct {
-	tree      dbm.Tree
+	tree      dbm.StructTree[structs.Event, *structs.Event]
 	cond      *sync.Cond
 	err       chan error
 	closed    bool
-	nextEvent *Event
+	nextEvent *structs.Event
 	offset    Timestamp
-	handler   func(context.Context, *Event)
 }
 
-func NewQueue(ctx context.Context, t dbm.Tree, handler func(context.Context, *Event)) *Queue {
+type Timestamp int64
+
+func New(ctx context.Context, t dbm.Tree) *Queue {
 	mut := &sync.Mutex{}
 	return &Queue{
-		cond:    sync.NewCond(mut),
-		tree:    t,
-		err:     make(chan error, 1),
-		handler: handler,
+		cond: sync.NewCond(mut),
+		tree: dbm.StructTree[structs.Event, *structs.Event]{StructHash: dbm.StructHash[structs.Event, *structs.Event](t)},
+		err:  make(chan error, 1),
 	}
 }
 
@@ -72,15 +48,13 @@ func (q *Queue) now() Timestamp {
 	return Timestamp(time.Now().UnixNano()) + q.offset
 }
 
-func (q *Queue) peekFirst(_ context.Context) (*Event, error) {
-	res := &Event{}
-	key, err := q.tree.FirstJSON(res)
+func (q *Queue) peekFirst(_ context.Context) (*structs.Event, error) {
+	res, err := q.tree.First()
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	} else if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	res.key = key
 	return res, nil
 }
 
@@ -91,7 +65,7 @@ func (q *Queue) Close() {
 	q.cond.Broadcast()
 }
 
-func (q *Queue) Push(ctx context.Context, ev *Event) error {
+func (q *Queue) Push(ctx context.Context, ev *structs.Event) error {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 
@@ -99,15 +73,15 @@ func (q *Queue) Push(ctx context.Context, ev *Event) error {
 		return errors.Errorf("queue is closed")
 	}
 
-	ev.createKey()
+	ev.CreateKey()
 
-	if err := q.tree.SetJSON(ev.key, ev, false); err != nil {
+	if err := q.tree.Set(ev.Key, ev, false); err != nil {
 		return juicemud.WithStack(err)
 	}
 
 	if q.nextEvent == nil || ev.At < q.nextEvent.At {
 		q.nextEvent = ev
-		if ev.At >= q.now() {
+		if Timestamp(ev.At) >= q.now() {
 			q.cond.Broadcast()
 		}
 	}
@@ -115,20 +89,20 @@ func (q *Queue) Push(ctx context.Context, ev *Event) error {
 	return nil
 }
 
-func (q *Queue) Start(ctx context.Context) error {
+func (q *Queue) Start(ctx context.Context, handler func(context.Context, *structs.Event)) error {
 	var err error
 	if q.nextEvent, err = q.peekFirst(ctx); err != nil {
 		return juicemud.WithStack(err)
 	}
 	if q.nextEvent != nil {
-		q.offset = q.nextEvent.At
+		q.offset = Timestamp(q.nextEvent.At)
 	}
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 	for !q.closed || q.nextEvent != nil {
-		for q.nextEvent != nil && q.nextEvent.At <= q.now() {
-			q.handler(ctx, q.nextEvent)
-			if err := q.tree.Del(q.nextEvent.key); err != nil {
+		for q.nextEvent != nil && Timestamp(q.nextEvent.At) <= q.now() {
+			handler(ctx, q.nextEvent)
+			if err := q.tree.Del(q.nextEvent.Key); err != nil {
 				return juicemud.WithStack(err)
 			}
 			if q.nextEvent, err = q.peekFirst(ctx); err != nil {
@@ -136,7 +110,7 @@ func (q *Queue) Start(ctx context.Context) error {
 			}
 		}
 		if q.nextEvent != nil {
-			if toSleep := q.until(q.nextEvent.At); toSleep > 0 {
+			if toSleep := q.until(Timestamp(q.nextEvent.At)); toSleep > 0 {
 				go func() {
 					time.Sleep(toSleep)
 					q.cond.Broadcast()

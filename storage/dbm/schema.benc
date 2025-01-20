@@ -1,0 +1,10 @@
+header dbm;
+
+ctr TestObj {
+    int i = 1;
+    string s = 2;
+}
+
+
+# DO NOT EDIT.
+# [meta_s] eyJtc2dzIjp7IlRlc3RPYmoiOnsicklkcyI6bnVsbCwiZmllbGRzIjp7IjEiOnsiSWQiOjEsIk5hbWUiOiJpIiwiVHlwZSI6eyJUb2tlblR5cGUiOjksIk1hcEtleVR5cGUiOm51bGwsIkNoaWxkVHlwZSI6bnVsbCwiQ3RyTmFtZSI6IiIsIklzVW5zYWZlIjpmYWxzZSwiSXNBcnJheSI6ZmFsc2UsIklzTWFwIjpmYWxzZX19LCIyIjp7IklkIjoyLCJOYW1lIjoicyIsIlR5cGUiOnsiVG9rZW5UeXBlIjoxNSwiTWFwS2V5VHlwZSI6bnVsbCwiQ2hpbGRUeXBlIjpudWxsLCJDdHJOYW1lIjoiIiwiSXNVbnNhZmUiOmZhbHNlLCJJc0FycmF5IjpmYWxzZSwiSXNNYXAiOmZhbHNlfX19fX19 [meta_e]
