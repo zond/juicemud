@@ -4,7 +4,6 @@ package storage
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -26,15 +25,15 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	sources, err := dbm.OpenHash(filepath.Join(dir, fmt.Sprintf("source")))
+	sources, err := dbm.OpenHash(filepath.Join(dir, "source"))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	objects, err := dbm.OpenStructHash[structs.Object](filepath.Join(dir, fmt.Sprintf("objects")))
+	objects, err := dbm.OpenStructHash[structs.Object](filepath.Join(dir, "objects"))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	queueTree, err := dbm.OpenTree(filepath.Join(dir, fmt.Sprintf("queue")))
+	queueTree, err := dbm.OpenTree(filepath.Join(dir, "queue"))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
