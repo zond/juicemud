@@ -58,7 +58,7 @@ func (g *Game) emitJSONIf(ctx context.Context, at queue.Timestamp, object *struc
 }
 
 func (g *Game) emitJSON(ctx context.Context, at queue.Timestamp, id string, name string, json string) error {
-	return juicemud.WithStack(g.storage.Queue.Push(ctx, &structs.Event{
+	return juicemud.WithStack(g.storage.Queue().Push(ctx, &structs.Event{
 		At:     uint64(at),
 		Object: id,
 		Call: structs.Call{
@@ -97,7 +97,7 @@ func (g *Game) emitMovementToNeighbourhood(ctx context.Context, bigM *storage.Mo
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	at := g.storage.Queue.After(defaultReactionDelay)
+	at := g.storage.Queue().After(defaultReactionDelay)
 	return juicemud.WithStack(g.emitJSONToNeighbourhoodIf(ctx, at, n, movementEventType, string(json)))
 }
 
@@ -151,7 +151,7 @@ func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.C
 			return rc.Throw("trying to serialize %v: %v", args[2], err)
 		}
 		delay := time.Duration(args[0].Integer()) * time.Millisecond
-		if err := g.emitJSON(ctx, g.storage.Queue.After(delay), object.Id, args[1].String(), message); err != nil {
+		if err := g.emitJSON(ctx, g.storage.Queue().After(delay), object.Id, args[1].String(), message); err != nil {
 			return rc.Throw("trying to enqueue %v for %v: %v", message, object.Id, err)
 		}
 		return nil
@@ -169,7 +169,7 @@ func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.C
 		if err != nil {
 			return rc.Throw("trying to serialize %v: %v", args[2], err)
 		}
-		if err := g.emitJSON(ctx, g.storage.Queue.After(defaultReactionDelay), args[0].String(), args[1].String(), message); err != nil {
+		if err := g.emitJSON(ctx, g.storage.Queue().After(defaultReactionDelay), args[0].String(), args[1].String(), message); err != nil {
 			return rc.Throw("trying to enqueue %v for %v: %v", message, args[0].String(), err)
 		}
 		return nil

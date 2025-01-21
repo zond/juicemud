@@ -41,7 +41,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 		sql:     sql,
 		sources: sources,
 		objects: objects,
-		Queue:   queue.New(ctx, queueTree),
+		queue:   queue.New(ctx, queueTree),
 	}
 	for _, prototype := range []any{File{}, FileSync{}, Group{}, User{}, GroupMember{}} {
 		if err := sql.CreateTableIfNotExists(ctx, prototype); err != nil {
@@ -52,12 +52,15 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 }
 
 type Storage struct {
-	Queue *queue.Queue
-
+	queue           *queue.Queue
 	sql             *sqly.DB
 	sources         dbm.Hash
 	objects         dbm.StructHash[structs.Object, *structs.Object]
 	movementHandler MovementHandler
+}
+
+func (s *Storage) Queue() *queue.Queue {
+	return s.queue
 }
 
 type EventHandler func(context.Context, *structs.Event)
@@ -66,7 +69,7 @@ type MovementHandler func(context.Context, *Movement) error
 
 func (s *Storage) Start(ctx context.Context, eventHandler EventHandler, movementHandler MovementHandler) error {
 	s.movementHandler = movementHandler
-	return juicemud.WithStack(s.Queue.Start(ctx, eventHandler))
+	return juicemud.WithStack(s.queue.Start(ctx, eventHandler))
 }
 
 func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, params ...any) error {

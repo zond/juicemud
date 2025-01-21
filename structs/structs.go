@@ -20,6 +20,8 @@ const (
 	objectIDLen = 16
 )
 
+type Timestamp uint64
+
 func NextObjectID() (string, error) {
 	objectCounter := juicemud.Increment(&lastObjectCounter)
 	timeSize := binary.Size(objectCounter)
