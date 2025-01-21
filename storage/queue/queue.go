@@ -21,7 +21,7 @@ type Queue struct {
 	offset    Timestamp
 }
 
-type Timestamp int64
+type Timestamp uint64
 
 func New(ctx context.Context, t dbm.Tree) *Queue {
 	mut := &sync.Mutex{}
@@ -41,7 +41,7 @@ func (q *Queue) At(t time.Time) Timestamp {
 }
 
 func (q *Queue) until(at Timestamp) time.Duration {
-	return time.Nanosecond * time.Duration(int64(at)-int64(q.now()))
+	return time.Nanosecond * time.Duration(uint64(at)-uint64(q.now()))
 }
 
 func (q *Queue) now() Timestamp {

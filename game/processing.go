@@ -59,7 +59,7 @@ func (g *Game) emitJSONIf(ctx context.Context, at queue.Timestamp, object *struc
 
 func (g *Game) emitJSON(ctx context.Context, at queue.Timestamp, id string, name string, json string) error {
 	return juicemud.WithStack(g.storage.Queue.Push(ctx, &structs.Event{
-		At:     int64(at),
+		At:     uint64(at),
 		Object: id,
 		Call: structs.Call{
 			Name:    name,

@@ -974,7 +974,7 @@ func (call *Call) UnmarshalPlain(tn int, b []byte) (n int, err error) {
 
 // Struct - Event
 type Event struct {
-    At int64
+    At uint64
     Object string
     Call Call
     Key string
@@ -990,7 +990,7 @@ func (event *Event) Size() int {
 
 // Nested Size - Event
 func (event *Event) size(id uint16) (s int) {
-    s += bstd.SizeInt64() + 2
+    s += bstd.SizeUint64() + 2
     s += bstd.SizeString(event.Object) + 2
     s += event.Call.size(3)
     s += bstd.SizeString(event.Key) + 2
@@ -1005,7 +1005,7 @@ func (event *Event) size(id uint16) (s int) {
 
 // SizePlain - Event
 func (event *Event) SizePlain() (s int) {
-    s += bstd.SizeInt64()
+    s += bstd.SizeUint64()
     s += bstd.SizeString(event.Object)
     s += event.Call.SizePlain()
     s += bstd.SizeString(event.Key)
@@ -1021,7 +1021,7 @@ func (event *Event) Marshal(b []byte) {
 func (event *Event) marshal(tn int, b []byte, id uint16) (n int) {
     n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 1)
-    n = bstd.MarshalInt64(n, b, event.At)
+    n = bstd.MarshalUint64(n, b, event.At)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 2)
     n = bstd.MarshalString(n, b, event.Object)
     n = event.Call.marshal(n, b, 3)
@@ -1037,7 +1037,7 @@ func (event *Event) marshal(tn int, b []byte, id uint16) (n int) {
 // MarshalPlain - Event
 func (event *Event) MarshalPlain(tn int, b []byte) (n int) {
     n = tn
-    n = bstd.MarshalInt64(n, b, event.At)
+    n = bstd.MarshalUint64(n, b, event.At)
     n = bstd.MarshalString(n, b, event.Object)
     n = event.Call.MarshalPlain(n, b)
     n = bstd.MarshalString(n, b, event.Key)
@@ -1066,7 +1066,7 @@ func (event *Event) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, e
         return
     }
     if ok {
-        if n, event.At, err = bstd.UnmarshalInt64(n, b); err != nil {
+        if n, event.At, err = bstd.UnmarshalUint64(n, b); err != nil {
             return
         }
     }
@@ -1102,7 +1102,7 @@ func (event *Event) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, e
 // UnmarshalPlain - Event
 func (event *Event) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     n = tn
-    if n, event.At, err = bstd.UnmarshalInt64(n, b); err != nil {
+    if n, event.At, err = bstd.UnmarshalUint64(n, b); err != nil {
         return
     }
     if n, event.Object, err = bstd.UnmarshalString(n, b); err != nil {

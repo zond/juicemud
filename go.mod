@@ -4,7 +4,7 @@ go 1.23.4
 
 require (
 	github.com/bxcodec/faker/v4 v4.0.0-beta.3
-	github.com/deneonet/benc v1.1.2
+	github.com/deneonet/benc v1.1.3
 	github.com/estraier/tkrzw-go v0.0.0-20240603165139-89707b45d5ab
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/goccy/go-json v0.10.4

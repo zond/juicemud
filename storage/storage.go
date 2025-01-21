@@ -26,15 +26,15 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	sources, err := dbm.OpenHash(filepath.Join(dir, fmt.Sprintf("source.tkh")))
+	sources, err := dbm.OpenHash(filepath.Join(dir, fmt.Sprintf("source")))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	objects, err := dbm.OpenStructHash[structs.Object](filepath.Join(dir, fmt.Sprintf("objects.tkh")))
+	objects, err := dbm.OpenStructHash[structs.Object](filepath.Join(dir, fmt.Sprintf("objects")))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	queueTree, err := dbm.OpenTree(filepath.Join(dir, fmt.Sprintf("queue.tkt")))
+	queueTree, err := dbm.OpenTree(filepath.Join(dir, fmt.Sprintf("queue")))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
