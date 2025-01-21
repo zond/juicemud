@@ -4,13 +4,133 @@ package dbm
 import (
 	"encoding/binary"
 	"errors"
+	"flag"
 	"fmt"
+	"log"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/bxcodec/faker/v4"
+	"github.com/bxcodec/faker/v4/pkg/options"
 	"github.com/google/go-cmp/cmp"
+	"github.com/zond/juicemud/structs"
 )
+
+var (
+	fakeObject structs.Object
+)
+
+func init() {
+	err := faker.FakeData(&fakeObject, options.WithRandomMapAndSliceMaxSize(10))
+	if err != nil {
+		log.Panic(err)
+	}
+}
+
+func BenchmarkHash(b *testing.B) {
+	b.StopTimer()
+	by := make([]byte, fakeObject.Size())
+	fakeObject.Marshal(by)
+	WithHash(b, func(h Hash) {
+		b.StartTimer()
+		for i := 0; i < b.N; i++ {
+			if err := h.Set(fakeObject.Id, by, true); err != nil {
+				b.Fatal(err)
+			}
+			_, err := h.Get(fakeObject.Id)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+	})
+}
+
+func BenchmarkStructHash(b *testing.B) {
+	b.StopTimer()
+	WithStructHash[structs.Object](b, func(h StructHash[structs.Object, *structs.Object]) {
+		b.StartTimer()
+		for i := 0; i < b.N; i++ {
+			if err := h.Set(fakeObject.Id, &fakeObject, true); err != nil {
+				b.Fatal(err)
+			}
+			_, err := h.Get(fakeObject.Id)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+	})
+}
+
+var (
+	benchTree StructTree[structs.Event, *structs.Event]
+)
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	bench := flag.Lookup("test.bench")
+	if bench.Value.String() != "" {
+		func() {
+			tmpDir, err := os.MkdirTemp("", "")
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer os.RemoveAll(tmpDir)
+			if benchTree, err = OpenStructTree[structs.Event](filepath.Join(tmpDir, "TestMain")); err != nil {
+				log.Fatal(err)
+			}
+			ev := &structs.Event{
+				Object: fmt.Sprint(rand.Int64()),
+				Call: structs.Call{
+					Name:    fmt.Sprint(rand.Int64()),
+					Tag:     fmt.Sprint(rand.Int64()),
+					Message: fmt.Sprint(rand.Int64()),
+				},
+			}
+			for i := 0; i < 1000000; i++ {
+				ev.At = uint64(rand.Int64())
+				ev.CreateKey()
+				if err := benchTree.Set(ev.Key, ev, false); err != nil {
+					log.Fatal(err)
+				}
+			}
+			m.Run()
+		}()
+	} else {
+		m.Run()
+	}
+}
+
+func BenchmarkStructTree(b *testing.B) {
+	b.StopTimer()
+	ev := &structs.Event{
+		Object: fmt.Sprint(rand.Int64()),
+		Call: structs.Call{
+			Name:    fmt.Sprint(rand.Int64()),
+			Tag:     fmt.Sprint(rand.Int64()),
+			Message: fmt.Sprint(rand.Int64()),
+		},
+	}
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		ev.At = uint64(rand.Int64())
+		ev.CreateKey()
+		if err := benchTree.Set(ev.Key, ev, false); err != nil {
+			b.Fatal(err)
+		}
+		ev, err := benchTree.First()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := benchTree.Del(ev.Key); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 func TestGetStruct(t *testing.T) {
 	WithStructHash[TestObj](t, func(sh StructHash[TestObj, *TestObj]) {

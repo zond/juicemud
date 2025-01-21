@@ -17,7 +17,7 @@ func withFile(t testing.TB, suffix string, f func(string)) {
 	f(filepath.Join(tmpDir, fmt.Sprintf("test%s", suffix)))
 }
 
-func WithHash(t *testing.T, f func(Hash)) {
+func WithHash(t testing.TB, f func(Hash)) {
 	t.Helper()
 	withFile(t, ".tkh", func(path string) {
 		dbm, err := OpenHash(path)
@@ -28,7 +28,7 @@ func WithHash(t *testing.T, f func(Hash)) {
 	})
 }
 
-func WithStructHash[T any, S Serializable[T]](t *testing.T, f func(StructHash[T, S])) {
+func WithStructHash[T any, S Serializable[T]](t testing.TB, f func(StructHash[T, S])) {
 	t.Helper()
 	withFile(t, ".tkh", func(path string) {
 		dbm, err := OpenStructHash[T, S](path)
@@ -39,7 +39,7 @@ func WithStructHash[T any, S Serializable[T]](t *testing.T, f func(StructHash[T,
 	})
 }
 
-func WithTree(t *testing.T, f func(Tree)) {
+func WithTree(t testing.TB, f func(Tree)) {
 	t.Helper()
 	t.Helper()
 	withFile(t, ".tkt", func(path string) {
@@ -51,7 +51,7 @@ func WithTree(t *testing.T, f func(Tree)) {
 	})
 }
 
-func WithStructTree[T any, S Serializable[T]](t *testing.T, f func(StructTree[T, S])) {
+func WithStructTree[T any, S Serializable[T]](t testing.TB, f func(StructTree[T, S])) {
 	t.Helper()
 	t.Helper()
 	withFile(t, ".tkt", func(path string) {

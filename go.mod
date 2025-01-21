@@ -11,7 +11,6 @@ require (
 	github.com/google/go-cmp v0.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/pkg/errors v0.9.1
-	github.com/sugawarayuuta/sonnet v0.0.0-20231004000330-239c7b6e4ce8
 	github.com/zond/sqly v0.0.0-20250105203711-328150f4df2d
 	golang.org/x/crypto v0.31.0
 	golang.org/x/term v0.27.0
