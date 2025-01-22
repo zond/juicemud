@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"time"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
+	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 	"golang.org/x/term"
@@ -26,6 +29,7 @@ const (
 const (
 	userSource    = "/user.js"
 	genesisSource = "/genesis.js"
+	bootSource    = "/boot.js"
 )
 
 const (
@@ -34,6 +38,7 @@ const (
 
 var (
 	initialSources = map[string]string{
+		bootSource:    "// This code is run each time the game server starts.",
 		userSource:    "// This code runs all connected users.",
 		genesisSource: "// This code runs the room where newly created users are dropped.",
 	}
@@ -80,6 +85,22 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			}()
 		}, g.emitMovementToNeighbourhood))
 	}()
+	bootJS, err := g.storage.GetSource(ctx, bootSource)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	callbacks := js.Callbacks{}
+	g.addGlobalCallbacks(ctx, callbacks)
+	bootTarget := js.Target{
+		Source:    string(bootJS),
+		Origin:    bootSource,
+		State:     "{}",
+		Callbacks: callbacks,
+		Console:   os.Stderr,
+	}
+	if _, err := bootTarget.Run(ctx, nil, time.Second); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	return g, nil
 }
 

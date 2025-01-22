@@ -3,11 +3,14 @@ package juicemud
 import (
 	"bytes"
 	"fmt"
+	"iter"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
+
+	goccy "github.com/goccy/go-json"
 )
 
 const (
@@ -48,6 +51,74 @@ func NewSyncMap[K comparable, V comparable]() *SyncMap[K, V] {
 	return &SyncMap[K, V]{
 		m:     map[K]V{},
 		locks: map[K]*sync.WaitGroup{},
+	}
+}
+
+func (s *SyncMap[K, V]) Clone() map[K]V {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	result := map[K]V{}
+	for k, v := range s.m {
+		result[k] = v
+	}
+	return result
+}
+
+func (s *SyncMap[K, V]) Replace(m map[K]V) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.m = map[K]V{}
+	for k, v := range m {
+		s.m[k] = v
+	}
+}
+
+func (s *SyncMap[K, V]) MarshalJSON() ([]byte, error) {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return goccy.Marshal(s.m)
+}
+
+func (s *SyncMap[K, V]) UnmarshalJSON(b []byte) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.m = map[K]V{}
+	return goccy.Unmarshal(b, &s.m)
+}
+
+func (s *SyncMap[K, V]) Keys() iter.Seq[K] {
+	return func(yield func(k K) bool) {
+		s.mutex.RLock()
+		defer s.mutex.RUnlock()
+		for k := range s.m {
+			if !yield(k) {
+				return
+			}
+		}
+	}
+}
+
+func (s *SyncMap[K, V]) Values() iter.Seq[V] {
+	return func(yield func(v V) bool) {
+		s.mutex.RLock()
+		defer s.mutex.RUnlock()
+		for _, v := range s.m {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+
+func (s *SyncMap[K, V]) Each() iter.Seq2[K, V] {
+	return func(yield func(k K, v V) bool) {
+		s.mutex.RLock()
+		defer s.mutex.RUnlock()
+		for k, v := range s.m {
+			if !yield(k, v) {
+				return
+			}
+		}
 	}
 }
 

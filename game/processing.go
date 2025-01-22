@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/zond/juicemud"
+	"github.com/zond/juicemud/game/skills"
 	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/storage"
-	"github.com/zond/juicemud/storage/queue"
 	"github.com/zond/juicemud/structs"
 	"rogchap.com/v8go"
 
@@ -42,7 +42,7 @@ func addGetSetPair(name string, source any, callbacks js.Callbacks) {
 	}
 }
 
-func (g *Game) emitAny(ctx context.Context, at queue.Timestamp, id string, name string, message any) error {
+func (g *Game) emitAny(ctx context.Context, at structs.Timestamp, id string, name string, message any) error {
 	b, err := goccy.Marshal(message)
 	if err != nil {
 		return juicemud.WithStack(err)
@@ -50,14 +50,14 @@ func (g *Game) emitAny(ctx context.Context, at queue.Timestamp, id string, name 
 	return juicemud.WithStack(g.emitJSON(ctx, at, id, name, string(b)))
 }
 
-func (g *Game) emitJSONIf(ctx context.Context, at queue.Timestamp, object *structs.Object, name string, json string) error {
+func (g *Game) emitJSONIf(ctx context.Context, at structs.Timestamp, object *structs.Object, name string, json string) error {
 	if object.HasCallback(name, emitEventTag) {
 		return juicemud.WithStack(g.emitJSON(ctx, at, object.Id, name, json))
 	}
 	return nil
 }
 
-func (g *Game) emitJSON(ctx context.Context, at queue.Timestamp, id string, name string, json string) error {
+func (g *Game) emitJSON(ctx context.Context, at structs.Timestamp, id string, name string, json string) error {
 	return juicemud.WithStack(g.storage.Queue().Push(ctx, &structs.Event{
 		At:     uint64(at),
 		Object: id,
@@ -69,7 +69,7 @@ func (g *Game) emitJSON(ctx context.Context, at queue.Timestamp, id string, name
 	}))
 }
 
-func (g *Game) emitJSONToNeighbourhoodIf(ctx context.Context, at queue.Timestamp, n *structs.Neighbourhood, name string, json string) error {
+func (g *Game) emitJSONToNeighbourhoodIf(ctx context.Context, at structs.Timestamp, n *structs.Neighbourhood, name string, json string) error {
 	for _, obj := range n.All() {
 		if err := g.emitJSONIf(ctx, at, obj, name, json); err != nil {
 			return juicemud.WithStack(err)
@@ -133,15 +133,66 @@ func (g *Game) loadNeighbourhood(ctx context.Context, object *structs.Object) (*
 	return result, nil
 }
 
-func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.Callbacks {
-	result := js.Callbacks{}
-	addGetSetPair("Location", &object.Location, result)
-	addGetSetPair("Content", &object.Content, result)
-	addGetSetPair("Skills", &object.Skills, result)
-	addGetSetPair("Descriptions", &object.Descriptions, result)
-	addGetSetPair("Exits", &object.Exits, result)
-	addGetSetPair("SourcePath", &object.SourcePath, result)
-	result["setTimeout"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
+	callbacks["getSkills"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 0 {
+			return rc.Throw("getSkills takes no arguments")
+		}
+		res, err := rc.JSFromGo(skills.Skills)
+		if err != nil {
+			return rc.Throw("trying to convert %v to *v8go.Value: %v", skills.Skills, err)
+		}
+		return res
+	}
+	callbacks["setSkills"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 2 || !args[0].IsString() || !args[1].IsObject() {
+			return rc.Throw("setSkills takes [string, Object] arguments")
+		}
+		if err := rc.Copy(&skills.Skills, args[1]); err != nil {
+			return rc.Throw("trying to convert %v to &skill{}: %v", args[1], err)
+		}
+		return nil
+
+	}
+	callbacks["getSkill"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 1 || !args[0].IsString() {
+			return rc.Throw("getSkills takes [string] arguments")
+		}
+		skill, found := skills.Skills.GetHas(args[0].String())
+		if !found {
+			return nil
+		}
+		res, err := rc.JSFromGo(skill)
+		if err != nil {
+			return rc.Throw("trying to convert %v to *v8go.Value: %v", skills.Skills, err)
+		}
+		return res
+	}
+	callbacks["setSkill"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 2 || !args[0].IsString() || !args[1].IsObject() {
+			return rc.Throw("setSkill takes [string, Object] arguments")
+		}
+		skill := skills.Skill{}
+		if err := rc.Copy(&skill, args[1]); err != nil {
+			return rc.Throw("trying to convert %v to &skill{}: %v", args[1], err)
+		}
+		skills.Skills.Set(args[0].String(), skill)
+		return nil
+	}
+}
+
+func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, callbacks js.Callbacks) {
+	addGetSetPair("Location", &object.Location, callbacks)
+	addGetSetPair("Content", &object.Content, callbacks)
+	addGetSetPair("Skills", &object.Skills, callbacks)
+	addGetSetPair("Descriptions", &object.Descriptions, callbacks)
+	addGetSetPair("Exits", &object.Exits, callbacks)
+	addGetSetPair("SourcePath", &object.SourcePath, callbacks)
+	callbacks["setTimeout"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 3 || !args[1].IsString() {
 			return rc.Throw("setTimeout takes [int, string, any] arguments")
@@ -156,11 +207,11 @@ func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.C
 		}
 		return nil
 	}
-	result["setInterval"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+	callbacks["setInterval"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		// TODO: Set repeating events in the future - or is that too risky?
 		return nil
 	}
-	result["emit"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+	callbacks["emit"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 3 || !args[0].IsString() || !args[1].IsString() {
 			return rc.Throw("emit takes [string, string, any] arguments")
@@ -174,7 +225,7 @@ func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.C
 		}
 		return nil
 	}
-	result["getNeighbourhood"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+	callbacks["getNeighbourhood"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		object, err := g.storage.GetObject(ctx, object.Id)
 		if err != nil {
 			return rc.Throw("trying to load Object: %v", err)
@@ -189,7 +240,6 @@ func (g *Game) objectCallbacks(ctx context.Context, object *structs.Object) js.C
 		}
 		return val
 	}
-	return result
 }
 
 /*
@@ -211,7 +261,9 @@ func (g *Game) run(ctx context.Context, object *structs.Object, call *structs.Ca
 		return juicemud.WithStack(err)
 	}
 
-	callbacks := g.objectCallbacks(ctx, object)
+	callbacks := js.Callbacks{}
+	g.addGlobalCallbacks(ctx, callbacks)
+	g.addObjectCallbacks(ctx, object, callbacks)
 	target := js.Target{
 		Source:    string(source),
 		Origin:    object.SourcePath,
