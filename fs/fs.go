@@ -28,7 +28,7 @@ func pathify(s *string) {
 
 func (f *Fs) Read(ctx context.Context, path string) (io.ReadCloser, error) {
 	pathify(&path)
-	content, err := f.Storage.GetSource(ctx, path)
+	content, _, err := f.Storage.GetSource(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -79,7 +79,7 @@ func (f *Fs) stat(ctx context.Context, file *storage.File) (*dav.FileInfo, error
 		}, nil
 	}
 
-	content, err := f.Storage.GetSource(ctx, file.Path)
+	content, modTime, err := f.Storage.GetSource(ctx, file.Path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -87,7 +87,7 @@ func (f *Fs) stat(ctx context.Context, file *storage.File) (*dav.FileInfo, error
 		Name:    file.Path,
 		Size:    int64(len(content)),
 		Mode:    0777,
-		ModTime: file.ModTime.Time(),
+		ModTime: time.Unix(0, modTime),
 		IsDir:   file.Dir,
 	}, nil
 }

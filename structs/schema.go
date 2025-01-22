@@ -595,6 +595,7 @@ type Object struct {
     Descriptions []Description
     Exits []Exit
     SourcePath string
+    SourceModTime int64
 }
 
 // Reserved Ids - Object
@@ -616,6 +617,7 @@ func (object *Object) size(id uint16) (s int) {
     s += bstd.SizeSlice(object.Descriptions, func (s Description) int { return s.SizePlain() }) + 2
     s += bstd.SizeSlice(object.Exits, func (s Exit) int { return s.SizePlain() }) + 2
     s += bstd.SizeString(object.SourcePath) + 2
+    s += bstd.SizeInt64() + 2
 
     if id > 255 {
         s += 5
@@ -636,6 +638,7 @@ func (object *Object) SizePlain() (s int) {
     s += bstd.SizeSlice(object.Descriptions, func (s Description) int { return s.SizePlain() })
     s += bstd.SizeSlice(object.Exits, func (s Exit) int { return s.SizePlain() })
     s += bstd.SizeString(object.SourcePath)
+    s += bstd.SizeInt64()
     return
 }
 
@@ -665,6 +668,8 @@ func (object *Object) marshal(tn int, b []byte, id uint16) (n int) {
     n = bstd.MarshalSlice(n, b, object.Exits, func (n int, b []byte, s Exit) int { return s.MarshalPlain(n, b) })
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 9)
     n = bstd.MarshalString(n, b, object.SourcePath)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 10)
+    n = bstd.MarshalInt64(n, b, object.SourceModTime)
 
     n += 2
     b[n-2] = 1
@@ -684,6 +689,7 @@ func (object *Object) MarshalPlain(tn int, b []byte) (n int) {
     n = bstd.MarshalSlice(n, b, object.Descriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
     n = bstd.MarshalSlice(n, b, object.Exits, func (n int, b []byte, s Exit) int { return s.MarshalPlain(n, b) })
     n = bstd.MarshalString(n, b, object.SourcePath)
+    n = bstd.MarshalInt64(n, b, object.SourceModTime)
     return n
 }
 
@@ -801,6 +807,17 @@ func (object *Object) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int,
             return
         }
     }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectRIds, 10); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, object.SourceModTime, err = bstd.UnmarshalInt64(n, b); err != nil {
+            return
+        }
+    }
     n += 2
     return
 }
@@ -833,6 +850,9 @@ func (object *Object) UnmarshalPlain(tn int, b []byte) (n int, err error) {
         return
     }
     if n, object.SourcePath, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, object.SourceModTime, err = bstd.UnmarshalInt64(n, b); err != nil {
         return
     }
     return

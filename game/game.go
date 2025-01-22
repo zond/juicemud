@@ -85,7 +85,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			}()
 		}, g.emitMovementToNeighbourhood))
 	}()
-	bootJS, err := g.storage.GetSource(ctx, bootSource)
+	bootJS, _, err := g.storage.GetSource(ctx, bootSource)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -99,7 +99,9 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		Console:   os.Stderr,
 	}
 	if _, err := bootTarget.Run(ctx, nil, time.Second); err != nil {
-		return nil, juicemud.WithStack(err)
+		log.Printf("trying to run %q: %v", bootSource, err)
+		log.Println(juicemud.StackTrace(err))
+		return g, nil
 	}
 	return g, nil
 }

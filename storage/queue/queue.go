@@ -15,18 +15,15 @@ import (
 type Queue struct {
 	tree      dbm.StructTree[structs.Event, *structs.Event]
 	cond      *sync.Cond
-	err       chan error
 	closed    bool
 	nextEvent *structs.Event
 	offset    structs.Timestamp
 }
 
 func New(ctx context.Context, t dbm.Tree) *Queue {
-	mut := &sync.Mutex{}
 	return &Queue{
-		cond: sync.NewCond(mut),
+		cond: sync.NewCond(&sync.Mutex{}),
 		tree: dbm.StructTree[structs.Event, *structs.Event]{StructHash: dbm.StructHash[structs.Event, *structs.Event](t)},
-		err:  make(chan error, 1),
 	}
 }
 
@@ -79,9 +76,7 @@ func (q *Queue) Push(ctx context.Context, ev *structs.Event) error {
 
 	if q.nextEvent == nil || ev.At < q.nextEvent.At {
 		q.nextEvent = ev
-		if structs.Timestamp(ev.At) >= q.now() {
-			q.cond.Broadcast()
-		}
+		q.cond.Broadcast()
 	}
 
 	return nil

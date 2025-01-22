@@ -174,7 +174,7 @@ func (e *Env) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := e.game.emitAny(e.sess.Context(), 0, e.user.Object, emitEventTag, map[string]any{
+	if err := e.game.emitAny(e.sess.Context(), e.game.storage.Queue().After(0), e.user.Object, connectedEventType, map[string]any{
 		"remote":   e.sess.RemoteAddr(),
 		"username": e.user.Name,
 		"object":   e.user.Object,
@@ -234,9 +234,6 @@ func (e *Env) loginUser() error {
 			e.user = user
 		}
 	}
-	if err := e.loadAndRun(user.Object, nil); err != nil {
-		return juicemud.WithStack(err)
-	}
 	fmt.Fprintf(e.term, "Welcome back, %v!\n", e.user.Name)
 	return nil
 }
@@ -290,9 +287,6 @@ func (e *Env) createUser() error {
 		}
 	}
 	if err := e.game.createUser(e.sess.Context(), e.user); err != nil {
-		return juicemud.WithStack(err)
-	}
-	if err := e.loadAndRun(user.Object, nil); err != nil {
 		return juicemud.WithStack(err)
 	}
 	fmt.Fprintf(e.term, "Welcome %s!\n", e.user.Name)

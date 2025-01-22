@@ -123,6 +123,7 @@ func main() {
 	}
 	g, err := game.New(ctx, store)
 	if err != nil {
+		log.Println(juicemud.StackTrace(err))
 		log.Fatal(err)
 	}
 
