@@ -44,11 +44,11 @@ type Serializable[T any] interface {
 	*T
 }
 
-type StructHash[T any, S Serializable[T]] struct {
+type TypeHash[T any, S Serializable[T]] struct {
 	Hash
 }
 
-func (h StructHash[T, S]) Get(k string) (*T, error) {
+func (h TypeHash[T, S]) Get(k string) (*T, error) {
 	b, stat := h.dbm.Get(k)
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
 		return nil, juicemud.WithStack(os.ErrNotExist)
@@ -62,7 +62,7 @@ func (h StructHash[T, S]) Get(k string) (*T, error) {
 	return (*T)(t), nil
 }
 
-func (h StructHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
+func (h TypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
 	ids := make([]string, 0, len(keys))
 	for key := range keys {
 		ids = append(ids, key)
@@ -79,7 +79,7 @@ func (h StructHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) 
 	return results, nil
 }
 
-func (h StructHash[T, S]) Set(k string, v *T, overwrite bool) error {
+func (h TypeHash[T, S]) Set(k string, v *T, overwrite bool) error {
 	s := S(v)
 	b := make([]byte, s.Size())
 	s.Marshal(b)
@@ -107,7 +107,7 @@ func (p *BProc) Proc(k string, v []byte) ([]byte, error) {
 	return p.F(k, v)
 }
 
-func (h StructHash[T, S]) SProc(key string, fun func(string, *T) (*T, error)) SProc[T, S] {
+func (h TypeHash[T, S]) SProc(key string, fun func(string, *T) (*T, error)) SProc[T, S] {
 	return SProc[T, S]{
 		K: key,
 		F: fun,
@@ -193,11 +193,11 @@ type Tree struct {
 	Hash
 }
 
-type StructTree[T any, S Serializable[T]] struct {
-	StructHash[T, S]
+type TypeTree[T any, S Serializable[T]] struct {
+	TypeHash[T, S]
 }
 
-func (t StructTree[T, S]) First() (*T, error) {
+func (t TypeTree[T, S]) First() (*T, error) {
 	iter := t.dbm.MakeIterator()
 	defer iter.Destruct()
 	if stat := iter.First(); !stat.IsOK() {
@@ -229,12 +229,12 @@ func OpenHash(path string) (Hash, error) {
 	return Hash{dbm}, nil
 }
 
-func OpenStructHash[T any, S Serializable[T]](path string) (StructHash[T, S], error) {
+func OpenTypeHash[T any, S Serializable[T]](path string) (TypeHash[T, S], error) {
 	h, err := OpenHash(path)
 	if err != nil {
-		return StructHash[T, S]{}, juicemud.WithStack(err)
+		return TypeHash[T, S]{}, juicemud.WithStack(err)
 	}
-	return StructHash[T, S]{h}, nil
+	return TypeHash[T, S]{h}, nil
 }
 
 func OpenTree(path string) (Tree, error) {
@@ -250,10 +250,10 @@ func OpenTree(path string) (Tree, error) {
 	return Tree{Hash{dbm}}, nil
 }
 
-func OpenStructTree[T any, S Serializable[T]](path string) (StructTree[T, S], error) {
+func OpenTypeTree[T any, S Serializable[T]](path string) (TypeTree[T, S], error) {
 	t, err := OpenTree(path)
 	if err != nil {
-		return StructTree[T, S]{}, juicemud.WithStack(err)
+		return TypeTree[T, S]{}, juicemud.WithStack(err)
 	}
-	return StructTree[T, S]{StructHash[T, S](t)}, nil
+	return TypeTree[T, S]{TypeHash[T, S](t)}, nil
 }

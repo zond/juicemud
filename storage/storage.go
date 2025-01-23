@@ -30,7 +30,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	objects, err := dbm.OpenStructHash[structs.Object](filepath.Join(dir, "objects"))
+	objects, err := dbm.OpenTypeHash[structs.Object](filepath.Join(dir, "objects"))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -62,7 +62,7 @@ type Storage struct {
 	sql             *sqly.DB
 	sources         dbm.Hash
 	modTimes        dbm.Hash
-	objects         dbm.StructHash[structs.Object, *structs.Object]
+	objects         dbm.TypeHash[structs.Object, *structs.Object]
 	movementHandler MovementHandler
 }
 
@@ -74,7 +74,7 @@ type EventHandler func(context.Context, *structs.Event)
 
 type MovementHandler func(context.Context, *Movement) error
 
-func (s *Storage) Start(ctx context.Context, eventHandler EventHandler, movementHandler MovementHandler) error {
+func (s *Storage) StartQueue(ctx context.Context, eventHandler EventHandler, movementHandler MovementHandler) error {
 	s.movementHandler = movementHandler
 	return juicemud.WithStack(s.queue.Start(ctx, eventHandler))
 }
@@ -89,23 +89,23 @@ func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, para
 	return nil
 }
 
-func (s *Storage) GetSource(ctx context.Context, path string) ([]byte, int64, error) {
+func (s *Storage) LoadSource(ctx context.Context, path string) ([]byte, int64, error) {
 	value, err := s.sources.Get(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return []byte{}, 0, nil
 	} else if err != nil {
 		return nil, 0, juicemud.WithStack(err)
 	}
-	t, err := s.ModTime(ctx, path)
+	t, err := s.SourceModTime(ctx, path)
 	if err != nil {
 		return nil, 0, juicemud.WithStack(err)
 	}
 	return value, t, nil
 }
 
-func (s *Storage) SetSource(ctx context.Context, path string, content []byte) error {
+func (s *Storage) StoreSource(ctx context.Context, path string, content []byte) error {
 	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
-		file, err := getFile(ctx, tx, path)
+		file, err := loadFile(ctx, tx, path)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -124,7 +124,7 @@ type Refresh func(ctx context.Context, object *structs.Object) error
 
 func (s *Storage) maybeRefresh(ctx context.Context, obj *structs.Object, ref Refresh) error {
 	if ref != nil {
-		t, err := s.ModTime(ctx, obj.SourcePath)
+		t, err := s.SourceModTime(ctx, obj.SourcePath)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -134,7 +134,7 @@ func (s *Storage) maybeRefresh(ctx context.Context, obj *structs.Object, ref Ref
 				return juicemud.WithStack(err)
 			}
 			obj.SourceModTime = t
-			if err := s.SetObject(ctx, &oldLoc, obj); err != nil {
+			if err := s.StoreObject(ctx, &oldLoc, obj); err != nil {
 				return juicemud.WithStack(err)
 			}
 		}
@@ -142,7 +142,9 @@ func (s *Storage) maybeRefresh(ctx context.Context, obj *structs.Object, ref Ref
 	return nil
 }
 
-func (s *Storage) GetObjects(ctx context.Context, ids map[string]bool, ref Refresh) (map[string]*structs.Object, error) {
+// Loads the objects with the given IDs. If a Refresh is given, it will be run if an
+// object source is newer than the last run of that object.
+func (s *Storage) LoadObjects(ctx context.Context, ids map[string]bool, ref Refresh) (map[string]*structs.Object, error) {
 	res, err := s.objects.GetMulti(ids)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
@@ -157,7 +159,9 @@ func (s *Storage) GetObjects(ctx context.Context, ids map[string]bool, ref Refre
 	return res, nil
 }
 
-func (s *Storage) GetObject(ctx context.Context, id string, ref Refresh) (*structs.Object, error) {
+// Loads the object with the given ID. If a Refresh is given, it will be run if the
+// object source is newer than the last run of the object.
+func (s *Storage) LoadObject(ctx context.Context, id string, ref Refresh) (*structs.Object, error) {
 	res, err := s.objects.Get(id)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
@@ -189,7 +193,7 @@ type Movement struct {
 	Destination string
 }
 
-func (s *Storage) SetObject(ctx context.Context, claimedOldLocation *string, object *structs.Object) error {
+func (s *Storage) StoreObject(ctx context.Context, claimedOldLocation *string, object *structs.Object) error {
 	var m *Movement
 	var pairs []dbm.Proc
 	if claimedOldLocation == nil || *claimedOldLocation == object.Location {
@@ -283,7 +287,7 @@ func logSync(ctx context.Context, db sqlx.ExtContext, fileSync *FileSync) error 
 	return sqly.Upsert(ctx, db, fileSync, false)
 }
 
-func (s *Storage) ModTime(_ context.Context, path string) (int64, error) {
+func (s *Storage) SourceModTime(_ context.Context, path string) (int64, error) {
 	b, err := s.modTimes.Get(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return 0, juicemud.WithStack(err)
@@ -347,14 +351,14 @@ type File struct {
 
 func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, created bool, err error) {
 	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
-		file, err = getFile(ctx, tx, path)
+		file, err = loadFile(ctx, tx, path)
 		if err == nil {
 			created = false
 			return nil
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return juicemud.WithStack(err)
 		}
-		parent, err := getFile(ctx, tx, filepath.Dir(path))
+		parent, err := loadFile(ctx, tx, filepath.Dir(path))
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -379,11 +383,11 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, crea
 
 func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) error {
 	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
-		toMove, err := getFile(ctx, tx, oldPath)
+		toMove, err := loadFile(ctx, tx, oldPath)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		content, modTime, err := s.GetSource(ctx, oldPath)
+		content, modTime, err := s.LoadSource(ctx, oldPath)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -393,7 +397,7 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 				Dir: true,
 			}
 		} else {
-			newParent, err = getFile(ctx, tx, filepath.Dir(newPath))
+			newParent, err = loadFile(ctx, tx, filepath.Dir(newPath))
 			if err != nil {
 				return juicemud.WithStack(err)
 			}
@@ -431,11 +435,11 @@ func getChildren(ctx context.Context, db sqlx.QueryerContext, parent int64) ([]F
 	return result, nil
 }
 
-func (s *Storage) GetChildren(ctx context.Context, parent int64) ([]File, error) {
+func (s *Storage) LoadChildren(ctx context.Context, parent int64) ([]File, error) {
 	return getChildren(ctx, s.sql, parent)
 }
 
-func getFile(ctx context.Context, db sqlx.QueryerContext, path string) (*File, error) {
+func loadFile(ctx context.Context, db sqlx.QueryerContext, path string) (*File, error) {
 	if path == "/" {
 		return &File{
 			Dir:  true,
@@ -449,12 +453,12 @@ func getFile(ctx context.Context, db sqlx.QueryerContext, path string) (*File, e
 	return file, nil
 }
 
-func (s *Storage) GetFile(ctx context.Context, path string) (*File, error) {
-	return getFile(ctx, s.sql, path)
+func (s *Storage) LoadFile(ctx context.Context, path string) (*File, error) {
+	return loadFile(ctx, s.sql, path)
 }
 
 func delFileIfExists(ctx context.Context, db sqlx.ExtContext, path string, recursive bool) error {
-	file, err := getFile(ctx, db, path)
+	file, err := loadFile(ctx, db, path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -498,12 +502,12 @@ func (s *Storage) DelFile(ctx context.Context, path string) error {
 
 func (s *Storage) CreateDir(ctx context.Context, path string) error {
 	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
-		if _, err := getFile(ctx, tx, path); err == nil {
+		if _, err := loadFile(ctx, tx, path); err == nil {
 			return nil
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return juicemud.WithStack(err)
 		}
-		parent, err := getFile(ctx, tx, filepath.Dir(path))
+		parent, err := loadFile(ctx, tx, filepath.Dir(path))
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -535,7 +539,7 @@ type User struct {
 	Object       string
 }
 
-func (s *Storage) GetUser(ctx context.Context, name string) (*User, error) {
+func (s *Storage) LoadUser(ctx context.Context, name string) (*User, error) {
 	user := &User{}
 	if err := getSQL(ctx, s.sql, user, "SELECT * FROM User WHERE Name = ?", name); err != nil {
 		return nil, juicemud.WithStack(err)
@@ -543,7 +547,7 @@ func (s *Storage) GetUser(ctx context.Context, name string) (*User, error) {
 	return user, nil
 }
 
-func (s *Storage) SetUser(ctx context.Context, user *User, overwrite bool) error {
+func (s *Storage) StoreUser(ctx context.Context, user *User, overwrite bool) error {
 	return s.sql.Upsert(ctx, user, overwrite)
 }
 
@@ -584,15 +588,4 @@ type GroupMember struct {
 	Id    int64 `sqly:"pkey"`
 	User  int64 `sqly:"index"`
 	Group int64 `sqly:"uniqueWith(User)"`
-}
-
-func readObject(b []byte) (*structs.Object, error) {
-	result := &structs.Object{}
-	if len(b) == 0 {
-		return result, nil
-	}
-	if err := result.Unmarshal(b); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	return result, nil
 }

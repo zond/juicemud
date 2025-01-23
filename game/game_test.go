@@ -29,7 +29,7 @@ func fakeObject(t testing.TB, g *Game) *structs.Object {
 	res.Location = genesisID
 	res.State = "{}"
 	res.Exits = nil
-	if err := g.storage.SetObject(context.Background(), nil, res); err != nil {
+	if err := g.storage.StoreObject(context.Background(), nil, res); err != nil {
 		t.Fatal(err)
 	}
 	return res
@@ -42,7 +42,7 @@ func populate(t testing.TB, g *Game, obj *structs.Object, num int) []*structs.Ob
 		obj.Content[child.Id] = true
 		child.Location = obj.Id
 		prevLoc := genesisID
-		if err := g.storage.SetObject(context.Background(), &prevLoc, child); err != nil {
+		if err := g.storage.StoreObject(context.Background(), &prevLoc, child); err != nil {
 			log.Print(juicemud.StackTrace(err))
 			t.Fatal(err)
 		}
@@ -58,10 +58,10 @@ func connect(t testing.TB, g *Game, obj1, obj2 *structs.Object) {
 	obj2.Exits = append(obj2.Exits, structs.Exit{
 		Destination: obj1.Id,
 	})
-	if err := g.storage.SetObject(context.Background(), nil, obj1); err != nil {
+	if err := g.storage.StoreObject(context.Background(), nil, obj1); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.storage.SetObject(context.Background(), nil, obj2); err != nil {
+	if err := g.storage.StoreObject(context.Background(), nil, obj2); err != nil {
 		t.Fatal(err)
 	}
 }

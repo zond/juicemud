@@ -51,7 +51,7 @@ func BenchmarkHash(b *testing.B) {
 
 func BenchmarkStructHash(b *testing.B) {
 	b.StopTimer()
-	WithStructHash[structs.Object](b, func(h StructHash[structs.Object, *structs.Object]) {
+	WithTypeHash[structs.Object](b, func(h TypeHash[structs.Object, *structs.Object]) {
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
 			if err := h.Set(fakeObject.Id, &fakeObject, true); err != nil {
@@ -67,7 +67,7 @@ func BenchmarkStructHash(b *testing.B) {
 }
 
 var (
-	benchTree StructTree[structs.Event, *structs.Event]
+	benchTree TypeTree[structs.Event, *structs.Event]
 )
 
 func TestMain(m *testing.M) {
@@ -80,7 +80,7 @@ func TestMain(m *testing.M) {
 				log.Fatal(err)
 			}
 			defer os.RemoveAll(tmpDir)
-			if benchTree, err = OpenStructTree[structs.Event](filepath.Join(tmpDir, "TestMain")); err != nil {
+			if benchTree, err = OpenTypeTree[structs.Event](filepath.Join(tmpDir, "TestMain")); err != nil {
 				log.Fatal(err)
 			}
 			ev := &structs.Event{
@@ -133,7 +133,7 @@ func BenchmarkStructTree(b *testing.B) {
 }
 
 func TestGetStruct(t *testing.T) {
-	WithStructHash[TestObj](t, func(sh StructHash[TestObj, *TestObj]) {
+	WithTypeHash[TestObj](t, func(sh TypeHash[TestObj, *TestObj]) {
 		want := &TestObj{I: 1, S: "s"}
 		if err := sh.Set("a", want, true); err != nil {
 			t.Fatal(err)
@@ -149,7 +149,7 @@ func TestGetStruct(t *testing.T) {
 }
 
 func TestGetStructMulti(t *testing.T) {
-	WithStructHash[TestObj](t, func(sh StructHash[TestObj, *TestObj]) {
+	WithTypeHash[TestObj](t, func(sh TypeHash[TestObj, *TestObj]) {
 		want := map[string]*TestObj{"s": &TestObj{I: 1, S: "s"}, "s2": &TestObj{I: 2, S: "s2"}}
 		for _, obj := range want {
 			if err := sh.Set(obj.S, obj, true); err != nil {
@@ -167,7 +167,7 @@ func TestGetStructMulti(t *testing.T) {
 }
 
 func TestProc(t *testing.T) {
-	WithStructHash(t, func(sh StructHash[TestObj, *TestObj]) {
+	WithTypeHash(t, func(sh TypeHash[TestObj, *TestObj]) {
 		want := map[string]*TestObj{"s": &TestObj{I: 1, S: "s"}, "s2": &TestObj{I: 2, S: "s2"}}
 		for _, obj := range want {
 			if err := sh.Set(obj.S, obj, true); err != nil {
@@ -218,7 +218,7 @@ func TestProc(t *testing.T) {
 }
 
 func TestFirst(t *testing.T) {
-	WithStructTree(t, func(st StructTree[TestObj, *TestObj]) {
+	WithTypeTree(t, func(st TypeTree[TestObj, *TestObj]) {
 		for _, vInt := range rand.Perm(100) {
 			v := uint32(vInt)
 			key := make([]byte, binary.Size(v))

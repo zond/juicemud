@@ -94,6 +94,12 @@ func (c *Connection) SelectReturn(prompt string, options []string) (string, erro
 	}
 }
 
+func (c *Connection) describe(long bool) error {
+	// TODO: If long, load neighbourhood and compute every detectable description and show them suitably.
+	//       If short, load location and siblings and show short descriptions of them.
+	return nil
+}
+
 var (
 	commands = map[string]func(e *Connection, args []string) error{
 		"debug": func(e *Connection, args []string) error {
@@ -215,7 +221,7 @@ func (c *Connection) loginUser() error {
 		if username == "abort" {
 			return juicemud.WithStack(OperationAborted)
 		}
-		if user, err = c.game.storage.GetUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
+		if user, err = c.game.storage.LoadUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintln(c.term, "Username not found!")
 		} else if err != nil {
 			return juicemud.WithStack(err)
@@ -250,7 +256,7 @@ func (c *Connection) createUser() error {
 		if username == "abort" {
 			return juicemud.WithStack(OperationAborted)
 		}
-		if _, err = c.game.storage.GetUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
+		if _, err = c.game.storage.LoadUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
 			user = &storage.User{
 				Name: username,
 			}

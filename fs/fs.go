@@ -28,7 +28,7 @@ func pathify(s *string) {
 
 func (f *Fs) Read(ctx context.Context, path string) (io.ReadCloser, error) {
 	pathify(&path)
-	content, _, err := f.Storage.GetSource(ctx, path)
+	content, _, err := f.Storage.LoadSource(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -48,7 +48,7 @@ func (w *writeBuffer) Write(b []byte) (int, error) {
 }
 
 func (w *writeBuffer) Close() error {
-	if err := w.s.SetSource(w.ctx, w.f.Path, w.Bytes()); err != nil {
+	if err := w.s.StoreSource(w.ctx, w.f.Path, w.Bytes()); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return nil
@@ -79,7 +79,7 @@ func (f *Fs) stat(ctx context.Context, file *storage.File) (*dav.FileInfo, error
 		}, nil
 	}
 
-	content, modTime, err := f.Storage.GetSource(ctx, file.Path)
+	content, modTime, err := f.Storage.LoadSource(ctx, file.Path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -94,7 +94,7 @@ func (f *Fs) stat(ctx context.Context, file *storage.File) (*dav.FileInfo, error
 
 func (f *Fs) Stat(ctx context.Context, path string) (*dav.FileInfo, error) {
 	pathify(&path)
-	file, err := f.Storage.GetFile(ctx, path)
+	file, err := f.Storage.LoadFile(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -113,11 +113,11 @@ func (f *Fs) Mkdir(ctx context.Context, path string) error {
 
 func (f *Fs) List(ctx context.Context, path string) ([]*dav.FileInfo, error) {
 	pathify(&path)
-	file, err := f.Storage.GetFile(ctx, path)
+	file, err := f.Storage.LoadFile(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	children, err := f.Storage.GetChildren(ctx, file.Id)
+	children, err := f.Storage.LoadChildren(ctx, file.Id)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}

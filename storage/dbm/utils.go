@@ -28,10 +28,10 @@ func WithHash(t testing.TB, f func(Hash)) {
 	})
 }
 
-func WithStructHash[T any, S Serializable[T]](t testing.TB, f func(StructHash[T, S])) {
+func WithTypeHash[T any, S Serializable[T]](t testing.TB, f func(TypeHash[T, S])) {
 	t.Helper()
 	withFile(t, ".tkh", func(path string) {
-		dbm, err := OpenStructHash[T, S](path)
+		dbm, err := OpenTypeHash[T, S](path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -51,11 +51,11 @@ func WithTree(t testing.TB, f func(Tree)) {
 	})
 }
 
-func WithStructTree[T any, S Serializable[T]](t testing.TB, f func(StructTree[T, S])) {
+func WithTypeTree[T any, S Serializable[T]](t testing.TB, f func(TypeTree[T, S])) {
 	t.Helper()
 	t.Helper()
 	withFile(t, ".tkt", func(path string) {
-		dbm, err := OpenStructTree[T, S](path)
+		dbm, err := OpenTypeTree[T, S](path)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -59,7 +59,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		if _, created, err := s.EnsureFile(ctx, path); err != nil {
 			return nil, juicemud.WithStack(err)
 		} else if created {
-			if err := s.SetSource(ctx, path, []byte(source)); err != nil {
+			if err := s.StoreSource(ctx, path, []byte(source)); err != nil {
 				return nil, juicemud.WithStack(err)
 			}
 		}
@@ -73,7 +73,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		storage: s,
 	}
 	go func() {
-		log.Panic(g.storage.Start(ctx, func(ctx context.Context, ev *structs.Event) {
+		log.Panic(g.storage.StartQueue(ctx, func(ctx context.Context, ev *structs.Event) {
 			var call *structs.Call
 			if ev.Call.Name != "" {
 				call = &ev.Call
@@ -85,7 +85,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			}()
 		}, g.emitMovementToNeighbourhood))
 	}()
-	bootJS, _, err := g.storage.GetSource(ctx, bootSource)
+	bootJS, _, err := g.storage.LoadSource(ctx, bootSource)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -130,10 +130,10 @@ func (g *Game) createUser(ctx context.Context, user *storage.User) error {
 	object.Location = genesisID
 
 	user.Object = object.Id
-	if err := g.storage.SetUser(ctx, user, false); err != nil {
+	if err := g.storage.StoreUser(ctx, user, false); err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := g.storage.SetObject(ctx, nil, object); err != nil {
+	if err := g.storage.StoreObject(ctx, nil, object); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return nil

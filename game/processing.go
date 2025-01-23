@@ -108,10 +108,10 @@ func (g *Game) rerunSource(ctx context.Context, object *structs.Object) error {
 func (g *Game) loadLocation(ctx context.Context, id string) (*structs.Location, error) {
 	result := &structs.Location{}
 	var err error
-	if result.Container, err = g.storage.GetObject(ctx, id, g.rerunSource); err != nil {
+	if result.Container, err = g.storage.LoadObject(ctx, id, g.rerunSource); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	if result.Content, err = g.storage.GetObjects(ctx, result.Container.Content, g.rerunSource); err != nil {
+	if result.Content, err = g.storage.LoadObjects(ctx, result.Container.Content, g.rerunSource); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	return result, nil
@@ -196,6 +196,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	addGetSetPair("Descriptions", &object.Descriptions, callbacks)
 	addGetSetPair("Exits", &object.Exits, callbacks)
 	addGetSetPair("SourcePath", &object.SourcePath, callbacks)
+	addGetSetPair("Tags", &object.Tags, callbacks)
 	callbacks["setTimeout"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 3 || !args[1].IsString() {
@@ -230,7 +231,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		return nil
 	}
 	callbacks["getNeighbourhood"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		object, err := g.storage.GetObject(ctx, object.Id, g.rerunSource)
+		object, err := g.storage.LoadObject(ctx, object.Id, g.rerunSource)
 		if err != nil {
 			return rc.Throw("trying to load Object: %v", err)
 		}
@@ -254,7 +255,7 @@ Some events we should send to objects:
 */
 func (g *Game) run(ctx context.Context, object *structs.Object, call *structs.Call) error {
 	if call != nil {
-		t, err := g.storage.ModTime(ctx, object.SourcePath)
+		t, err := g.storage.SourceModTime(ctx, object.SourcePath)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -264,7 +265,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, call *structs.Ca
 	}
 
 	sid := string(object.Id)
-	source, modTime, err := g.storage.GetSource(ctx, object.SourcePath)
+	source, modTime, err := g.storage.LoadSource(ctx, object.SourcePath)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -298,7 +299,7 @@ func (g *Game) runSave(ctx context.Context, object *structs.Object, call *struct
 	if err := g.run(ctx, object, call); err != nil {
 		return juicemud.WithStack(err)
 	}
-	return juicemud.WithStack(g.storage.SetObject(ctx, &oldLocation, object))
+	return juicemud.WithStack(g.storage.StoreObject(ctx, &oldLocation, object))
 }
 
 func (g *Game) loadRunSave(ctx context.Context, id string, call *structs.Call) error {
@@ -306,7 +307,7 @@ func (g *Game) loadRunSave(ctx context.Context, id string, call *structs.Call) e
 	jsContextLocks.Lock(sid)
 	defer jsContextLocks.Unlock(sid)
 
-	object, err := g.storage.GetObject(ctx, id, nil)
+	object, err := g.storage.LoadObject(ctx, id, nil)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}

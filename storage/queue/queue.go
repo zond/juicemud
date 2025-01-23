@@ -13,7 +13,7 @@ import (
 )
 
 type Queue struct {
-	tree      dbm.StructTree[structs.Event, *structs.Event]
+	tree      dbm.TypeTree[structs.Event, *structs.Event]
 	cond      *sync.Cond
 	closed    bool
 	nextEvent *structs.Event
@@ -23,7 +23,7 @@ type Queue struct {
 func New(ctx context.Context, t dbm.Tree) *Queue {
 	return &Queue{
 		cond: sync.NewCond(&sync.Mutex{}),
-		tree: dbm.StructTree[structs.Event, *structs.Event]{StructHash: dbm.StructHash[structs.Event, *structs.Event](t)},
+		tree: dbm.TypeTree[structs.Event, *structs.Event]{TypeHash: dbm.TypeHash[structs.Event, *structs.Event](t)},
 	}
 }
 
