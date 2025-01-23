@@ -220,12 +220,11 @@ func (s *Storage) SetObject(ctx context.Context, claimedOldLocation *string, obj
 		// Loc is changed, verify that the old one is what's there right now, that obj can
 		// be removed from old loc, and added to new loc, before all are saved.
 		pairs = []dbm.Proc{
-			// Make sure object exists and is where it claimed to be.
 			s.objects.SProc(object.Id, func(key string, value *structs.Object) (*structs.Object, error) {
 				if value == nil {
 					return nil, errors.Errorf("can't find old version of %q", object.Id)
 				}
-				if value.Location != object.Location {
+				if value.Location != *claimedOldLocation {
 					return nil, errors.Errorf("object in %q claims to move from %q to %q", value.Location, *claimedOldLocation, object.Location)
 				}
 				return object, nil
