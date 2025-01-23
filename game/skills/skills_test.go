@@ -13,9 +13,9 @@ func TestRecharge(t *testing.T) {
 	}
 	Skills.Set("per", s)
 	u := Use{
-		user:  "a",
-		skill: "per",
-		at:    now,
+		User:  "a",
+		Skill: "per",
+		At:    now,
 	}
 	if u.Recharge() != now.Add(time.Second*8) {
 		t.Errorf("got %v, want %v", u.Recharge(), time.Second*80)
@@ -26,15 +26,15 @@ func TestRecharge(t *testing.T) {
 	if r := skillUses.recharge(u); r != 0 {
 		t.Errorf("got %v, want 0", r)
 	}
-	u.at = u.at.Add(time.Second)
+	u.At = u.At.Add(time.Second)
 	if r := skillUses.recharge(u); r != 0.5 {
 		t.Errorf("got %v, want 0.5", r)
 	}
-	u.at = u.at.Add(time.Second * 2)
+	u.At = u.At.Add(time.Second * 2)
 	if r := skillUses.recharge(u); r != 0.75 {
 		t.Errorf("got %v, want 0.75", r)
 	}
-	u.at = u.at.Add(time.Second * 3)
+	u.At = u.At.Add(time.Second * 3)
 	if r := skillUses.recharge(u); r != 0.875 {
 		t.Errorf("got %v, want 0.875", r)
 	}
@@ -47,9 +47,9 @@ func TestDuration(t *testing.T) {
 	}
 	Skills.Set("per", s)
 	u := Use{
-		user:  "a",
-		skill: "per",
-		at:    now,
+		User:  "a",
+		Skill: "per",
+		At:    now,
 	}
 	// Reference
 	f0 := u.RNG("b").Float64()
@@ -64,7 +64,7 @@ func TestDuration(t *testing.T) {
 		t.Errorf("got %v, wanted something else", f0)
 	}
 	// After duration timeout
-	u.at = u.at.Add(s.Duration.Duration() * 3)
+	u.At = u.At.Add(s.Duration.Duration() * 3)
 	if f1 := u.RNG("b").Float64(); f0 == f1 {
 		t.Errorf("got %v, wanted something else", f0)
 	}
@@ -72,9 +72,9 @@ func TestDuration(t *testing.T) {
 		same := 0
 		count := 10000
 		for i := 0; i < count; i++ {
-			u.at = time.Unix(0, rand.Int63())
+			u.At = time.Unix(0, rand.Int63())
 			f0 = u.RNG("b").Float64()
-			u.at = u.at.Add(time.Duration(float64(s.Duration.Nanoseconds()) * f))
+			u.At = u.At.Add(time.Duration(float64(s.Duration.Nanoseconds()) * f))
 			if f1 := u.RNG("b").Float64(); f1 == f0 {
 				same++
 			}
@@ -98,22 +98,22 @@ func TestDuration(t *testing.T) {
 func TestLevel(t *testing.T) {
 	now := time.Now()
 	u := Application{
-		use: Use{
-			user:  "a",
-			skill: "str",
-			at:    now,
+		Use: Use{
+			User:  "a",
+			Skill: "str",
+			At:    now,
 		},
-		target:    "b",
-		level:     10,
-		challenge: 20,
+		Target:    "b",
+		Level:     10,
+		Challenge: 20,
 	}
 	testAt := func(delta float32) float64 {
 		success := 0
 		count := 10000
 		for i := 0; i < count; i++ {
-			u.use.at = time.Now()
-			u.challenge = u.level + delta
-			if u.check() {
+			u.Use.At = time.Now()
+			u.Challenge = u.Level + delta
+			if u.Check() {
 				success++
 			}
 		}

@@ -94,16 +94,28 @@ func (c *Connection) SelectReturn(prompt string, options []string) (string, erro
 	}
 }
 
+func (c *Connection) object() (*structs.Object, error) {
+	return c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
+}
+
 func (c *Connection) describe(long bool) error {
+	obj, err := c.object()
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
 	// TODO: If long, load neighbourhood and compute every detectable description and show them suitably.
 	//       If short, load location and siblings and show short descriptions of them.
+	_, err = c.game.loadNeighbourhood(c.sess.Context(), obj)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
 	return nil
 }
 
 var (
 	commands = map[string]func(e *Connection, args []string) error{
-		"debug": func(e *Connection, args []string) error {
-			id := string(e.user.Object)
+		"debug": func(c *Connection, args []string) error {
+			id := string(c.user.Object)
 			if len(args) == 1 {
 				if byteID, err := hex.DecodeString(args[0]); err != nil {
 					return juicemud.WithStack(err)
@@ -111,11 +123,11 @@ var (
 					id = string(byteID)
 				}
 			}
-			addConsole(id, e.term)
+			addConsole(id, c.term)
 			return nil
 		},
-		"undebug": func(e *Connection, args []string) error {
-			id := string(e.user.Object)
+		"undebug": func(c *Connection, args []string) error {
+			id := string(c.user.Object)
 			if len(args) == 1 {
 				if byteID, err := hex.DecodeString(args[0]); err != nil {
 					return juicemud.WithStack(err)
@@ -123,14 +135,20 @@ var (
 					id = string(byteID)
 				}
 			}
-			delConsole(id, e.term)
+			delConsole(id, c.term)
 			return nil
+		},
+		"l": func(c *Connection, args []string) error {
+			return c.describe(true)
+		},
+		"look": func(c *Connection, args []string) error {
+			return c.describe(true)
 		},
 	}
 )
 
 var (
-	whitespacePattern = regexp.MustCompile("\\s+")
+	whitespacePattern = regexp.MustCompile(`\\s+`)
 )
 
 /*

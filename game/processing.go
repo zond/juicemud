@@ -193,10 +193,11 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	addGetSetPair("Location", &object.Location, callbacks)
 	addGetSetPair("Content", &object.Content, callbacks)
 	addGetSetPair("Skills", &object.Skills, callbacks)
-	addGetSetPair("Descriptions", &object.Descriptions, callbacks)
+	addGetSetPair("LookDescriptions", &object.LookDescriptions, callbacks)
+	addGetSetPair("SniffDescriptions", &object.SniffDescriptions, callbacks)
+	addGetSetPair("ListenDescriptions", &object.ListenDescriptions, callbacks)
 	addGetSetPair("Exits", &object.Exits, callbacks)
 	addGetSetPair("SourcePath", &object.SourcePath, callbacks)
-	addGetSetPair("Tags", &object.Tags, callbacks)
 	callbacks["setTimeout"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 3 || !args[1].IsString() {

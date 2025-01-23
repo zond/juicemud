@@ -46,26 +46,26 @@ type Skill struct {
 }
 
 type Use struct {
-	user  string
-	skill string
-	at    time.Time
+	User  string
+	Skill string
+	At    time.Time
 }
 
 func (s Use) RNG(target string) *rand.Rand {
-	skill, foundSkill := Skills.GetHas(s.skill)
+	skill, foundSkill := Skills.GetHas(s.Skill)
 
 	// Seed a hash with who does what to whom.
 	h := fnv.New64()
-	h.Write([]byte(s.user))
+	h.Write([]byte(s.User))
 	h.Write([]byte(target))
-	h.Write([]byte(s.skill))
+	h.Write([]byte(s.Skill))
 
 	// Seed the hash with time step based on skill duration.
 	var step uint64
 	if foundSkill {
-		step = uint64(s.at.UnixNano() / skill.Duration.Nanoseconds() / 3)
+		step = uint64(s.At.UnixNano() / skill.Duration.Nanoseconds() / 3)
 	} else {
-		step = uint64(s.at.UnixNano())
+		step = uint64(s.At.UnixNano())
 	}
 	b := make([]byte, binary.Size(step))
 	binary.BigEndian.PutUint64(b, step)
@@ -76,7 +76,7 @@ func (s Use) RNG(target string) *rand.Rand {
 
 	if foundSkill {
 		offset := result.Int63n(skill.Duration.Nanoseconds())
-		if uint64((s.at.UnixNano()+offset)/skill.Duration.Nanoseconds()/3) != step {
+		if uint64((s.At.UnixNano()+offset)/skill.Duration.Nanoseconds()/3) != step {
 			result.Float64()
 		}
 	}
@@ -85,28 +85,28 @@ func (s Use) RNG(target string) *rand.Rand {
 }
 
 func (s Use) Recharge() time.Time {
-	if sk, found := Skills.GetHas(s.skill); found {
-		return s.at.Add(sk.Recharge.Duration())
+	if sk, found := Skills.GetHas(s.Skill); found {
+		return s.At.Add(sk.Recharge.Duration())
 	}
-	return s.at
+	return s.At
 }
 
 func (s Use) key() string {
-	return fmt.Sprintf("%s.%s", s.user, s.skill)
+	return fmt.Sprintf("%s.%s", s.User, s.Skill)
 }
 
 type Application struct {
-	use       Use
-	target    string
-	level     float32
-	challenge float32
+	Use       Use
+	Target    string
+	Level     float32
+	Challenge float32
 }
 
-func (s Application) check() bool {
+func (s Application) Check() bool {
 	// Success likelihood is ELO with 10 instead of 400 as "90% likely to win delta".
 	// success := float64(skillUses.recharge(s.use)) / (1.0 + math.Pow(10, float64(s.challenge-s.level)*0.1))
-	success := skillUses.recharge(s.use) / float32(1.0+math.Pow(10, float64(s.level-s.challenge)*0.1))
-	return s.use.RNG(s.target).Float32() > success
+	success := skillUses.recharge(s.Use) / float32(1.0+math.Pow(10, float64(s.Level-s.Challenge)*0.1))
+	return s.Use.RNG(s.Target).Float32() > success
 }
 
 type globalSkillUses struct {
@@ -131,16 +131,16 @@ func (g *globalSkillUses) recharge(s Use) float32 {
 		g.uses[s.key()] = s
 		g.heap.Push(s)
 	}()
-	for oldest, found := g.heap.Peek(); found && oldest.Recharge().Before(s.at); oldest, found = g.heap.Peek() {
+	for oldest, found := g.heap.Peek(); found && oldest.Recharge().Before(s.At); oldest, found = g.heap.Peek() {
 		key := oldest.key()
-		if latest, found := g.uses[key]; found && latest.at.UnixNano() <= oldest.at.UnixNano() {
+		if latest, found := g.uses[key]; found && latest.At.UnixNano() <= oldest.At.UnixNano() {
 			delete(g.uses, key)
 		}
 		g.heap.Pop()
 	}
 	if old, found := g.uses[s.key()]; found {
-		if sk, found := Skills.GetHas(s.skill); found {
-			return 1.0 - float32(math.Pow(0.5, 8*float64(s.at.Sub(old.at))/float64(sk.Recharge.Nanoseconds())))
+		if sk, found := Skills.GetHas(s.Skill); found {
+			return 1.0 - float32(math.Pow(0.5, 8*float64(s.At.Sub(old.At))/float64(sk.Recharge.Nanoseconds())))
 		} else {
 			return 1.0
 		}

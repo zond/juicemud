@@ -38,9 +38,16 @@ const (
 
 var (
 	initialSources = map[string]string{
-		bootSource:    "// This code is run each time the game server starts.",
-		userSource:    "// This code runs all connected users.",
-		genesisSource: "// This code runs the room where newly created users are dropped.",
+		bootSource: "// This code is run each time the game server starts.",
+		userSource: "// This code runs all connected users.",
+		genesisSource: `// This code runs the room where newly created users are dropped.
+setDescriptions([
+  {
+		short: 'Black cosmos',
+		long: 'This is the darkness of space before creation. No stars twinkle.',
+  },
+]);
+`,
 	}
 	initialObjects = map[string]func(*structs.Object) error{
 		genesisID: func(o *structs.Object) error {

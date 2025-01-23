@@ -6,8 +6,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"time"
 
 	"github.com/zond/juicemud"
+	"github.com/zond/juicemud/game/skills"
 )
 
 var (
@@ -63,4 +65,46 @@ func (e *Event) CreateKey() {
 	binary.BigEndian.PutUint64(k, uint64(e.At))
 	binary.BigEndian.PutUint64(k[atSize:], eventCounter)
 	e.Key = string(k)
+}
+
+func (c *Challenge) Check(challenger *Object, target *Object) bool {
+	return skills.Application{
+		Use: skills.Use{
+			User:  challenger.Id,
+			Skill: c.Skill,
+			At:    time.Now(),
+		},
+		Target:    target.Id,
+		Level:     challenger.Skills[c.Skill].Practical,
+		Challenge: c.Level,
+	}.Check()
+}
+
+func (o *Object) Inspect(descs []Description, viewer *Object) []*Description {
+	result := []*Description{}
+	for _, desc := range descs {
+		if func() bool {
+			for _, challenge := range desc.Challenges {
+				if !challenge.Check(viewer, o) {
+					return false
+				}
+			}
+			return true
+		}() {
+			result = append(result, &desc)
+		}
+	}
+	return result
+}
+
+func (o *Object) Look(viewer *Object) []*Description {
+	return o.Inspect(o.LookDescriptions, viewer)
+}
+
+func (o *Object) Sniff(viewer *Object) []*Description {
+	return o.Inspect(o.SniffDescriptions, viewer)
+}
+
+func (o *Object) Listen(viewer *Object) []*Description {
+	return o.Inspect(o.ListenDescriptions, viewer)
 }
