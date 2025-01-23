@@ -107,7 +107,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 }
 
 func (g *Game) HandleSession(sess ssh.Session) {
-	env := &Env{
+	env := &Connection{
 		game: g,
 		term: term.NewTerminal(sess, "> "),
 		sess: sess,

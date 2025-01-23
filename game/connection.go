@@ -26,7 +26,7 @@ var (
 )
 
 var (
-	envByObjectID     = juicemud.NewSyncMap[string, *Env]()
+	envByObjectID     = juicemud.NewSyncMap[string, *Connection]()
 	consoleByObjectID = juicemud.NewSyncMap[string, *Fanout]()
 	jsContextLocks    = juicemud.NewSyncMap[string, bool]()
 )
@@ -49,14 +49,14 @@ func (e errs) Error() string {
 	return fmt.Sprintf("%+v", []error(e))
 }
 
-type Env struct {
+type Connection struct {
 	game *Game
 	sess ssh.Session
 	term *term.Terminal
 	user *storage.User
 }
 
-func (e *Env) SelectExec(options map[string]func() error) error {
+func (c *Connection) SelectExec(options map[string]func() error) error {
 	commandNames := make(sort.StringSlice, 0, len(options))
 	for name := range options {
 		commandNames = append(commandNames, name)
@@ -64,8 +64,8 @@ func (e *Env) SelectExec(options map[string]func() error) error {
 	sort.Sort(commandNames)
 	prompt := fmt.Sprintf("%s\n", lang.Enumerator{Pattern: "[%s]", Operator: "or"}.Do(commandNames...))
 	for {
-		fmt.Fprint(e.term, prompt)
-		line, err := e.term.ReadLine()
+		fmt.Fprint(c.term, prompt)
+		line, err := c.term.ReadLine()
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -79,10 +79,10 @@ func (e *Env) SelectExec(options map[string]func() error) error {
 	return nil
 }
 
-func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
+func (c *Connection) SelectReturn(prompt string, options []string) (string, error) {
 	for {
-		fmt.Fprintf(e.term, "%s [%s]\n", prompt, strings.Join(options, "/"))
-		line, err := e.term.ReadLine()
+		fmt.Fprintf(c.term, "%s [%s]\n", prompt, strings.Join(options, "/"))
+		line, err := c.term.ReadLine()
 		if err != nil {
 			return "", juicemud.WithStack(err)
 		}
@@ -95,8 +95,8 @@ func (e *Env) SelectReturn(prompt string, options []string) (string, error) {
 }
 
 var (
-	commands = map[string]func(e *Env, args []string) error{
-		"debug": func(e *Env, args []string) error {
+	commands = map[string]func(e *Connection, args []string) error{
+		"debug": func(e *Connection, args []string) error {
 			id := string(e.user.Object)
 			if len(args) == 1 {
 				if byteID, err := hex.DecodeString(args[0]); err != nil {
@@ -108,7 +108,7 @@ var (
 			addConsole(id, e.term)
 			return nil
 		},
-		"undebug": func(e *Env, args []string) error {
+		"undebug": func(e *Connection, args []string) error {
 			id := string(e.user.Object)
 			if len(args) == 1 {
 				if byteID, err := hex.DecodeString(args[0]); err != nil {
@@ -137,14 +137,14 @@ Command priority:
 - sibling commands (defined in sibling Objects as JS, examples: "turn on robot", "give money")
 All commands should be in the Object so that we don't need to run JS to find matches.
 */
-func (e *Env) Process() error {
-	if e.user == nil {
+func (c *Connection) Process() error {
+	if c.user == nil {
 		return errors.New("can't process without user")
 	}
-	envByObjectID.Set(string(e.user.Object), e)
-	defer envByObjectID.Del(string(e.user.Object))
+	envByObjectID.Set(string(c.user.Object), c)
+	defer envByObjectID.Del(string(c.user.Object))
 	for {
-		line, err := e.term.ReadLine()
+		line, err := c.term.ReadLine()
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -153,19 +153,19 @@ func (e *Env) Process() error {
 			continue
 		}
 		if cmd, found := commands[words[0]]; found {
-			if err := cmd(e, words[1:]); err != nil {
-				fmt.Fprintln(e.term, err)
+			if err := cmd(c, words[1:]); err != nil {
+				fmt.Fprintln(c.term, err)
 			}
 		}
 	}
 }
 
-func (e *Env) Connect() error {
-	fmt.Fprint(e.term, "Welcome!\n\n")
+func (c *Connection) Connect() error {
+	fmt.Fprint(c.term, "Welcome!\n\n")
 	sel := func() error {
-		return e.SelectExec(map[string]func() error{
-			"login user":  e.loginUser,
-			"create user": e.createUser,
+		return c.SelectExec(map[string]func() error{
+			"login user":  c.loginUser,
+			"create user": c.createUser,
 		})
 	}
 	var err error
@@ -174,27 +174,27 @@ func (e *Env) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := e.game.emitAny(e.sess.Context(), e.game.storage.Queue().After(0), e.user.Object, connectedEventType, map[string]any{
-		"remote":   e.sess.RemoteAddr(),
-		"username": e.user.Name,
-		"object":   e.user.Object,
+	if err := c.game.emitAny(c.sess.Context(), c.game.storage.Queue().After(0), c.user.Object, connectedEventType, map[string]any{
+		"remote":   c.sess.RemoteAddr(),
+		"username": c.user.Name,
+		"object":   c.user.Object,
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
-	return e.Process()
+	return c.Process()
 }
 
-func (e *Env) loadAndRun(id string, call *structs.Call) error {
-	if err := e.game.loadRunSave(e.sess.Context(), id, call); err != nil {
+func (c *Connection) loadAndRun(id string, call *structs.Call) error {
+	if err := c.game.loadRunSave(c.sess.Context(), id, call); err != nil {
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {
 			switch rand.Intn(3) {
 			case 0:
-				fmt.Fprintln(e.term, "[reality stutters]")
+				fmt.Fprintln(c.term, "[reality stutters]")
 			case 1:
-				fmt.Fprintln(e.term, "[reality flickers]")
+				fmt.Fprintln(c.term, "[reality flickers]")
 			case 2:
-				fmt.Fprintln(e.term, "[reality jitters]")
+				fmt.Fprintln(c.term, "[reality jitters]")
 			}
 		} else {
 			return juicemud.WithStack(err)
@@ -203,76 +203,76 @@ func (e *Env) loadAndRun(id string, call *structs.Call) error {
 	return nil
 }
 
-func (e *Env) loginUser() error {
-	fmt.Fprint(e.term, "** Login user **\n\n")
+func (c *Connection) loginUser() error {
+	fmt.Fprint(c.term, "** Login user **\n\n")
 	var user *storage.User
 	for user == nil {
-		fmt.Fprintln(e.term, "Enter username or [abort]:")
-		username, err := e.term.ReadLine()
+		fmt.Fprintln(c.term, "Enter username or [abort]:")
+		username, err := c.term.ReadLine()
 		if err != nil {
 			return err
 		}
 		if username == "abort" {
 			return juicemud.WithStack(OperationAborted)
 		}
-		if user, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintln(e.term, "Username not found!")
+		if user, err = c.game.storage.GetUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(c.term, "Username not found!")
 		} else if err != nil {
 			return juicemud.WithStack(err)
 		}
 	}
-	for e.user == nil {
-		fmt.Fprint(e.term, "Enter password or [abort]:\n")
-		password, err := e.term.ReadPassword("> ")
+	for c.user == nil {
+		fmt.Fprint(c.term, "Enter password or [abort]:\n")
+		password, err := c.term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
 		ha1 := digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
 		if subtle.ConstantTimeCompare([]byte(ha1), []byte(user.PasswordHash)) != 1 {
-			fmt.Fprintln(e.term, "Incorrect password!")
+			fmt.Fprintln(c.term, "Incorrect password!")
 		} else {
-			e.user = user
+			c.user = user
 		}
 	}
-	fmt.Fprintf(e.term, "Welcome back, %v!\n", e.user.Name)
+	fmt.Fprintf(c.term, "Welcome back, %v!\n", c.user.Name)
 	return nil
 }
 
-func (e *Env) createUser() error {
-	fmt.Fprint(e.term, "** Create user **\n\n")
+func (c *Connection) createUser() error {
+	fmt.Fprint(c.term, "** Create user **\n\n")
 	var user *storage.User
 	for user == nil {
-		fmt.Fprint(e.term, "Enter new username or [abort]:\n")
-		username, err := e.term.ReadLine()
+		fmt.Fprint(c.term, "Enter new username or [abort]:\n")
+		username, err := c.term.ReadLine()
 		if err != nil {
 			return err
 		}
 		if username == "abort" {
 			return juicemud.WithStack(OperationAborted)
 		}
-		if _, err = e.game.storage.GetUser(e.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
+		if _, err = c.game.storage.GetUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
 			user = &storage.User{
 				Name: username,
 			}
 		} else if err == nil {
-			fmt.Fprintln(e.term, "Username already exists!")
+			fmt.Fprintln(c.term, "Username already exists!")
 		} else {
 			return juicemud.WithStack(err)
 		}
 	}
-	for e.user == nil {
-		fmt.Fprintln(e.term, "Enter new password:")
-		password, err := e.term.ReadPassword("> ")
+	for c.user == nil {
+		fmt.Fprintln(c.term, "Enter new password:")
+		password, err := c.term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(e.term, "Repeat new password:")
-		verification, err := e.term.ReadPassword("> ")
+		fmt.Fprintln(c.term, "Repeat new password:")
+		verification, err := c.term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
 		if password == verification {
-			selection, err := e.SelectReturn(fmt.Sprintf("Create user %q with provided password?", user.Name), []string{"y", "n", "abort"})
+			selection, err := c.SelectReturn(fmt.Sprintf("Create user %q with provided password?", user.Name), []string{"y", "n", "abort"})
 			if err != nil {
 				return err
 			}
@@ -280,15 +280,15 @@ func (e *Env) createUser() error {
 				return juicemud.WithStack(OperationAborted)
 			} else if selection == "y" {
 				user.PasswordHash = digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
-				e.user = user
+				c.user = user
 			}
 		} else {
-			fmt.Fprintln(e.term, "Passwords don't match!")
+			fmt.Fprintln(c.term, "Passwords don't match!")
 		}
 	}
-	if err := e.game.createUser(e.sess.Context(), e.user); err != nil {
+	if err := c.game.createUser(c.sess.Context(), c.user); err != nil {
 		return juicemud.WithStack(err)
 	}
-	fmt.Fprintf(e.term, "Welcome %s!\n", e.user.Name)
+	fmt.Fprintf(c.term, "Welcome %s!\n", c.user.Name)
 	return nil
 }
