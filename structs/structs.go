@@ -80,9 +80,9 @@ func (c *Challenge) Check(challenger *Object, target *Object) bool {
 	}.Check()
 }
 
-func (o *Object) Inspect(descs []Description, viewer *Object) []*Description {
+func (o *Object) Describe(viewer *Object) []*Description {
 	result := []*Description{}
-	for _, desc := range descs {
+	for _, desc := range o.Descriptions {
 		if func() bool {
 			for _, challenge := range desc.Challenges {
 				if !challenge.Check(viewer, o) {
@@ -95,16 +95,4 @@ func (o *Object) Inspect(descs []Description, viewer *Object) []*Description {
 		}
 	}
 	return result
-}
-
-func (o *Object) Look(viewer *Object) []*Description {
-	return o.Inspect(o.LookDescriptions, viewer)
-}
-
-func (o *Object) Sniff(viewer *Object) []*Description {
-	return o.Inspect(o.SniffDescriptions, viewer)
-}
-
-func (o *Object) Listen(viewer *Object) []*Description {
-	return o.Inspect(o.ListenDescriptions, viewer)
 }

@@ -126,6 +126,7 @@ func (skill *Skill) UnmarshalPlain(tn int, b []byte) (n int, err error) {
 type Challenge struct {
     Skill string
     Level float32
+    Message string
 }
 
 // Reserved Ids - Challenge
@@ -140,6 +141,7 @@ func (challenge *Challenge) Size() int {
 func (challenge *Challenge) size(id uint16) (s int) {
     s += bstd.SizeString(challenge.Skill) + 2
     s += bstd.SizeFloat32() + 2
+    s += bstd.SizeString(challenge.Message) + 2
 
     if id > 255 {
         s += 5
@@ -153,6 +155,7 @@ func (challenge *Challenge) size(id uint16) (s int) {
 func (challenge *Challenge) SizePlain() (s int) {
     s += bstd.SizeString(challenge.Skill)
     s += bstd.SizeFloat32()
+    s += bstd.SizeString(challenge.Message)
     return
 }
 
@@ -168,6 +171,8 @@ func (challenge *Challenge) marshal(tn int, b []byte, id uint16) (n int) {
     n = bstd.MarshalString(n, b, challenge.Skill)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 2)
     n = bstd.MarshalFloat32(n, b, challenge.Level)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 3)
+    n = bstd.MarshalString(n, b, challenge.Message)
 
     n += 2
     b[n-2] = 1
@@ -180,6 +185,7 @@ func (challenge *Challenge) MarshalPlain(tn int, b []byte) (n int) {
     n = tn
     n = bstd.MarshalString(n, b, challenge.Skill)
     n = bstd.MarshalFloat32(n, b, challenge.Level)
+    n = bstd.MarshalString(n, b, challenge.Message)
     return n
 }
 
@@ -220,6 +226,17 @@ func (challenge *Challenge) unmarshal(tn int, b []byte, r []uint16, id uint16) (
             return
         }
     }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, challengeRIds, 3); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, challenge.Message, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
     n += 2
     return
 }
@@ -231,6 +248,9 @@ func (challenge *Challenge) UnmarshalPlain(tn int, b []byte) (n int, err error) 
         return
     }
     if n, challenge.Level, err = bstd.UnmarshalFloat32(n, b); err != nil {
+        return
+    }
+    if n, challenge.Message, err = bstd.UnmarshalString(n, b); err != nil {
         return
     }
     return
@@ -392,13 +412,9 @@ func (description *Description) UnmarshalPlain(tn int, b []byte) (n int, err err
 
 // Struct - Exit
 type Exit struct {
-    LookDescriptions []Description
-    SniffDescriptions []Description
-    ListenDescriptions []Description
+    Descriptions []Description
     UseChallenges []Challenge
-    LookChallenges []Challenge
-    SniffChallenges []Challenge
-    ListenChallenges []Challenge
+    TransmitChallenges map[string][]Challenge
     Tags []string
     Destination string
 }
@@ -413,13 +429,9 @@ func (exit *Exit) Size() int {
 
 // Nested Size - Exit
 func (exit *Exit) size(id uint16) (s int) {
-    s += bstd.SizeSlice(exit.LookDescriptions, func (s Description) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(exit.SniffDescriptions, func (s Description) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(exit.ListenDescriptions, func (s Description) int { return s.SizePlain() }) + 2
+    s += bstd.SizeSlice(exit.Descriptions, func (s Description) int { return s.SizePlain() }) + 2
     s += bstd.SizeSlice(exit.UseChallenges, func (s Challenge) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(exit.LookChallenges, func (s Challenge) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(exit.SniffChallenges, func (s Challenge) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(exit.ListenChallenges, func (s Challenge) int { return s.SizePlain() }) + 2
+    s += bstd.SizeMap(exit.TransmitChallenges, bstd.SizeString, func (s []Challenge) int { return bstd.SizeSlice(s, func (s Challenge) int { return s.SizePlain() }) }) + 2
     s += bstd.SizeSlice(exit.Tags, bstd.SizeString) + 2
     s += bstd.SizeString(exit.Destination) + 2
 
@@ -433,13 +445,9 @@ func (exit *Exit) size(id uint16) (s int) {
 
 // SizePlain - Exit
 func (exit *Exit) SizePlain() (s int) {
-    s += bstd.SizeSlice(exit.LookDescriptions, func (s Description) int { return s.SizePlain() })
-    s += bstd.SizeSlice(exit.SniffDescriptions, func (s Description) int { return s.SizePlain() })
-    s += bstd.SizeSlice(exit.ListenDescriptions, func (s Description) int { return s.SizePlain() })
+    s += bstd.SizeSlice(exit.Descriptions, func (s Description) int { return s.SizePlain() })
     s += bstd.SizeSlice(exit.UseChallenges, func (s Challenge) int { return s.SizePlain() })
-    s += bstd.SizeSlice(exit.LookChallenges, func (s Challenge) int { return s.SizePlain() })
-    s += bstd.SizeSlice(exit.SniffChallenges, func (s Challenge) int { return s.SizePlain() })
-    s += bstd.SizeSlice(exit.ListenChallenges, func (s Challenge) int { return s.SizePlain() })
+    s += bstd.SizeMap(exit.TransmitChallenges, bstd.SizeString, func (s []Challenge) int { return bstd.SizeSlice(s, func (s Challenge) int { return s.SizePlain() }) })
     s += bstd.SizeSlice(exit.Tags, bstd.SizeString)
     s += bstd.SizeString(exit.Destination)
     return
@@ -454,22 +462,14 @@ func (exit *Exit) Marshal(b []byte) {
 func (exit *Exit) marshal(tn int, b []byte, id uint16) (n int) {
     n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 1)
-    n = bstd.MarshalSlice(n, b, exit.LookDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalSlice(n, b, exit.Descriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 2)
-    n = bstd.MarshalSlice(n, b, exit.SniffDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 3)
-    n = bstd.MarshalSlice(n, b, exit.ListenDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 4)
     n = bstd.MarshalSlice(n, b, exit.UseChallenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 5)
-    n = bstd.MarshalSlice(n, b, exit.LookChallenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 6)
-    n = bstd.MarshalSlice(n, b, exit.SniffChallenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 7)
-    n = bstd.MarshalSlice(n, b, exit.ListenChallenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 8)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 3)
+    n = bstd.MarshalMap(n, b, exit.TransmitChallenges, bstd.MarshalString, func (n int, b []byte, s []Challenge) int { return bstd.MarshalSlice(n, b, s, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) }) })
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 4)
     n = bstd.MarshalSlice(n, b, exit.Tags, bstd.MarshalString)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 9)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 5)
     n = bstd.MarshalString(n, b, exit.Destination)
 
     n += 2
@@ -481,13 +481,9 @@ func (exit *Exit) marshal(tn int, b []byte, id uint16) (n int) {
 // MarshalPlain - Exit
 func (exit *Exit) MarshalPlain(tn int, b []byte) (n int) {
     n = tn
-    n = bstd.MarshalSlice(n, b, exit.LookDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, exit.SniffDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, exit.ListenDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalSlice(n, b, exit.Descriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
     n = bstd.MarshalSlice(n, b, exit.UseChallenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, exit.LookChallenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, exit.SniffChallenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, exit.ListenChallenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalMap(n, b, exit.TransmitChallenges, bstd.MarshalString, func (n int, b []byte, s []Challenge) int { return bstd.MarshalSlice(n, b, s, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) }) })
     n = bstd.MarshalSlice(n, b, exit.Tags, bstd.MarshalString)
     n = bstd.MarshalString(n, b, exit.Destination)
     return n
@@ -515,7 +511,7 @@ func (exit *Exit) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err
         return
     }
     if ok {
-        if n, exit.LookDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+        if n, exit.Descriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
             return
         }
     }
@@ -526,7 +522,7 @@ func (exit *Exit) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err
         return
     }
     if ok {
-        if n, exit.SniffDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+        if n, exit.UseChallenges, err = bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
             return
         }
     }
@@ -537,7 +533,7 @@ func (exit *Exit) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err
         return
     }
     if ok {
-        if n, exit.ListenDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+        if n, exit.TransmitChallenges, err = bstd.UnmarshalMap[string, []Challenge](n, b, bstd.UnmarshalString, func (n int, b []byte) (int, []Challenge, error) { return bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }) }); err != nil {
             return
         }
     }
@@ -548,55 +544,11 @@ func (exit *Exit) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err
         return
     }
     if ok {
-        if n, exit.UseChallenges, err = bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-            return
-        }
-    }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, exitRIds, 5); err != nil {
-        if err == bgenimpl.ErrEof {
-            return n, nil
-        }
-        return
-    }
-    if ok {
-        if n, exit.LookChallenges, err = bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-            return
-        }
-    }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, exitRIds, 6); err != nil {
-        if err == bgenimpl.ErrEof {
-            return n, nil
-        }
-        return
-    }
-    if ok {
-        if n, exit.SniffChallenges, err = bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-            return
-        }
-    }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, exitRIds, 7); err != nil {
-        if err == bgenimpl.ErrEof {
-            return n, nil
-        }
-        return
-    }
-    if ok {
-        if n, exit.ListenChallenges, err = bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-            return
-        }
-    }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, exitRIds, 8); err != nil {
-        if err == bgenimpl.ErrEof {
-            return n, nil
-        }
-        return
-    }
-    if ok {
         if n, exit.Tags, err = bstd.UnmarshalSlice[string](n, b, bstd.UnmarshalString); err != nil {
             return
         }
     }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, exitRIds, 9); err != nil {
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, exitRIds, 5); err != nil {
         if err == bgenimpl.ErrEof {
             return n, nil
         }
@@ -614,25 +566,13 @@ func (exit *Exit) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err
 // UnmarshalPlain - Exit
 func (exit *Exit) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     n = tn
-    if n, exit.LookDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-        return
-    }
-    if n, exit.SniffDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-        return
-    }
-    if n, exit.ListenDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+    if n, exit.Descriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
         return
     }
     if n, exit.UseChallenges, err = bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
         return
     }
-    if n, exit.LookChallenges, err = bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-        return
-    }
-    if n, exit.SniffChallenges, err = bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-        return
-    }
-    if n, exit.ListenChallenges, err = bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+    if n, exit.TransmitChallenges, err = bstd.UnmarshalMap[string, []Challenge](n, b, bstd.UnmarshalString, func (n int, b []byte) (int, []Challenge, error) { return bstd.UnmarshalSlice[Challenge](n, b, func (n int, b []byte, s *Challenge) (int, error) { return s.UnmarshalPlain(n, b) }) }); err != nil {
         return
     }
     if n, exit.Tags, err = bstd.UnmarshalSlice[string](n, b, bstd.UnmarshalString); err != nil {
@@ -652,9 +592,7 @@ type Object struct {
     Location string
     Content map[string]bool
     Skills map[string]Skill
-    LookDescriptions []Description
-    SniffDescriptions []Description
-    ListenDescriptions []Description
+    Descriptions []Description
     Exits []Exit
     SourcePath string
     SourceModTime int64
@@ -676,9 +614,7 @@ func (object *Object) size(id uint16) (s int) {
     s += bstd.SizeString(object.Location) + 2
     s += bstd.SizeMap(object.Content, bstd.SizeString, bstd.SizeBool) + 2
     s += bstd.SizeMap(object.Skills, bstd.SizeString, func (s Skill) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(object.LookDescriptions, func (s Description) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(object.SniffDescriptions, func (s Description) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(object.ListenDescriptions, func (s Description) int { return s.SizePlain() }) + 2
+    s += bstd.SizeSlice(object.Descriptions, func (s Description) int { return s.SizePlain() }) + 2
     s += bstd.SizeSlice(object.Exits, func (s Exit) int { return s.SizePlain() }) + 2
     s += bstd.SizeString(object.SourcePath) + 2
     s += bstd.SizeInt64() + 2
@@ -699,9 +635,7 @@ func (object *Object) SizePlain() (s int) {
     s += bstd.SizeString(object.Location)
     s += bstd.SizeMap(object.Content, bstd.SizeString, bstd.SizeBool)
     s += bstd.SizeMap(object.Skills, bstd.SizeString, func (s Skill) int { return s.SizePlain() })
-    s += bstd.SizeSlice(object.LookDescriptions, func (s Description) int { return s.SizePlain() })
-    s += bstd.SizeSlice(object.SniffDescriptions, func (s Description) int { return s.SizePlain() })
-    s += bstd.SizeSlice(object.ListenDescriptions, func (s Description) int { return s.SizePlain() })
+    s += bstd.SizeSlice(object.Descriptions, func (s Description) int { return s.SizePlain() })
     s += bstd.SizeSlice(object.Exits, func (s Exit) int { return s.SizePlain() })
     s += bstd.SizeString(object.SourcePath)
     s += bstd.SizeInt64()
@@ -729,16 +663,12 @@ func (object *Object) marshal(tn int, b []byte, id uint16) (n int) {
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 6)
     n = bstd.MarshalMap(n, b, object.Skills, bstd.MarshalString, func (n int, b []byte, s Skill) int { return s.MarshalPlain(n, b) })
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 7)
-    n = bstd.MarshalSlice(n, b, object.LookDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalSlice(n, b, object.Descriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 8)
-    n = bstd.MarshalSlice(n, b, object.SniffDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 9)
-    n = bstd.MarshalSlice(n, b, object.ListenDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 10)
     n = bstd.MarshalSlice(n, b, object.Exits, func (n int, b []byte, s Exit) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 11)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 9)
     n = bstd.MarshalString(n, b, object.SourcePath)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 12)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 10)
     n = bstd.MarshalInt64(n, b, object.SourceModTime)
 
     n += 2
@@ -756,9 +686,7 @@ func (object *Object) MarshalPlain(tn int, b []byte) (n int) {
     n = bstd.MarshalString(n, b, object.Location)
     n = bstd.MarshalMap(n, b, object.Content, bstd.MarshalString, bstd.MarshalBool)
     n = bstd.MarshalMap(n, b, object.Skills, bstd.MarshalString, func (n int, b []byte, s Skill) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, object.LookDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, object.SniffDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, object.ListenDescriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalSlice(n, b, object.Descriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
     n = bstd.MarshalSlice(n, b, object.Exits, func (n int, b []byte, s Exit) int { return s.MarshalPlain(n, b) })
     n = bstd.MarshalString(n, b, object.SourcePath)
     n = bstd.MarshalInt64(n, b, object.SourceModTime)
@@ -853,7 +781,7 @@ func (object *Object) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int,
         return
     }
     if ok {
-        if n, object.LookDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+        if n, object.Descriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
             return
         }
     }
@@ -864,7 +792,7 @@ func (object *Object) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int,
         return
     }
     if ok {
-        if n, object.SniffDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+        if n, object.Exits, err = bstd.UnmarshalSlice[Exit](n, b, func (n int, b []byte, s *Exit) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
             return
         }
     }
@@ -875,33 +803,11 @@ func (object *Object) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int,
         return
     }
     if ok {
-        if n, object.ListenDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-            return
-        }
-    }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectRIds, 10); err != nil {
-        if err == bgenimpl.ErrEof {
-            return n, nil
-        }
-        return
-    }
-    if ok {
-        if n, object.Exits, err = bstd.UnmarshalSlice[Exit](n, b, func (n int, b []byte, s *Exit) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-            return
-        }
-    }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectRIds, 11); err != nil {
-        if err == bgenimpl.ErrEof {
-            return n, nil
-        }
-        return
-    }
-    if ok {
         if n, object.SourcePath, err = bstd.UnmarshalString(n, b); err != nil {
             return
         }
     }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectRIds, 12); err != nil {
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectRIds, 10); err != nil {
         if err == bgenimpl.ErrEof {
             return n, nil
         }
@@ -937,13 +843,7 @@ func (object *Object) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     if n, object.Skills, err = bstd.UnmarshalMap[string, Skill](n, b, bstd.UnmarshalString, func (n int, b []byte, s *Skill) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
         return
     }
-    if n, object.LookDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-        return
-    }
-    if n, object.SniffDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
-        return
-    }
-    if n, object.ListenDescriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+    if n, object.Descriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
         return
     }
     if n, object.Exits, err = bstd.UnmarshalSlice[Exit](n, b, func (n int, b []byte, s *Exit) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
