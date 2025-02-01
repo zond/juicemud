@@ -2,15 +2,16 @@ package game
 
 import (
 	"crypto/subtle"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/buildkite/shellwords"
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/errors"
+	"github.com/rodaine/table"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/digest"
 	"github.com/zond/juicemud/lang"
@@ -124,20 +125,28 @@ func (c *Connection) describeLong() error {
 type command struct {
 	names  map[string]bool
 	wizard bool
-	f      func(*Connection, []string) error
+	f      func(*Connection, string) error
+}
+
+func m(s ...string) map[string]bool {
+	res := map[string]bool{}
+	for _, p := range s {
+		res[p] = true
+	}
+	return res
 }
 
 var (
 	commands = []command{
 		{
-			names: map[string]bool{"groups": true},
-			f: func(c *Connection, args []string) error {
+			names: m("groups"),
+			f: func(c *Connection, s string) error {
 				groups, err := c.game.storage.UserGroups(c.sess.Context(), c.user)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
 				sort.Sort(groups)
-				fmt.Fprintf(c.term, "Member of %v groups\n", len(groups))
+				fmt.Fprintf(c.term, "Member of %v\n", lang.Declare(len(groups), "groups"))
 				for _, group := range groups {
 					fmt.Fprintln(c.term, group.Name)
 				}
@@ -145,48 +154,125 @@ var (
 			},
 		},
 		{
-			names:  map[string]bool{"debug": true},
+			names:  m("debug"),
 			wizard: true,
-			f: func(c *Connection, args []string) error {
-				id := string(c.user.Object)
-				if len(args) == 1 {
-					if byteID, err := hex.DecodeString(args[0]); err != nil {
-						return juicemud.WithStack(err)
-					} else {
-						id = string(byteID)
-					}
-				}
-				addConsole(id, c.term)
+			f: func(c *Connection, s string) error {
+				addConsole(string(c.user.Object), c.term)
 				return nil
 			},
 		},
 		{
-			names:  map[string]bool{"undebug": true},
+			names:  m("undebug"),
 			wizard: true,
-			f: func(c *Connection, args []string) error {
-				id := string(c.user.Object)
-				if len(args) == 1 {
-					if byteID, err := hex.DecodeString(args[0]); err != nil {
-						return juicemud.WithStack(err)
-					} else {
-						id = string(byteID)
-					}
-				}
-				delConsole(id, c.term)
+			f: func(c *Connection, s string) error {
+				delConsole(string(c.user.Object), c.term)
 				return nil
 			},
 		},
 		{
-			names: map[string]bool{"l": true, "look": true},
-			f: func(c *Connection, args []string) error {
+			names: m("l", "look"),
+			f: func(c *Connection, s string) error {
 				return c.describeLong()
+			},
+		},
+		{
+			names:  m("!chwrite"),
+			wizard: true,
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) == 2 {
+					if err := c.game.storage.ChwriteFile(c.sess.Context(), parts[1], ""); err != nil {
+						return juicemud.WithStack(err)
+					}
+				} else if len(parts) == 3 {
+					if err := c.game.storage.ChwriteFile(c.sess.Context(), parts[1], parts[2]); err != nil {
+						return juicemud.WithStack(err)
+					}
+				} else {
+					fmt.Fprintln(c.term, "usage: chwrite [path] [writer group]")
+				}
+				return nil
+			},
+		},
+		{
+			names:  m("!chread"),
+			wizard: true,
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) == 2 {
+					if err := c.game.storage.ChreadFile(c.sess.Context(), parts[1], ""); err != nil {
+						return juicemud.WithStack(err)
+					}
+				} else if len(parts) == 3 {
+					if err := c.game.storage.ChreadFile(c.sess.Context(), parts[1], parts[2]); err != nil {
+						return juicemud.WithStack(err)
+					}
+				} else {
+					fmt.Fprintln(c.term, "usage: chread [path] [reader group]")
+				}
+				return nil
+			},
+		},
+		{
+			names:  m("!ls"),
+			wizard: true,
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) < 1 {
+					return nil
+				}
+				parts = parts[1:]
+				t := table.New("Path", "Read", "Write").WithWriter(c.term)
+				for _, part := range parts {
+					f, err := c.game.storage.LoadFile(c.sess.Context(), part)
+					if errors.Is(err, os.ErrNotExist) {
+						t.AddRow(fmt.Sprintf("%s: %v", part, err), "", "")
+						continue
+					} else if err != nil {
+						return juicemud.WithStack(err)
+					}
+					if err := c.game.storage.CheckCallerAccessToGroupID(c.sess.Context(), f.ReadGroup); err != nil {
+						t.AddRow(fmt.Sprintf("%s: %v", part, err), "", "")
+						continue
+					}
+					r, w, err := c.game.storage.FileGroups(c.sess.Context(), f)
+					if err != nil {
+						return juicemud.WithStack(err)
+					}
+					t.AddRow(f.Path, r.Name, w.Name)
+					if f.Dir {
+						children, err := c.game.storage.LoadChildren(c.sess.Context(), f.Id)
+						if err != nil {
+							return juicemud.WithStack(err)
+						}
+						for _, child := range children {
+							r, w, err := c.game.storage.FileGroups(c.sess.Context(), &child)
+							if err != nil {
+								return juicemud.WithStack(err)
+							}
+							t.AddRow(child.Path, r.Name, w.Name)
+						}
+
+					}
+				}
+				t.Print()
+				return nil
 			},
 		},
 	}
 )
 
 var (
-	whitespacePattern = regexp.MustCompile(`\\s+`)
+	whitespacePattern = regexp.MustCompile(`\s+`)
 )
 
 /*
@@ -220,12 +306,12 @@ func (c *Connection) Process() error {
 					if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
 						return juicemud.WithStack(err)
 					} else if has {
-						if err := cmd.f(c, words[1:]); err != nil {
+						if err := cmd.f(c, line); err != nil {
 							fmt.Fprintln(c.term, err)
 						}
 					}
 				} else {
-					if err := cmd.f(c, words[1:]); err != nil {
+					if err := cmd.f(c, line); err != nil {
 						fmt.Fprintln(c.term, err)
 					}
 				}
@@ -292,6 +378,7 @@ func (c *Connection) loginUser() error {
 			c.user = user
 		}
 	}
+	storage.AuthenticateUser(c.sess.Context(), c.user)
 	fmt.Fprintf(c.term, "Welcome back, %v!\n\n", c.user.Name)
 	return nil
 }
@@ -347,6 +434,7 @@ func (c *Connection) createUser() error {
 	if err := c.game.createUser(c.sess.Context(), c.user); err != nil {
 		return juicemud.WithStack(err)
 	}
+	storage.AuthenticateUser(c.sess.Context(), c.user)
 	fmt.Fprintf(c.term, "Welcome %s!\n\n", c.user.Name)
 	return nil
 }

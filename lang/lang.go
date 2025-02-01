@@ -3,6 +3,8 @@ package lang
 import (
 	"bytes"
 	"fmt"
+
+	"github.com/gertd/go-pluralize"
 )
 
 const (
@@ -10,6 +12,27 @@ const (
 	DefaultSeparator = ","
 	DefaultOperator  = "and"
 )
+
+var (
+	plur = pluralize.NewClient()
+)
+
+func Singular(s string) string {
+	return plur.Singular(s)
+}
+
+func Plural(s string) string {
+	return plur.Plural(s)
+}
+
+func Declare(count int, s string) string {
+	if count == 0 {
+		return fmt.Sprintf("no %s", Plural(s))
+	} else if count == 1 {
+		return fmt.Sprintf("1 %s", Singular(s))
+	}
+	return fmt.Sprintf("%v %s", count, Plural(s))
+}
 
 type Enumerator struct {
 	Pattern   string

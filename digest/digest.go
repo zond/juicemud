@@ -1,7 +1,6 @@
 package digest
 
 import (
-	"context"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/subtle"
@@ -11,27 +10,25 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/zond/juicemud/storage"
 )
 
 func ComputeHA1(username, realm, password string) string {
 	return md5Hash(fmt.Sprintf("%s:%s:%s", username, realm, password))
 }
 
-type UserProvider interface {
-	GetHA1AndUser(ctx context.Context, username string) (string, bool, any, error)
-}
-
 type DigestAuth struct {
-	Realm        string
-	UserProvider UserProvider
-	Opaque       string
+	Realm   string
+	Storage *storage.Storage
+	Opaque  string
 }
 
-func NewDigestAuth(realm string, provider UserProvider) *DigestAuth {
+func NewDigestAuth(realm string, storage *storage.Storage) *DigestAuth {
 	return &DigestAuth{
-		Realm:        realm,
-		UserProvider: provider,
-		Opaque:       generateSecureRandom(),
+		Realm:   realm,
+		Storage: storage,
+		Opaque:  generateSecureRandom(),
 	}
 }
 
@@ -48,7 +45,7 @@ func (da *DigestAuth) Wrap(handler http.Handler) http.HandlerFunc {
 		// Parse the Authorization header
 		authParams := parseDigestHeader(authHeader)
 		ctx := r.Context()
-		ha1, exists, user, err := da.UserProvider.GetHA1AndUser(ctx, authParams["username"])
+		ha1, exists, user, err := da.Storage.GetHA1AndUser(ctx, authParams["username"])
 		if err != nil {
 			log.Printf("trying to get HA1 for %q: %v", authParams["username"], err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -69,24 +66,9 @@ func (da *DigestAuth) Wrap(handler http.Handler) http.HandlerFunc {
 		}
 
 		// If valid, call the wrapped handler
-		ctx = context.WithValue(ctx, authenticatedUser, user)
-		handler.ServeHTTP(w, r.WithContext(ctx))
+		handler.ServeHTTP(w, r.WithContext(storage.AuthenticateUser(ctx, user)))
 	}
 }
-
-func AuthenticatedUser(ctx context.Context) (any, bool) {
-	val := ctx.Value(authenticatedUser)
-	if val == nil {
-		return "", false
-	}
-	return val, true
-}
-
-type contextKey int
-
-var (
-	authenticatedUser contextKey = 0
-)
 
 func (da *DigestAuth) challenge(w http.ResponseWriter) {
 	nonce := generateNonce()

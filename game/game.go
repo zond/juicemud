@@ -27,6 +27,7 @@ const (
 )
 
 const (
+	root          = "/"
 	userSource    = "/user.js"
 	genesisSource = "/genesis.js"
 	bootSource    = "/boot.js"
@@ -41,6 +42,9 @@ const (
 )
 
 var (
+	initialDirectories = []string{
+		root,
+	}
 	initialSources = map[string]string{
 		bootSource: "// This code is run each time the game server starts.",
 		userSource: "// This code runs all connected users.",
@@ -73,6 +77,11 @@ type Game struct {
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	ctx = juicemud.MakeMainContext(ctx)
+	for _, dir := range initialDirectories {
+		if err := s.CreateDir(ctx, dir); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+	}
 	for path, source := range initialSources {
 		if _, created, err := s.EnsureFile(ctx, path); err != nil {
 			return nil, juicemud.WithStack(err)

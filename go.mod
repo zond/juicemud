@@ -3,14 +3,17 @@ module github.com/zond/juicemud
 go 1.23.4
 
 require (
+	github.com/buildkite/shellwords v0.0.0-20180315110454-59467a9b8e10
 	github.com/bxcodec/faker/v4 v4.0.0-beta.3
 	github.com/deneonet/benc v1.1.3
 	github.com/estraier/tkrzw-go v0.0.0-20240603165139-89707b45d5ab
+	github.com/gertd/go-pluralize v0.2.1
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/goccy/go-json v0.10.4
 	github.com/google/go-cmp v0.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/pkg/errors v0.9.1
+	github.com/rodaine/table v1.3.0
 	github.com/zond/sqly v0.0.0-20250105203711-328150f4df2d
 	golang.org/x/crypto v0.31.0
 	golang.org/x/term v0.27.0
