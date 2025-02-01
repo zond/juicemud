@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,6 +29,13 @@ func pathify(s *string) {
 
 func (f *Fs) Read(ctx context.Context, path string) (io.ReadCloser, error) {
 	pathify(&path)
+	file, err := f.Storage.LoadFile(ctx, path)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	if err := f.Storage.CheckCallerAccessToGroupID(ctx, file.ReadGroup); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	content, _, err := f.Storage.LoadSource(ctx, path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
@@ -56,9 +64,21 @@ func (w *writeBuffer) Close() error {
 
 func (f *Fs) Write(ctx context.Context, path string) (io.WriteCloser, error) {
 	pathify(&path)
-	file, _, err := f.Storage.EnsureFile(ctx, path)
+	parent, err := f.Storage.LoadFile(ctx, filepath.Dir(path))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
+	}
+	if err := f.Storage.CheckCallerAccessToGroupID(ctx, parent.WriteGroup); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	file, created, err := f.Storage.EnsureFile(ctx, path)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	if !created {
+		if err := f.Storage.CheckCallerAccessToGroupID(ctx, file.WriteGroup); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
 	}
 	return &writeBuffer{
 		Buffer: bytes.Buffer{},
@@ -98,16 +118,33 @@ func (f *Fs) Stat(ctx context.Context, path string) (*dav.FileInfo, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
+	if err := f.Storage.CheckCallerAccessToGroupID(ctx, file.ReadGroup); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	return f.stat(ctx, file)
 }
 
 func (f *Fs) Remove(ctx context.Context, path string) error {
 	pathify(&path)
+	file, err := f.Storage.LoadFile(ctx, path)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := f.Storage.CheckCallerAccessToGroupID(ctx, file.WriteGroup); err != nil {
+		return juicemud.WithStack(err)
+	}
 	return f.Storage.DelFile(ctx, path)
 }
 
 func (f *Fs) Mkdir(ctx context.Context, path string) error {
 	pathify(&path)
+	parent, err := f.Storage.LoadFile(ctx, filepath.Dir(path))
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := f.Storage.CheckCallerAccessToGroupID(ctx, parent.WriteGroup); err != nil {
+		return juicemud.WithStack(err)
+	}
 	return f.Storage.CreateDir(ctx, path)
 }
 
@@ -115,6 +152,9 @@ func (f *Fs) List(ctx context.Context, path string) ([]*dav.FileInfo, error) {
 	pathify(&path)
 	file, err := f.Storage.LoadFile(ctx, path)
 	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	if err := f.Storage.CheckCallerAccessToGroupID(ctx, file.ReadGroup); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	children, err := f.Storage.LoadChildren(ctx, file.Id)
@@ -132,7 +172,21 @@ func (f *Fs) List(ctx context.Context, path string) ([]*dav.FileInfo, error) {
 
 func (f *Fs) Rename(ctx context.Context, oldPath string, newURL *url.URL) error {
 	pathify(&oldPath)
+	oldFile, err := f.Storage.LoadFile(ctx, oldPath)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := f.Storage.CheckCallerAccessToGroupID(ctx, oldFile.WriteGroup); err != nil {
+		return juicemud.WithStack(err)
+	}
 	newPath := newURL.Path
+	newParent, err := f.Storage.LoadFile(ctx, filepath.Dir(newPath))
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := f.Storage.CheckCallerAccessToGroupID(ctx, newParent.WriteGroup); err != nil {
+		return juicemud.WithStack(err)
+	}
 	pathify(&newPath)
 	return f.Storage.MoveFile(ctx, oldPath, newPath)
 }

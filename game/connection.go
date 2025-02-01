@@ -4,7 +4,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
-	"math/rand"
 	"os"
 	"regexp"
 	"sort"
@@ -18,7 +17,6 @@ import (
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 	"golang.org/x/term"
-	"rogchap.com/v8go"
 )
 
 var (
@@ -98,66 +96,91 @@ func (c *Connection) object() (*structs.Object, error) {
 	return c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
 }
 
-func (c *Connection) describe(long bool) error {
+func (c *Connection) describeLong() error {
 	obj, err := c.object()
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if long {
-		// TODO: Load neighbourhood and compute every detectable description and show them suitably.
-		// _, err = c.game.loadNeighbourhood(c.sess.Context(), obj)
-		// if err != nil {
-		// 	return juicemud.WithStack(err)
-		// }
-		loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
-		if err != nil {
-			return juicemud.WithStack(err)
-		}
-		descs := loc.Describe(obj)
-		fmt.Fprintln(c.term, descs.Join(false))
+	// TODO: Load neighbourhood and compute every detectable description and show them suitably.
+	// _, err = c.game.loadNeighbourhood(c.sess.Context(), obj)
+	// if err != nil {
+	// 	return juicemud.WithStack(err)
+	// }
+	loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	descs, exits := loc.Inspect(obj)
+	fmt.Fprintln(c.term, descs.Short())
+	fmt.Fprintln(c.term)
+	fmt.Fprintln(c.term, descs.Long())
+	if len(exits) > 0 {
 		fmt.Fprintln(c.term)
-		fmt.Fprintln(c.term, descs.Join(true))
-	} else {
-		loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
-		if err != nil {
-			return juicemud.WithStack(err)
-		}
-		fmt.Fprintln(c.term, loc.Describe(obj).Join(false))
+		fmt.Fprintln(c.term, exits.Short())
 	}
 	return nil
 }
 
+type command struct {
+	names  map[string]bool
+	wizard bool
+	f      func(*Connection, []string) error
+}
+
 var (
-	commands = map[string]func(e *Connection, args []string) error{
-		"debug": func(c *Connection, args []string) error {
-			id := string(c.user.Object)
-			if len(args) == 1 {
-				if byteID, err := hex.DecodeString(args[0]); err != nil {
+	commands = []command{
+		{
+			names: map[string]bool{"groups": true},
+			f: func(c *Connection, args []string) error {
+				groups, err := c.game.storage.UserGroups(c.sess.Context(), c.user)
+				if err != nil {
 					return juicemud.WithStack(err)
-				} else {
-					id = string(byteID)
 				}
-			}
-			addConsole(id, c.term)
-			return nil
-		},
-		"undebug": func(c *Connection, args []string) error {
-			id := string(c.user.Object)
-			if len(args) == 1 {
-				if byteID, err := hex.DecodeString(args[0]); err != nil {
-					return juicemud.WithStack(err)
-				} else {
-					id = string(byteID)
+				sort.Sort(groups)
+				fmt.Fprintf(c.term, "Member of %v groups\n", len(groups))
+				for _, group := range groups {
+					fmt.Fprintln(c.term, group.Name)
 				}
-			}
-			delConsole(id, c.term)
-			return nil
+				return nil
+			},
 		},
-		"l": func(c *Connection, args []string) error {
-			return c.describe(true)
+		{
+			names:  map[string]bool{"debug": true},
+			wizard: true,
+			f: func(c *Connection, args []string) error {
+				id := string(c.user.Object)
+				if len(args) == 1 {
+					if byteID, err := hex.DecodeString(args[0]); err != nil {
+						return juicemud.WithStack(err)
+					} else {
+						id = string(byteID)
+					}
+				}
+				addConsole(id, c.term)
+				return nil
+			},
 		},
-		"look": func(c *Connection, args []string) error {
-			return c.describe(true)
+		{
+			names:  map[string]bool{"undebug": true},
+			wizard: true,
+			f: func(c *Connection, args []string) error {
+				id := string(c.user.Object)
+				if len(args) == 1 {
+					if byteID, err := hex.DecodeString(args[0]); err != nil {
+						return juicemud.WithStack(err)
+					} else {
+						id = string(byteID)
+					}
+				}
+				delConsole(id, c.term)
+				return nil
+			},
+		},
+		{
+			names: map[string]bool{"l": true, "look": true},
+			f: func(c *Connection, args []string) error {
+				return c.describeLong()
+			},
 		},
 	}
 )
@@ -191,9 +214,21 @@ func (c *Connection) Process() error {
 		if len(words) == 0 {
 			continue
 		}
-		if cmd, found := commands[words[0]]; found {
-			if err := cmd(c, words[1:]); err != nil {
-				fmt.Fprintln(c.term, err)
+		for _, cmd := range commands {
+			if cmd.names[words[0]] {
+				if cmd.wizard {
+					if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
+						return juicemud.WithStack(err)
+					} else if has {
+						if err := cmd.f(c, words[1:]); err != nil {
+							fmt.Fprintln(c.term, err)
+						}
+					}
+				} else {
+					if err := cmd.f(c, words[1:]); err != nil {
+						fmt.Fprintln(c.term, err)
+					}
+				}
 			}
 		}
 	}
@@ -220,29 +255,10 @@ func (c *Connection) Connect() error {
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := c.describe(true); err != nil {
+	if err := c.describeLong(); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return c.Process()
-}
-
-func (c *Connection) loadAndRun(id string, call *structs.Call) error {
-	if err := c.game.loadRunSave(c.sess.Context(), id, call); err != nil {
-		jserr := &v8go.JSError{}
-		if errors.As(err, &jserr) {
-			switch rand.Intn(3) {
-			case 0:
-				fmt.Fprintln(c.term, "[reality stutters]")
-			case 1:
-				fmt.Fprintln(c.term, "[reality flickers]")
-			case 2:
-				fmt.Fprintln(c.term, "[reality jitters]")
-			}
-		} else {
-			return juicemud.WithStack(err)
-		}
-	}
-	return nil
 }
 
 func (c *Connection) loginUser() error {

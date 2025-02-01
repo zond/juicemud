@@ -83,19 +83,21 @@ func (c *Challenge) Check(challenger *Object, target *Object) bool {
 
 type Descriptions []Description
 
-func (d Descriptions) Join(long bool) string {
+func (d Descriptions) Long() string {
 	res := make([]string, 0, len(d))
-	if long {
-		for _, de := range d {
-			res = append(res, de.Long)
-		}
-		return strings.Join(res, "\n")
-	} else {
-		for _, de := range d {
-			res = append(res, de.Short)
-		}
-		return strings.Join(res, " ")
+	for _, de := range d {
+		res = append(res, de.Long)
 	}
+	return strings.Join(res, "\n")
+}
+
+func (d Descriptions) Short() string {
+	res := make([]string, 0, len(d))
+	for _, de := range d {
+		res = append(res, de.Short)
+	}
+	return strings.Join(res, " ")
+
 }
 
 func (d Descriptions) Filter(target *Object, viewer *Object) Descriptions {
@@ -115,9 +117,9 @@ func (d Descriptions) Filter(target *Object, viewer *Object) Descriptions {
 	return results
 }
 
-func (o *Object) Inspect(viewer *Object) (Descriptions, []Exit) {
+func (o *Object) Inspect(viewer *Object) (Descriptions, Exits) {
 	descs := Descriptions(o.Descriptions).Filter(o, viewer)
-	exits := []Exit{}
+	exits := Exits{}
 	for _, exit := range o.Exits {
 		exit.Descriptions = Descriptions(exit.Descriptions).Filter(o, viewer)
 		if len(exit.Descriptions) > 0 {
@@ -125,4 +127,17 @@ func (o *Object) Inspect(viewer *Object) (Descriptions, []Exit) {
 		}
 	}
 	return descs, exits
+}
+
+type Exits []Exit
+
+func (e Exits) Short() string {
+	result := []string{}
+	for _, exit := range e {
+		if len(exit.Descriptions) == 0 {
+			continue
+		}
+		result = append(result, exit.Descriptions[0].Short)
+	}
+	return strings.Join(result, ", ")
 }

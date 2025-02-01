@@ -2,6 +2,7 @@ package juicemud
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"iter"
 	"sync"
@@ -12,6 +13,27 @@ import (
 
 	goccy "github.com/goccy/go-json"
 )
+
+type contextKey int
+
+var (
+	mainContect contextKey = 0
+)
+
+func IsMainContext(ctx context.Context) bool {
+	val := ctx.Value(mainContect)
+	if val == nil {
+		return false
+	}
+	if b, ok := val.(bool); ok {
+		return b
+	}
+	return false
+}
+
+func MakeMainContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, mainContect, true)
+}
 
 const (
 	DAVAuthRealm = "WebDAV"

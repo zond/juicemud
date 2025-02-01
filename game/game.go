@@ -36,6 +36,10 @@ const (
 	genesisID = "genesis"
 )
 
+const (
+	wizardsGroup = "wizards"
+)
+
 var (
 	initialSources = map[string]string{
 		bootSource: "// This code is run each time the game server starts.",
@@ -56,6 +60,11 @@ setDescriptions([
 			return nil
 		},
 	}
+	initialGroups = []storage.Group{
+		{
+			Name: wizardsGroup,
+		},
+	}
 )
 
 type Game struct {
@@ -63,6 +72,7 @@ type Game struct {
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
+	ctx = juicemud.MakeMainContext(ctx)
 	for path, source := range initialSources {
 		if _, created, err := s.EnsureFile(ctx, path); err != nil {
 			return nil, juicemud.WithStack(err)
@@ -74,6 +84,11 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	}
 	for idString, setup := range initialObjects {
 		if err := s.EnsureObject(ctx, idString, setup); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+	}
+	for _, group := range initialGroups {
+		if _, err := s.EnsureGroup(ctx, &group); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}
