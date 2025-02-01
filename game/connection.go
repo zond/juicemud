@@ -240,10 +240,6 @@ var (
 					} else if err != nil {
 						return juicemud.WithStack(err)
 					}
-					if err := c.game.storage.CheckCallerAccessToGroupID(c.sess.Context(), f.ReadGroup); err != nil {
-						t.AddRow(fmt.Sprintf("%s: %v", part, err), "", "")
-						continue
-					}
 					r, w, err := c.game.storage.FileGroups(c.sess.Context(), f)
 					if err != nil {
 						return juicemud.WithStack(err)

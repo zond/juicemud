@@ -109,6 +109,9 @@ func (s *Storage) StoreSource(ctx context.Context, path string, content []byte) 
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
+		if err := s.CheckCallerAccessToGroupID(ctx, file.WriteGroup); err != nil {
+			return juicemud.WithStack(err)
+		}
 		return juicemud.WithStack(logSync(ctx, tx, &FileSync{
 			Set:     file.Path,
 			Content: content,
@@ -412,6 +415,9 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, crea
 	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		file, err = s.loadFile(ctx, tx, path)
 		if err == nil {
+			if err := s.CheckCallerAccessToGroupID(ctx, file.WriteGroup); err != nil {
+				return juicemud.WithStack(err)
+			}
 			created = false
 			return nil
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -419,6 +425,9 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, crea
 		}
 		parent, err := s.loadFile(ctx, tx, filepath.Dir(path))
 		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		if err := s.CheckCallerAccessToGroupID(ctx, parent.WriteGroup); err != nil {
 			return juicemud.WithStack(err)
 		}
 		file = &File{
@@ -446,12 +455,18 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
+		if err := s.CheckCallerAccessToGroupID(ctx, toMove.WriteGroup); err != nil {
+			return juicemud.WithStack(err)
+		}
 		content, modTime, err := s.LoadSource(ctx, oldPath)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
 		newParent, err := s.loadFile(ctx, tx, filepath.Dir(newPath))
 		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		if err := s.CheckCallerAccessToGroupID(ctx, newParent.WriteGroup); err != nil {
 			return juicemud.WithStack(err)
 		}
 		if err := s.delFileIfExists(ctx, tx, newPath, false); err != nil {
@@ -496,6 +511,9 @@ func (s *Storage) loadFile(ctx context.Context, db sqlx.QueryerContext, path str
 	if err := getSQL(ctx, db, file, "SELECT * FROM File WHERE Path = ?", path); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
+	if err := s.CheckCallerAccessToGroupID(ctx, file.ReadGroup); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	return file, nil
 }
 
@@ -519,6 +537,9 @@ func (s *Storage) delFileIfExists(ctx context.Context, db sqlx.ExtContext, path 
 	file, err := s.loadFile(ctx, db, path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
+	}
+	if err := s.CheckCallerAccessToGroupID(ctx, file.WriteGroup); err != nil {
+		return juicemud.WithStack(err)
 	}
 	children, err := getChildren(ctx, db, file.Id)
 	if err != nil {
@@ -560,7 +581,10 @@ func (s *Storage) DelFile(ctx context.Context, path string) error {
 
 func (s *Storage) CreateDir(ctx context.Context, path string) error {
 	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
-		if _, err := s.loadFile(ctx, tx, path); err == nil {
+		if existing, err := s.loadFile(ctx, tx, path); err == nil {
+			if !existing.Dir {
+				return errors.Wrapf(os.ErrExist, "%q already exists, is not directory", path)
+			}
 			return nil
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return juicemud.WithStack(err)
@@ -574,6 +598,9 @@ func (s *Storage) CreateDir(ctx context.Context, path string) error {
 			if err != nil {
 				return juicemud.WithStack(err)
 			}
+		}
+		if err := s.CheckCallerAccessToGroupID(ctx, parent.WriteGroup); err != nil {
+			return juicemud.WithStack(err)
 		}
 		file := &File{
 			Path:       path,
