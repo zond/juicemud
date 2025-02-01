@@ -197,23 +197,37 @@ func (s *Storage) StoreObject(ctx context.Context, claimedOldLocation *string, o
 	var m *Movement
 	var pairs []dbm.Proc
 	if claimedOldLocation == nil || *claimedOldLocation == object.Location {
-		pairs = []dbm.Proc{
-			s.objects.SProc(object.Location, func(key string, value *structs.Object) (*structs.Object, error) {
-				if value == nil {
-					return nil, errors.Wrapf(os.ErrNotExist, "can't find location %q", object.Location)
-				}
-				value.Content[object.Id] = true
-				return value, nil
-			}),
-			s.objects.SProc(object.Id, func(key string, value *structs.Object) (*structs.Object, error) {
-				if value == nil {
+		if object.Location == "" {
+			pairs = []dbm.Proc{
+				s.objects.SProc(object.Id, func(key string, value *structs.Object) (*structs.Object, error) {
+					if value == nil {
+						return object, nil
+					}
+					if value.Location != object.Location {
+						return nil, errors.Errorf("object is moved from %q to %q without updating old location", value.Location, object.Location)
+					}
 					return object, nil
-				}
-				if value.Location != object.Location {
-					return nil, errors.Errorf("object is moved from %q to %q without updating old location", value.Location, object.Location)
-				}
-				return object, nil
-			}),
+				}),
+			}
+		} else {
+			pairs = []dbm.Proc{
+				s.objects.SProc(object.Location, func(key string, value *structs.Object) (*structs.Object, error) {
+					if value == nil {
+						return nil, errors.Wrapf(os.ErrNotExist, "can't find location %q", object.Location)
+					}
+					value.Content[object.Id] = true
+					return value, nil
+				}),
+				s.objects.SProc(object.Id, func(key string, value *structs.Object) (*structs.Object, error) {
+					if value == nil {
+						return object, nil
+					}
+					if value.Location != object.Location {
+						return nil, errors.Errorf("object is moved from %q to %q without updating old location", value.Location, object.Location)
+					}
+					return object, nil
+				}),
+			}
 		}
 	} else {
 		m = &Movement{

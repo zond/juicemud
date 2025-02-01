@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"strings"
 	"time"
 
 	"github.com/zond/juicemud"
@@ -80,19 +81,48 @@ func (c *Challenge) Check(challenger *Object, target *Object) bool {
 	}.Check()
 }
 
-func (o *Object) Describe(viewer *Object) []*Description {
-	result := []*Description{}
-	for _, desc := range o.Descriptions {
+type Descriptions []Description
+
+func (d Descriptions) Join(long bool) string {
+	res := make([]string, 0, len(d))
+	if long {
+		for _, de := range d {
+			res = append(res, de.Long)
+		}
+		return strings.Join(res, "\n")
+	} else {
+		for _, de := range d {
+			res = append(res, de.Short)
+		}
+		return strings.Join(res, " ")
+	}
+}
+
+func (d Descriptions) Filter(target *Object, viewer *Object) Descriptions {
+	results := Descriptions{}
+	for _, desc := range d {
 		if func() bool {
 			for _, challenge := range desc.Challenges {
-				if !challenge.Check(viewer, o) {
+				if !challenge.Check(viewer, target) {
 					return false
 				}
 			}
 			return true
 		}() {
-			result = append(result, &desc)
+			results = append(results, desc)
 		}
 	}
-	return result
+	return results
+}
+
+func (o *Object) Inspect(viewer *Object) (Descriptions, []Exit) {
+	descs := Descriptions(o.Descriptions).Filter(o, viewer)
+	exits := []Exit{}
+	for _, exit := range o.Exits {
+		exit.Descriptions = Descriptions(exit.Descriptions).Filter(o, viewer)
+		if len(exit.Descriptions) > 0 {
+			exits = append(exits, exit)
+		}
+	}
+	return descs, exits
 }

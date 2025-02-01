@@ -52,6 +52,7 @@ setDescriptions([
 	initialObjects = map[string]func(*structs.Object) error{
 		genesisID: func(o *structs.Object) error {
 			o.Id = genesisID
+			o.SourcePath = genesisSource
 			return nil
 		},
 	}

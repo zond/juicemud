@@ -103,11 +103,26 @@ func (c *Connection) describe(long bool) error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	// TODO: If long, load neighbourhood and compute every detectable description and show them suitably.
-	//       If short, load location and siblings and show short descriptions of them.
-	_, err = c.game.loadNeighbourhood(c.sess.Context(), obj)
-	if err != nil {
-		return juicemud.WithStack(err)
+	if long {
+		// TODO: Load neighbourhood and compute every detectable description and show them suitably.
+		// _, err = c.game.loadNeighbourhood(c.sess.Context(), obj)
+		// if err != nil {
+		// 	return juicemud.WithStack(err)
+		// }
+		loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		descs := loc.Describe(obj)
+		fmt.Fprintln(c.term, descs.Join(false))
+		fmt.Fprintln(c.term)
+		fmt.Fprintln(c.term, descs.Join(true))
+	} else {
+		loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		fmt.Fprintln(c.term, loc.Describe(obj).Join(false))
 	}
 	return nil
 }
@@ -205,6 +220,9 @@ func (c *Connection) Connect() error {
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
+	if err := c.describe(true); err != nil {
+		return juicemud.WithStack(err)
+	}
 	return c.Process()
 }
 
@@ -258,7 +276,7 @@ func (c *Connection) loginUser() error {
 			c.user = user
 		}
 	}
-	fmt.Fprintf(c.term, "Welcome back, %v!\n", c.user.Name)
+	fmt.Fprintf(c.term, "Welcome back, %v!\n\n", c.user.Name)
 	return nil
 }
 
@@ -313,6 +331,6 @@ func (c *Connection) createUser() error {
 	if err := c.game.createUser(c.sess.Context(), c.user); err != nil {
 		return juicemud.WithStack(err)
 	}
-	fmt.Fprintf(c.term, "Welcome %s!\n", c.user.Name)
+	fmt.Fprintf(c.term, "Welcome %s!\n\n", c.user.Name)
 	return nil
 }
