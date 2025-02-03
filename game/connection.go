@@ -103,18 +103,20 @@ func (c *Connection) describeLong() error {
 		return juicemud.WithStack(err)
 	}
 	// TODO: Load neighbourhood and compute every detectable description and show them suitably.
-	// _, err = c.game.loadNeighbourhood(c.sess.Context(), obj)
-	// if err != nil {
-	// 	return juicemud.WithStack(err)
-	// }
-	loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
+	neigh, err := c.game.loadNeighbourhood(c.sess.Context(), obj)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	descs, exits := loc.Inspect(obj)
-	fmt.Fprintln(c.term, descs.Short())
-	fmt.Fprintln(c.term)
-	fmt.Fprintln(c.term, descs.Long())
+	desc, exits, siblings := neigh.Location.Inspect(obj)
+	if desc != nil {
+		fmt.Fprintln(c.term, desc.Short)
+		fmt.Fprintln(c.term)
+		fmt.Fprintln(c.term, desc.Long)
+	}
+	if len(siblings) > 0 {
+		fmt.Fprintln(c.term)
+		fmt.Fprintf(c.term, "%shere", lang.Enumerator{Active: true}.Do(siblings.Short()...))
+	}
 	if len(exits) > 0 {
 		fmt.Fprintln(c.term)
 		fmt.Fprintln(c.term, exits.Short())
@@ -154,7 +156,21 @@ var (
 			},
 		},
 		{
-			names:  m("debug"),
+			names:  m("/create"),
+			wizard: true,
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) != 2 {
+					fmt.Fprintln(c.term, "usage: /create [path]")
+				}
+				return nil
+			},
+		},
+		{
+			names:  m("/debug"),
 			wizard: true,
 			f: func(c *Connection, s string) error {
 				addConsole(string(c.user.Object), c.term)
@@ -162,7 +178,7 @@ var (
 			},
 		},
 		{
-			names:  m("undebug"),
+			names:  m("/undebug"),
 			wizard: true,
 			f: func(c *Connection, s string) error {
 				delConsole(string(c.user.Object), c.term)
@@ -192,7 +208,7 @@ var (
 						return juicemud.WithStack(err)
 					}
 				} else {
-					fmt.Fprintln(c.term, "usage: chwrite [path] [writer group]")
+					fmt.Fprintln(c.term, "usage: /chwrite [path] [writer group]")
 				}
 				return nil
 			},
@@ -214,7 +230,7 @@ var (
 						return juicemud.WithStack(err)
 					}
 				} else {
-					fmt.Fprintln(c.term, "usage: chread [path] [reader group]")
+					fmt.Fprintln(c.term, "usage: /chread [path] [reader group]")
 				}
 				return nil
 			},

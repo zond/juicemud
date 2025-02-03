@@ -7,6 +7,18 @@ type Location struct {
 	Content   map[string]*Object
 }
 
+func (l *Location) Inspect(viewer *Object) (*Description, Exits, Objects) {
+	siblings := Objects{}
+	for _, cont := range l.Content {
+		if desc, _ := cont.Inspect(viewer); desc != nil {
+			cont.Descriptions = []Description{*desc}
+			siblings = append(siblings, *cont)
+		}
+	}
+	desc, exits := l.Container.Inspect(viewer)
+	return desc, exits, siblings
+}
+
 func (l *Location) All() iter.Seq2[string, *Object] {
 	return func(yield func(string, *Object) bool) {
 		if !yield(l.Container.Id, l.Container) {

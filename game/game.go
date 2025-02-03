@@ -153,20 +153,26 @@ func (g *Game) HandleSession(sess ssh.Session) {
 	}
 }
 
-func (g *Game) createUser(ctx context.Context, user *storage.User) error {
+func (g *Game) createObject(ctx context.Context, f func(*structs.Object) error) error {
 	object, err := structs.MakeObject(ctx)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	object.SourcePath = userSource
-	object.Location = genesisID
-
-	user.Object = object.Id
-	if err := g.storage.StoreUser(ctx, user, false); err != nil {
+	if err := f(object); err != nil {
 		return juicemud.WithStack(err)
 	}
+
 	if err := g.storage.StoreObject(ctx, nil, object); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return nil
+}
+
+func (g *Game) createUser(ctx context.Context, user *storage.User) error {
+	return juicemud.WithStack(g.createObject(ctx, func(object *structs.Object) error {
+		object.SourcePath = userSource
+		object.Location = genesisID
+		user.Object = object.Id
+		return juicemud.WithStack(g.storage.StoreUser(ctx, user, false))
+	}))
 }

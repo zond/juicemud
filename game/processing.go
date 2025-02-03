@@ -137,7 +137,7 @@ func (g *Game) loadNeighbourhood(ctx context.Context, object *structs.Object) (*
 	return result, nil
 }
 
-func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
+func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
 	callbacks["getSkills"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 0 {

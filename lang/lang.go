@@ -38,6 +38,7 @@ type Enumerator struct {
 	Pattern   string
 	Separator string
 	Operator  string
+	Active    bool
 }
 
 func (e Enumerator) Do(elements ...string) string {
@@ -59,6 +60,13 @@ func (e Enumerator) Do(elements ...string) string {
 			fmt.Fprintf(res, fmt.Sprintf("%s%%s %%s ", pattern), element, separator, operator)
 		} else {
 			fmt.Fprintf(res, pattern, element)
+		}
+	}
+	if e.Active {
+		if len(elements) > 1 {
+			fmt.Fprintf(res, " are")
+		} else if len(elements) > 0 {
+			fmt.Fprintf(res, " is")
 		}
 	}
 	return res.String()
