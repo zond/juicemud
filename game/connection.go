@@ -115,7 +115,7 @@ func (c *Connection) describeLong() error {
 	}
 	if len(siblings) > 0 {
 		fmt.Fprintln(c.term)
-		fmt.Fprintf(c.term, "%shere", lang.Enumerator{Active: true}.Do(siblings.Short()...))
+		fmt.Fprintf(c.term, "%s here\n", lang.Enumerator{Active: true}.Do(siblings.Short()...))
 	}
 	if len(exits) > 0 {
 		fmt.Fprintln(c.term)
