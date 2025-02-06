@@ -47,7 +47,7 @@ var (
 	}
 	initialSources = map[string]string{
 		bootSource: "// This code is run each time the game server starts.",
-		userSource: `// This code runs all connected users.
+		userSource: `// This code runs all users.
 setDescriptions([
     {
         short: 'a person',
@@ -112,9 +112,9 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	}
 	go func() {
 		log.Panic(g.storage.StartQueue(ctx, func(ctx context.Context, ev *structs.Event) {
-			var call *structs.Call
+			var call Caller
 			if ev.Call.Name != "" {
-				call = &ev.Call
+				call = JSCall(ev.Call)
 			}
 			go func() {
 				if err := g.loadRunSave(ctx, ev.Object, call); err != nil {

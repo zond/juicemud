@@ -246,14 +246,47 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	}
 }
 
+type Caller interface {
+	Call() (*structs.Call, error)
+}
+
+type AnyCall struct {
+	Name    string
+	Tag     string
+	Content any
+}
+
+type JSCall structs.Call
+
+func (j JSCall) Call() (*structs.Call, error) {
+	return (*structs.Call)(&j), nil
+}
+
+func (a *AnyCall) Call() (*structs.Call, error) {
+	js, err := goccy.Marshal(a.Content)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return &structs.Call{
+		Name:    a.Name,
+		Tag:     a.Tag,
+		Message: string(js),
+	}, nil
+}
+
 /*
 Some events we should send to objects:
 - moved: Object changed Location.
 - received: Object got new Content.
 - transmitted: Object lost Content.
 */
-func (g *Game) run(ctx context.Context, object *structs.Object, call *structs.Call) error {
-	if call != nil {
+func (g *Game) run(ctx context.Context, object *structs.Object, caller Caller) error {
+	var call *structs.Call
+	if caller != nil {
+		var err error
+		if call, err = caller.Call(); err != nil {
+			return juicemud.WithStack(err)
+		}
 		t, err := g.storage.SourceModTime(ctx, object.SourcePath)
 		if err != nil {
 			return juicemud.WithStack(err)
@@ -293,15 +326,15 @@ func (g *Game) run(ctx context.Context, object *structs.Object, call *structs.Ca
 	return nil
 }
 
-func (g *Game) runSave(ctx context.Context, object *structs.Object, call *structs.Call) error {
+func (g *Game) runSave(ctx context.Context, object *structs.Object, caller Caller) error {
 	oldLocation := object.Location
-	if err := g.run(ctx, object, call); err != nil {
+	if err := g.run(ctx, object, caller); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return juicemud.WithStack(g.storage.StoreObject(ctx, &oldLocation, object))
 }
 
-func (g *Game) loadRunSave(ctx context.Context, id string, call *structs.Call) error {
+func (g *Game) loadRunSave(ctx context.Context, id string, caller Caller) error {
 	sid := string(id)
 	jsContextLocks.Lock(sid)
 	defer jsContextLocks.Unlock(sid)
@@ -310,5 +343,5 @@ func (g *Game) loadRunSave(ctx context.Context, id string, call *structs.Call) e
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	return juicemud.WithStack(g.runSave(ctx, object, call))
+	return juicemud.WithStack(g.runSave(ctx, object, caller))
 }

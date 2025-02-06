@@ -18,6 +18,8 @@ import (
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 	"golang.org/x/term"
+
+	goccy "github.com/goccy/go-json"
 )
 
 var (
@@ -166,6 +168,26 @@ var (
 				if len(parts) != 2 {
 					fmt.Fprintln(c.term, "usage: /create [path]")
 				}
+				return nil
+			},
+		},
+		{
+			names:  m("/state"),
+			wizard: true,
+			f: func(c *Connection, s string) error {
+				obj, err := c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				state := map[string]any{}
+				if err := goccy.Unmarshal([]byte(obj.State), &state); err != nil {
+					return juicemud.WithStack(err)
+				}
+				js, err := goccy.MarshalIndent(state, "  ", "  ")
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				fmt.Fprintln(c.term, string(js))
 				return nil
 			},
 		},
@@ -346,10 +368,14 @@ func (c *Connection) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := c.game.emitAny(c.sess.Context(), c.game.storage.Queue().After(0), c.user.Object, connectedEventType, map[string]any{
-		"remote":   c.sess.RemoteAddr(),
-		"username": c.user.Name,
-		"object":   c.user.Object,
+	if err := c.game.loadRunSave(c.sess.Context(), c.user.Object, &AnyCall{
+		Name: connectedEventType,
+		Tag:  emitEventTag,
+		Content: map[string]any{
+			"remote":   c.sess.RemoteAddr(),
+			"username": c.user.Name,
+			"object":   c.user.Object,
+		},
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
