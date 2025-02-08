@@ -7,9 +7,14 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"iter"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/game/skills"
 	"github.com/zond/juicemud/storage/dbm"
@@ -38,6 +43,13 @@ func NextObjectID() (string, error) {
 		return "", juicemud.WithStack(err)
 	}
 	return encoding.EncodeToString(result), nil
+}
+
+func (o *Object) Name() string {
+	if len(o.Descriptions) == 0 {
+		return "nameless"
+	}
+	return o.Descriptions[0].Short
 }
 
 func (o *Object) HasCallback(name string, tag string) bool {
@@ -124,6 +136,15 @@ func (c Challenges) Check(challenger *Object, targetID string) bool {
 
 type Descriptions []Description
 
+func (d Descriptions) Matches(pattern string) bool {
+	for _, desc := range d {
+		if match, _ := filepath.Match(pattern, desc.Short); match {
+			return true
+		}
+	}
+	return false
+}
+
 // Detect will return the first detected description.
 func (d Descriptions) Detect(viewer *Object, targetID string) *Description {
 	for _, desc := range d {
@@ -165,23 +186,25 @@ func (o *Object) Filter(viewer *Object) {
 type Exits []Exit
 
 func (e Exits) Short() string {
-	result := []string{}
+	result := sort.StringSlice{}
 	for _, exit := range e {
 		if len(exit.Descriptions) == 0 {
 			continue
 		}
 		result = append(result, exit.Descriptions[0].Short)
 	}
+	sort.Sort(result)
 	return strings.Join(result, ", ")
 }
 
 type Content map[string]*Object
 
 func (c Content) Short() []string {
-	result := make([]string, 0, len(c))
+	result := make(sort.StringSlice, 0, len(c))
 	for _, obj := range c {
 		result = append(result, obj.Descriptions[0].Short)
 	}
+	sort.Sort(result)
 	return result
 }
 
@@ -228,6 +251,36 @@ func (l *Location) All() iter.Seq2[string, *Object] {
 			}
 		}
 	}
+}
+
+var indexRegexp = regexp.MustCompile(`^((\d+)\.)?(.*)$`)
+
+func (l *Location) Identify(s string) (*Object, error) {
+	match := indexRegexp.FindStringSubmatch(s)
+	indexString, pattern := match[2], match[3]
+	index := 0
+	if indexString != "" {
+		var err error
+		if index, err = strconv.Atoi(indexString); err != nil {
+			return nil, errors.Errorf("%q isn't a number", indexString)
+		}
+	}
+	objs := []*Object{}
+	if Descriptions(l.Container.Descriptions).Matches(pattern) {
+		objs = append(objs, l.Container)
+	}
+	for _, cont := range l.Content {
+		if Descriptions(cont.Descriptions).Matches(pattern) {
+			objs = append(objs, cont)
+		}
+	}
+	if len(objs) == 0 {
+		return nil, errors.Errorf("No %q found", pattern)
+	}
+	if index < len(objs) {
+		return objs[index], nil
+	}
+	return nil, errors.Errorf("Only %v %q found", len(objs), pattern)
 }
 
 type Detection struct {

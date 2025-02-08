@@ -95,10 +95,6 @@ func (c *Connection) SelectReturn(prompt string, options []string) (string, erro
 	}
 }
 
-func (c *Connection) object() (*structs.Object, error) {
-	return c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
-}
-
 func (c *Connection) scan() error {
 	viewer, neigh, err := c.game.loadNeighbourhoodOf(c.sess.Context(), c.user.Object)
 	if err != nil {
@@ -121,11 +117,10 @@ func (c *Connection) scan() error {
 }
 
 func (c *Connection) describeLocation(loc *structs.Location) error {
-	if len(loc.Container.Descriptions) > 0 {
-		desc := loc.Container.Descriptions[0]
-		fmt.Fprintln(c.term, desc.Short)
+	fmt.Fprintln(c.term, loc.Container.Name())
+	if len(loc.Container.Descriptions) > 0 && loc.Container.Descriptions[0].Long != "" {
 		fmt.Fprintln(c.term)
-		fmt.Fprintln(c.term, desc.Long)
+		fmt.Fprintln(c.term, loc.Container.Descriptions[0].Long)
 	}
 	if len(loc.Content) > 0 {
 		fmt.Fprintln(c.term)
@@ -161,10 +156,58 @@ func m(s ...string) map[string]bool {
 	return res
 }
 
-var (
-	commands = []command{
+type defaultObject int
+
+const (
+	defaultSelf defaultObject = iota
+	defaultLoc
+)
+
+func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection, self *structs.Object, target *structs.Object) error) func(*Connection, string) error {
+	return func(c *Connection, s string) error {
+		parts, err := shellwords.SplitPosix(s)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		if len(parts) == 1 {
+			obj, err := c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
+			if err != nil {
+				return juicemud.WithStack(err)
+			}
+			switch def {
+			case defaultSelf:
+				return f(c, obj, obj)
+			case defaultLoc:
+				loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				loc.Filter(obj)
+				return f(c, obj, loc)
+			}
+		} else if len(parts) == 2 {
+			obj, loc, err := c.game.loadLocationOf(c.sess.Context(), c.user.Object)
+			if err != nil {
+				return juicemud.WithStack(err)
+			}
+			loc.Filter(obj)
+			target, err := loc.Identify(parts[1])
+			if err != nil {
+				fmt.Fprintln(c.term, err.Error())
+				return nil
+			}
+			return f(c, obj, target)
+		}
+		fmt.Fprintln(c.term, "usage: /state [pattern]?")
+		return nil
+	}
+}
+
+func (c *Connection) commands() []command {
+	return []command{
 		{
-			names: m("groups"),
+			names:  m("/groups"),
+			wizard: true,
 			f: func(c *Connection, s string) error {
 				groups, err := c.game.storage.UserGroups(c.sess.Context(), c.user)
 				if err != nil {
@@ -193,46 +236,49 @@ var (
 			},
 		},
 		{
-			names:  m("/state"),
+			names:  m("/inspect"),
 			wizard: true,
-			f: func(c *Connection, s string) error {
-				obj, err := c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
+			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, target *structs.Object) error {
+				js, err := goccy.MarshalIndent(target, "", "  ")
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				state := map[string]any{}
-				if err := goccy.Unmarshal([]byte(obj.State), &state); err != nil {
-					return juicemud.WithStack(err)
-				}
-				js, err := goccy.MarshalIndent(state, "  ", "  ")
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
+				fmt.Fprintf(c.term, "#%s/%s\n", target.Name(), target.Id)
 				fmt.Fprintln(c.term, string(js))
 				return nil
-			},
+			}),
 		},
 		{
 			names:  m("/debug"),
 			wizard: true,
-			f: func(c *Connection, s string) error {
-				addConsole(string(c.user.Object), c.term)
+			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, target *structs.Object) error {
+				addConsole(target.Id, c.term)
+				fmt.Fprintln(c.term, "#%s/%s connected to console", target.Name(), target.Id)
 				return nil
-			},
+			}),
 		},
 		{
 			names:  m("/undebug"),
 			wizard: true,
-			f: func(c *Connection, s string) error {
-				delConsole(string(c.user.Object), c.term)
+			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, target *structs.Object) error {
+				delConsole(target.Id, c.term)
+				fmt.Fprintln(c.term, "#%s/%s disconnected from console", target.Name(), target.Id)
 				return nil
-			},
+			}),
 		},
 		{
 			names: m("l", "look"),
-			f: func(c *Connection, s string) error {
-				return c.look()
-			},
+			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, target *structs.Object) error {
+				if obj.Location == target.Id {
+					return c.look()
+				}
+				fmt.Fprintln(c.term, target.Name())
+				if len(target.Descriptions) > 0 && target.Descriptions[0].Long != "" {
+					fmt.Fprintln(c.term)
+					fmt.Fprintln(c.term, target.Descriptions[0].Long)
+				}
+				return nil
+			}),
 		},
 		{
 			names: m("scan"),
@@ -330,7 +376,7 @@ var (
 			},
 		},
 	}
-)
+}
 
 var (
 	whitespacePattern = regexp.MustCompile(`\s+`)
@@ -361,7 +407,7 @@ func (c *Connection) Process() error {
 		if len(words) == 0 {
 			continue
 		}
-		for _, cmd := range commands {
+		for _, cmd := range c.commands() {
 			if cmd.names[words[0]] {
 				if cmd.wizard {
 					if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
