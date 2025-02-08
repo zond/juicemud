@@ -34,11 +34,19 @@ func Declare(count int, s string) string {
 	return fmt.Sprintf("%v %s", count, Plural(s))
 }
 
+type Tense int
+
+const (
+	None Tense = iota
+	Present
+	Past
+)
+
 type Enumerator struct {
 	Pattern   string
 	Separator string
 	Operator  string
-	Active    bool
+	Tense     Tense
 }
 
 func (e Enumerator) Do(elements ...string) string {
@@ -62,12 +70,15 @@ func (e Enumerator) Do(elements ...string) string {
 			fmt.Fprintf(res, pattern, element)
 		}
 	}
-	if e.Active {
+	switch e.Tense {
+	case Present:
 		if len(elements) > 1 {
 			fmt.Fprintf(res, " are")
 		} else if len(elements) > 0 {
 			fmt.Fprintf(res, " is")
 		}
+	case Past:
+		fmt.Fprintf(res, " were")
 	}
 	return res.String()
 }

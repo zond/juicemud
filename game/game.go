@@ -47,12 +47,17 @@ var (
 	}
 	initialSources = map[string]string{
 		bootSource: "// This code is run each time the game server starts.",
-		userSource: `// This code runs all users.
-setDescriptions([
-    {
-        short: 'a person',
-    }
-]);
+		userSource: `// This code runs all connected users.
+
+addCallback('connected', ['emit'], (obj) => {
+    state.username = obj.username;
+    state.object = obj.object;
+	setDescriptions([
+		{
+			short: obj.username,
+		}
+	]);
+});
 `,
 		genesisSource: `// This code runs the room where newly created users are dropped.
 setDescriptions([

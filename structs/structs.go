@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"iter"
 	"strings"
 	"time"
 
@@ -68,57 +69,91 @@ func (e *Event) CreateKey() {
 	e.Key = string(k)
 }
 
-func (c *Challenge) Check(challenger *Object, target *Object) bool {
+// Check returns whether the challenger succeeds with the challenges,
+// considering the target.
+func (c *Challenge) Check(challenger *Object, targetID string) bool {
 	return skills.Application{
 		Use: skills.Use{
 			User:  challenger.Id,
 			Skill: c.Skill,
 			At:    time.Now(),
 		},
-		Target:    target.Id,
+		Target:    targetID,
 		Level:     challenger.Skills[c.Skill].Practical,
 		Challenge: c.Level,
 	}.Check()
 }
 
+type Challenges []Challenge
+
+func (c Challenges) Map() map[string]Challenge {
+	result := map[string]Challenge{}
+	for _, challenge := range c {
+		result[challenge.Skill] = challenge
+	}
+	return result
+}
+
+// Check returns whether the challenger succeeds with all challenges,
+// considering the target.
+func (c Challenges) Check(challenger *Object, targetID string) bool {
+	for _, challenge := range c {
+		if !challenge.Check(challenger, targetID) {
+			return false
+		}
+	}
+	return true
+}
+
 type Descriptions []Description
 
-func (d Descriptions) Detect(target *Object, viewer *Object) *Description {
+// Detect will return the first detected description.
+func (d Descriptions) Detect(viewer *Object, targetID string) *Description {
 	for _, desc := range d {
-		if func() bool {
-			for _, challenge := range desc.Challenges {
-				if !challenge.Check(viewer, target) {
-					return false
-				}
-			}
-			return true
-		}() {
+		if Challenges(desc.Challenges).Check(viewer, targetID) {
 			return &desc
 		}
 	}
 	return nil
 }
 
-type Objects []Object
-
-func (o Objects) Short() []string {
-	result := make([]string, len(o))
-	for i := range o {
-		result[i] = o[i].Descriptions[0].Short
+// AddDescriptionChallenges will merge the addedChalls into all descriptions
+// of the object using the skill name as key.
+func (o *Object) AddDescriptionChallenges(addedChalls Challenges) {
+	addedChallMap := addedChalls.Map()
+	for currDescIdx := range o.Descriptions {
+		currDesc := &o.Descriptions[currDescIdx]
+		replChalls := Challenges{}
+		for currChallIdx := range o.Descriptions[currDescIdx].Challenges {
+			currChall := currDesc.Challenges[currChallIdx]
+			if addedChall, found := addedChallMap[currChall.Skill]; found {
+				currChall.Level += addedChall.Level
+				replChalls = append(replChalls, currChall)
+			} else {
+				replChalls = append(replChalls, addedChall)
+			}
+		}
+		currDesc.Challenges = replChalls
 	}
-	return result
 }
 
-func (o *Object) Inspect(viewer *Object) (*Description, Exits) {
-	desc := Descriptions(o.Descriptions).Detect(o, viewer)
+// Filter will remove all undetected descriptions,
+// and all undetected descriptions of exits, and remove all exits
+// that lacks descriptions.
+func (o *Object) Filter(viewer *Object) {
+	if desc := Descriptions(o.Descriptions).Detect(viewer, o.Id); desc != nil {
+		o.Descriptions = []Description{*desc}
+	} else {
+		o.Descriptions = nil
+	}
 	exits := Exits{}
 	for _, exit := range o.Exits {
-		if exitDesc := Descriptions(exit.Descriptions).Detect(o, viewer); exitDesc != nil {
+		if exitDesc := Descriptions(exit.Descriptions).Detect(viewer, o.Id); exitDesc != nil {
 			exit.Descriptions = []Description{*exitDesc}
 			exits = append(exits, exit)
 		}
 	}
-	return desc, exits
+	o.Exits = exits
 }
 
 type Exits []Exit
@@ -132,4 +167,98 @@ func (e Exits) Short() string {
 		result = append(result, exit.Descriptions[0].Short)
 	}
 	return strings.Join(result, ", ")
+}
+
+type Content map[string]*Object
+
+func (c Content) Short() []string {
+	result := make([]string, 0, len(c))
+	for _, obj := range c {
+		result = append(result, obj.Descriptions[0].Short)
+	}
+	return result
+}
+
+type Location struct {
+	Container *Object
+	Content   Content
+}
+
+// AddDescriptionChallenges will merge the addedChalls into the container and the content.
+func (l *Location) AddDescriptionChallenges(challenges Challenges) {
+	l.Container.AddDescriptionChallenges(challenges)
+	for _, content := range l.Content {
+		content.AddDescriptionChallenges(challenges)
+	}
+}
+
+// Filter will remove all undetected descriptions of the container,
+// and all undetected descriptions of content that isn't the viewer,
+// and remove the content that lacks descriptions.
+func (l *Location) Filter(viewer *Object) {
+	content := Content{}
+	for id, cont := range l.Content {
+		if id == viewer.Id {
+			content[id] = cont
+		} else {
+			cont.Filter(viewer)
+			if len(cont.Descriptions) > 0 {
+				content[id] = cont
+			}
+		}
+	}
+	l.Content = content
+	l.Container.Filter(viewer)
+}
+
+func (l *Location) All() iter.Seq2[string, *Object] {
+	return func(yield func(string, *Object) bool) {
+		if !yield(l.Container.Id, l.Container) {
+			return
+		}
+		for k, v := range l.Content {
+			if !yield(k, v) {
+				return
+			}
+		}
+	}
+}
+
+type Neighbourhood struct {
+	Location   *Location
+	Neighbours map[string]*Location
+}
+
+// Filter will filter the location for the viewer, then all neighbours that still have exits.
+// The neighbours will also be filtered after the exit challenges are added, and any neighbours
+// without descriptions will not be added.
+func (n *Neighbourhood) Filter(viewer *Object) {
+	n.Location.Filter(viewer)
+	neighbours := map[string]*Location{}
+	for _, exit := range n.Location.Container.Exits {
+		neighbour := n.Neighbours[exit.Destination]
+		neighbour.AddDescriptionChallenges(exit.TransmitChallenges)
+		neighbour.Filter(viewer)
+		if len(neighbour.Container.Descriptions) > 0 {
+			neighbours[exit.Destination] = n.Neighbours[exit.Destination]
+		}
+	}
+	n.Neighbours = neighbours
+}
+
+func (n *Neighbourhood) All() iter.Seq2[string, *Object] {
+	return func(yield func(string, *Object) bool) {
+		for k, v := range n.Location.All() {
+			if !yield(k, v) {
+				return
+			}
+		}
+		for _, loc := range n.Neighbours {
+			for k, v := range loc.All() {
+				if !yield(k, v) {
+					return
+				}
+			}
+		}
+	}
 }

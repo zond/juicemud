@@ -99,31 +99,52 @@ func (c *Connection) object() (*structs.Object, error) {
 	return c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
 }
 
-func (c *Connection) describeLong() error {
-	obj, err := c.object()
+func (c *Connection) scan() error {
+	viewer, neigh, err := c.game.loadNeighbourhoodOf(c.sess.Context(), c.user.Object)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	// TODO: Load neighbourhood and compute every detectable description and show them suitably.
-	neigh, err := c.game.loadNeighbourhood(c.sess.Context(), obj)
-	if err != nil {
+	neigh.Filter(viewer)
+	if err := c.describeLocation(neigh.Location); err != nil {
 		return juicemud.WithStack(err)
 	}
-	desc, exits, siblings := neigh.Location.Inspect(obj)
-	if desc != nil {
+	for _, exit := range neigh.Location.Container.Exits {
+		if neigh, found := neigh.Neighbours[exit.Destination]; found {
+			fmt.Fprintln(c.term)
+			fmt.Fprintln(c.term, "Via %s, you see:")
+			if err := c.describeLocation(neigh); err != nil {
+				return juicemud.WithStack(err)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Connection) describeLocation(loc *structs.Location) error {
+	if len(loc.Container.Descriptions) > 0 {
+		desc := loc.Container.Descriptions[0]
 		fmt.Fprintln(c.term, desc.Short)
 		fmt.Fprintln(c.term)
 		fmt.Fprintln(c.term, desc.Long)
 	}
-	if len(siblings) > 0 {
+	if len(loc.Content) > 0 {
 		fmt.Fprintln(c.term)
-		fmt.Fprintf(c.term, "%s here\n", lang.Enumerator{Active: true}.Do(siblings.Short()...))
+		fmt.Fprintf(c.term, "%s here\n", lang.Enumerator{Tense: lang.Present}.Do(loc.Content.Short()...))
 	}
-	if len(exits) > 0 {
+	if len(loc.Container.Exits) > 0 {
 		fmt.Fprintln(c.term)
-		fmt.Fprintln(c.term, exits.Short())
+		fmt.Fprintln(c.term, structs.Exits(loc.Container.Exits).Short())
 	}
 	return nil
+}
+
+func (c *Connection) look() error {
+	viewer, loc, err := c.game.loadLocationOf(c.sess.Context(), c.user.Object)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	loc.Filter(viewer)
+	return c.describeLocation(loc)
 }
 
 type command struct {
@@ -210,7 +231,13 @@ var (
 		{
 			names: m("l", "look"),
 			f: func(c *Connection, s string) error {
-				return c.describeLong()
+				return c.look()
+			},
+		},
+		{
+			names: m("scan"),
+			f: func(c *Connection, s string) error {
+				return c.scan()
 			},
 		},
 		{
@@ -379,7 +406,7 @@ func (c *Connection) Connect() error {
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := c.describeLong(); err != nil {
+	if err := c.look(); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return c.Process()

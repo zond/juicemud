@@ -85,7 +85,8 @@ type movement struct {
 }
 
 func (g *Game) emitMovementToNeighbourhood(ctx context.Context, bigM *storage.Movement) error {
-	n, err := g.loadNeighbourhood(ctx, bigM.Object)
+	// TODO(zond): Only neighbourhood entities that detect the object should get the events.
+	_, n, err := g.loadNeighbourhoodOf(ctx, bigM.Object.Id)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -105,10 +106,22 @@ func (g *Game) rerunSource(ctx context.Context, object *structs.Object) error {
 	return g.run(ctx, object, nil)
 }
 
-func (g *Game) loadLocation(ctx context.Context, id string) (*structs.Location, error) {
+func (g *Game) loadLocationOf(ctx context.Context, id string) (*structs.Object, *structs.Location, error) {
+	obj, err := g.storage.LoadObject(ctx, id, g.rerunSource)
+	if err != nil {
+		return nil, nil, juicemud.WithStack(err)
+	}
+	loc, err := g.loadLocation(ctx, obj.Location)
+	if err != nil {
+		return nil, nil, juicemud.WithStack(err)
+	}
+	return obj, loc, nil
+}
+
+func (g *Game) loadLocation(ctx context.Context, locationID string) (*structs.Location, error) {
 	result := &structs.Location{}
 	var err error
-	if result.Container, err = g.storage.LoadObject(ctx, id, g.rerunSource); err != nil {
+	if result.Container, err = g.storage.LoadObject(ctx, locationID, g.rerunSource); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	if result.Content, err = g.storage.LoadObjects(ctx, result.Container.Content, g.rerunSource); err != nil {
@@ -117,24 +130,24 @@ func (g *Game) loadLocation(ctx context.Context, id string) (*structs.Location, 
 	return result, nil
 }
 
-func (g *Game) loadNeighbourhood(ctx context.Context, object *structs.Object) (*structs.Neighbourhood, error) {
-	result := &structs.Neighbourhood{}
-	var err error
-	if result.Self, err = g.loadLocation(ctx, object.Id); err != nil {
-		return nil, juicemud.WithStack(err)
+func (g *Game) loadNeighbourhoodOf(ctx context.Context, id string) (*structs.Object, *structs.Neighbourhood, error) {
+	obj, err := g.storage.LoadObject(ctx, id, g.rerunSource)
+	if err != nil {
+		return nil, nil, juicemud.WithStack(err)
 	}
-	if result.Location, err = g.loadLocation(ctx, object.Location); err != nil {
-		return nil, juicemud.WithStack(err)
+	neighbourhood := &structs.Neighbourhood{}
+	if neighbourhood.Location, err = g.loadLocation(ctx, obj.Location); err != nil {
+		return nil, nil, juicemud.WithStack(err)
 	}
-	result.Neighbours = map[string]*structs.Location{}
-	for _, exit := range result.Location.Container.Exits {
+	neighbourhood.Neighbours = map[string]*structs.Location{}
+	for _, exit := range neighbourhood.Location.Container.Exits {
 		neighbour, err := g.loadLocation(ctx, exit.Destination)
 		if err != nil {
-			return nil, juicemud.WithStack(err)
+			return nil, nil, juicemud.WithStack(err)
 		}
-		result.Neighbours[exit.Destination] = neighbour
+		neighbourhood.Neighbours[exit.Destination] = neighbour
 	}
-	return result, nil
+	return obj, neighbourhood, nil
 }
 
 func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
@@ -230,11 +243,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		return nil
 	}
 	callbacks["getNeighbourhood"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		object, err := g.storage.LoadObject(ctx, object.Id, g.rerunSource)
-		if err != nil {
-			return rc.Throw("trying to load Object: %v", err)
-		}
-		neighbourhood, err := g.loadNeighbourhood(ctx, object)
+		_, neighbourhood, err := g.loadNeighbourhoodOf(ctx, object.Id)
 		if err != nil {
 			return rc.Throw("trying to load Object neighbourhood: %v", err)
 		}
