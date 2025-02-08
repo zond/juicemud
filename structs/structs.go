@@ -12,6 +12,9 @@ import (
 
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/game/skills"
+	"github.com/zond/juicemud/storage/dbm"
+
+	goccy "github.com/goccy/go-json"
 )
 
 var (
@@ -86,6 +89,20 @@ func (c *Challenge) Check(challenger *Object, targetID string) bool {
 
 type Challenges []Challenge
 
+func (c *Challenges) Merge(mergeChallenges map[string]Challenge) {
+	newChallenges := Challenges{}
+	for idx := range *c {
+		challenge := (*c)[idx]
+		if mergeChallenge, found := mergeChallenges[challenge.Skill]; found {
+			challenge.Level += mergeChallenge.Level
+			newChallenges = append(newChallenges, challenge)
+		} else {
+			newChallenges = append(newChallenges, mergeChallenge)
+		}
+	}
+	*c = newChallenges
+}
+
 func (c Challenges) Map() map[string]Challenge {
 	result := map[string]Challenge{}
 	for _, challenge := range c {
@@ -117,23 +134,12 @@ func (d Descriptions) Detect(viewer *Object, targetID string) *Description {
 	return nil
 }
 
-// AddDescriptionChallenges will merge the addedChalls into all descriptions
+// AddDescriptionChallenges will merge the addedChallenges into all descriptions
 // of the object using the skill name as key.
-func (o *Object) AddDescriptionChallenges(addedChalls Challenges) {
-	addedChallMap := addedChalls.Map()
+func (o *Object) AddDescriptionChallenges(addedChallenges Challenges) {
+	mergeChallenges := addedChallenges.Map()
 	for currDescIdx := range o.Descriptions {
-		currDesc := &o.Descriptions[currDescIdx]
-		replChalls := Challenges{}
-		for currChallIdx := range o.Descriptions[currDescIdx].Challenges {
-			currChall := currDesc.Challenges[currChallIdx]
-			if addedChall, found := addedChallMap[currChall.Skill]; found {
-				currChall.Level += addedChall.Level
-				replChalls = append(replChalls, currChall)
-			} else {
-				replChalls = append(replChalls, addedChall)
-			}
-		}
-		currDesc.Challenges = replChalls
+		(*Challenges)(&o.Descriptions[currDescIdx].Challenges).Merge(mergeChallenges)
 	}
 }
 
@@ -224,6 +230,50 @@ func (l *Location) All() iter.Seq2[string, *Object] {
 	}
 }
 
+type Detection struct {
+	Subject *Object
+	Object  *Object
+}
+
+// Detections yields each detection event of target by container and content, considering added challenges.
+func (l *Location) Detections(target *Object, addedChallenges Challenges) iter.Seq2[*Detection, error] {
+	return func(yield func(*Detection, error) bool) {
+		for _, viewer := range l.All() {
+			if viewer.Id != target.Id {
+				clone, err := dbm.Clone(target)
+				if err != nil {
+					yield(nil, juicemud.WithStack(err))
+				} else {
+					clone.AddDescriptionChallenges(addedChallenges)
+					clone.Filter(viewer)
+					if len(clone.Descriptions) > 0 {
+						yield(&Detection{Subject: viewer, Object: clone}, nil)
+					}
+				}
+			}
+		}
+	}
+}
+
+// Detections yeilds each detection event of target in the location, and in all neighbours - with neighbour-exit-to-location
+// transmit challenges taken into account.
+func (n *Neighbourhood) Detections(target *Object) iter.Seq2[*Detection, error] {
+	return func(yield func(*Detection, error) bool) {
+		for det, err := range n.Location.Detections(target, nil) {
+			yield(det, err)
+		}
+		for _, neighbour := range n.Neighbours {
+			for _, exit := range neighbour.Container.Exits {
+				if exit.Destination == n.Location.Container.Id {
+					for det, err := range neighbour.Detections(target, Challenges(exit.TransmitChallenges)) {
+						yield(det, err)
+					}
+				}
+			}
+		}
+	}
+}
+
 type Neighbourhood struct {
 	Location   *Location
 	Neighbours map[string]*Location
@@ -261,4 +311,58 @@ func (n *Neighbourhood) All() iter.Seq2[string, *Object] {
 			}
 		}
 	}
+}
+
+func (c *Call) Call() (*Call, error) {
+	return c, nil
+}
+
+type Caller interface {
+	Call() (*Call, error)
+}
+
+type AnyCall struct {
+	Name    string
+	Tag     string
+	Content any
+}
+
+func (a *AnyCall) Call() (*Call, error) {
+	js, err := goccy.Marshal(a.Content)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return &Call{
+		Name:    a.Name,
+		Tag:     a.Tag,
+		Message: string(js),
+	}, nil
+}
+
+func (e *Event) Event() (*Event, error) {
+	return e, nil
+}
+
+type Eventer interface {
+	Event() (*Event, error)
+}
+
+type AnyEvent struct {
+	At     Timestamp
+	Object string
+	Caller Caller
+	Key    string
+}
+
+func (a *AnyEvent) Event() (*Event, error) {
+	call, err := a.Caller.Call()
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return &Event{
+		At:     uint64(a.At),
+		Object: a.Object,
+		Call:   *call,
+		Key:    a.Key,
+	}, nil
 }

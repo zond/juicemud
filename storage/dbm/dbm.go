@@ -44,6 +44,17 @@ type Serializable[T any] interface {
 	*T
 }
 
+func Clone[T any, S Serializable[T]](t *T) (*T, error) {
+	s := S(t)
+	b := make([]byte, s.Size())
+	s.Marshal(b)
+	result := new(T)
+	if err := S(result).Unmarshal(b); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return result, nil
+}
+
 type TypeHash[T any, S Serializable[T]] struct {
 	Hash
 }

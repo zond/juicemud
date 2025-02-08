@@ -60,12 +60,17 @@ func (q *Queue) Close() {
 	q.cond.Broadcast()
 }
 
-func (q *Queue) Push(ctx context.Context, ev *structs.Event) error {
+func (q *Queue) Push(ctx context.Context, eventer structs.Eventer) error {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 
 	if q.closed {
 		return errors.Errorf("queue is closed")
+	}
+
+	ev, err := eventer.Event()
+	if err != nil {
+		return juicemud.WithStack(err)
 	}
 
 	ev.CreateKey()

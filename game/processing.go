@@ -14,8 +14,6 @@ import (
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 	"rogchap.com/v8go"
-
-	goccy "github.com/goccy/go-json"
 )
 
 const (
@@ -42,21 +40,6 @@ func addGetSetPair(name string, source any, callbacks js.Callbacks) {
 	}
 }
 
-func (g *Game) emitAny(ctx context.Context, at structs.Timestamp, id string, name string, message any) error {
-	b, err := goccy.Marshal(message)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	return juicemud.WithStack(g.emitJSON(ctx, at, id, name, string(b)))
-}
-
-func (g *Game) emitJSONIf(ctx context.Context, at structs.Timestamp, object *structs.Object, name string, json string) error {
-	if object.HasCallback(name, emitEventTag) {
-		return juicemud.WithStack(g.emitJSON(ctx, at, object.Id, name, json))
-	}
-	return nil
-}
-
 func (g *Game) emitJSON(ctx context.Context, at structs.Timestamp, id string, name string, json string) error {
 	return juicemud.WithStack(g.storage.Queue().Push(ctx, &structs.Event{
 		At:     uint64(at),
@@ -69,37 +52,83 @@ func (g *Game) emitJSON(ctx context.Context, at structs.Timestamp, id string, na
 	}))
 }
 
-func (g *Game) emitJSONToNeighbourhoodIf(ctx context.Context, at structs.Timestamp, n *structs.Neighbourhood, name string, json string) error {
-	for _, obj := range n.All() {
-		if err := g.emitJSONIf(ctx, at, obj, name, json); err != nil {
-			return juicemud.WithStack(err)
-		}
-	}
-	return nil
-}
-
 type movement struct {
-	Object      string
+	Object      *structs.Object
 	Source      string
 	Destination string
 }
 
-func (g *Game) emitMovementToNeighbourhood(ctx context.Context, bigM *storage.Movement) error {
-	// TODO(zond): Only neighbourhood entities that detect the object should get the events.
-	_, n, err := g.loadNeighbourhoodOf(ctx, bigM.Object.Id)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	json, err := goccy.Marshal(&movement{
-		Object:      bigM.Object.Id,
-		Source:      bigM.Source,
-		Destination: bigM.Destination,
-	})
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
+func (g *Game) emitMovement(ctx context.Context, bigM *storage.Movement) error {
 	at := g.storage.Queue().After(defaultReactionDelay)
-	return juicemud.WithStack(g.emitJSONToNeighbourhoodIf(ctx, at, n, movementEventType, string(json)))
+
+	firstDetections := map[string]*structs.Object{}
+
+	fromNeigh, err := g.loadNeighbourhoodAt(ctx, bigM.Source)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	fromDetectors := juicemud.Set[string]{}
+	for det, err := range fromNeigh.Detections(bigM.Object) {
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		if _, found := firstDetections[det.Subject.Id]; !found {
+			firstDetections[det.Subject.Id] = det.Object
+		}
+		fromDetectors.Set(det.Subject.Id)
+	}
+
+	toNeigh, err := g.loadNeighbourhoodAt(ctx, bigM.Destination)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	toDetectors := juicemud.Set[string]{}
+	for det, err := range toNeigh.Detections(bigM.Object) {
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		if _, found := firstDetections[det.Subject.Id]; !found {
+			firstDetections[det.Subject.Id] = det.Object
+		}
+		toDetectors.Set(det.Subject.Id)
+	}
+
+	bothDetectors := fromDetectors.Intersection(toDetectors)
+	fromDetectors.DelAll(toDetectors)
+	toDetectors.DelAll(fromDetectors)
+
+	pushFunc := func(detectors juicemud.Set[string], source string, destination string) error {
+		for detectorID := range detectors {
+			if err := g.storage.Queue().Push(ctx, &structs.AnyEvent{
+				At:     at,
+				Object: detectorID,
+				Caller: &structs.AnyCall{
+					Name: movementEventType,
+					Tag:  emitEventTag,
+					Content: &movement{
+						Object:      firstDetections[detectorID],
+						Source:      source,
+						Destination: destination,
+					},
+				},
+			}); err != nil {
+				return juicemud.WithStack(err)
+			}
+		}
+		return nil
+	}
+
+	if err := pushFunc(bothDetectors, bigM.Source, bigM.Destination); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := pushFunc(fromDetectors, bigM.Source, ""); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := pushFunc(toDetectors, "", bigM.Destination); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	return nil
 }
 
 func (g *Game) rerunSource(ctx context.Context, object *structs.Object) error {
@@ -130,24 +159,35 @@ func (g *Game) loadLocation(ctx context.Context, locationID string) (*structs.Lo
 	return result, nil
 }
 
+// loadNeighbourhoodOf returns the object, and the neighbourhood (location, location neighborus) of it.
 func (g *Game) loadNeighbourhoodOf(ctx context.Context, id string) (*structs.Object, *structs.Neighbourhood, error) {
 	obj, err := g.storage.LoadObject(ctx, id, g.rerunSource)
 	if err != nil {
 		return nil, nil, juicemud.WithStack(err)
 	}
-	neighbourhood := &structs.Neighbourhood{}
-	if neighbourhood.Location, err = g.loadLocation(ctx, obj.Location); err != nil {
+	neigh, err := g.loadNeighbourhoodAt(ctx, obj.Location)
+	if err != nil {
 		return nil, nil, juicemud.WithStack(err)
+	}
+	return obj, neigh, nil
+}
+
+// loadNeighbourhoodAt returns the location and location neighbours.
+func (g *Game) loadNeighbourhoodAt(ctx context.Context, loc string) (*structs.Neighbourhood, error) {
+	neighbourhood := &structs.Neighbourhood{}
+	var err error
+	if neighbourhood.Location, err = g.loadLocation(ctx, loc); err != nil {
+		return nil, juicemud.WithStack(err)
 	}
 	neighbourhood.Neighbours = map[string]*structs.Location{}
 	for _, exit := range neighbourhood.Location.Container.Exits {
 		neighbour, err := g.loadLocation(ctx, exit.Destination)
 		if err != nil {
-			return nil, nil, juicemud.WithStack(err)
+			return nil, juicemud.WithStack(err)
 		}
 		neighbourhood.Neighbours[exit.Destination] = neighbour
 	}
-	return obj, neighbourhood, nil
+	return neighbourhood, nil
 }
 
 func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
@@ -255,53 +295,26 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	}
 }
 
-type Caller interface {
-	Call() (*structs.Call, error)
-}
-
-type AnyCall struct {
-	Name    string
-	Tag     string
-	Content any
-}
-
-type JSCall structs.Call
-
-func (j JSCall) Call() (*structs.Call, error) {
-	return (*structs.Call)(&j), nil
-}
-
-func (a *AnyCall) Call() (*structs.Call, error) {
-	js, err := goccy.Marshal(a.Content)
-	if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	return &structs.Call{
-		Name:    a.Name,
-		Tag:     a.Tag,
-		Message: string(js),
-	}, nil
-}
-
 /*
 Some events we should send to objects:
 - moved: Object changed Location.
 - received: Object got new Content.
 - transmitted: Object lost Content.
 */
-func (g *Game) run(ctx context.Context, object *structs.Object, caller Caller) error {
-	var call *structs.Call
+func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller) error {
 	if caller != nil {
-		var err error
-		if call, err = caller.Call(); err != nil {
-			return juicemud.WithStack(err)
-		}
-		t, err := g.storage.SourceModTime(ctx, object.SourcePath)
+		call, err := caller.Call()
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		if object.SourceModTime >= t && !object.HasCallback(call.Name, call.Tag) {
-			return nil
+		if call != nil {
+			t, err := g.storage.SourceModTime(ctx, object.SourcePath)
+			if err != nil {
+				return juicemud.WithStack(err)
+			}
+			if object.SourceModTime >= t && !object.HasCallback(call.Name, call.Tag) {
+				return nil
+			}
 		}
 	}
 
@@ -321,7 +334,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller Caller) e
 		Callbacks: callbacks,
 		Console:   consoleByObjectID.Get(sid),
 	}
-	res, err := target.Run(ctx, call, 200*time.Millisecond)
+	res, err := target.Run(ctx, caller, 200*time.Millisecond)
 	if err != nil {
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {
@@ -335,7 +348,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller Caller) e
 	return nil
 }
 
-func (g *Game) runSave(ctx context.Context, object *structs.Object, caller Caller) error {
+func (g *Game) runSave(ctx context.Context, object *structs.Object, caller structs.Caller) error {
 	oldLocation := object.Location
 	if err := g.run(ctx, object, caller); err != nil {
 		return juicemud.WithStack(err)
@@ -343,7 +356,7 @@ func (g *Game) runSave(ctx context.Context, object *structs.Object, caller Calle
 	return juicemud.WithStack(g.storage.StoreObject(ctx, &oldLocation, object))
 }
 
-func (g *Game) loadRunSave(ctx context.Context, id string, caller Caller) error {
+func (g *Game) loadRunSave(ctx context.Context, id string, caller structs.Caller) error {
 	sid := string(id)
 	jsContextLocks.Lock(sid)
 	defer jsContextLocks.Unlock(sid)

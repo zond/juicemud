@@ -20,6 +20,53 @@ var (
 	mainContect contextKey = 0
 )
 
+type Set[K comparable] map[K]struct{}
+
+func (s Set[K]) Set(k K) {
+	s[k] = struct{}{}
+}
+
+func (s Set[K]) Del(k K) {
+	delete(s, k)
+}
+
+func (s Set[K]) DelAll(o Set[K]) {
+	for k := range o {
+		s.Del(k)
+	}
+}
+
+func (s Set[K]) SetAll(o Set[K]) {
+	for k := range o {
+		s.Set(k)
+	}
+}
+
+func (s Set[K]) Union(o Set[K]) Set[K] {
+	result := Set[K]{}
+	result.SetAll(s)
+	result.SetAll(o)
+	return result
+}
+
+func (s Set[K]) Intersection(o Set[K]) Set[K] {
+	result := Set[K]{}
+	if len(s) > len(o) {
+		for k := range o {
+			if _, found := s[k]; found {
+				result[k] = struct{}{}
+			}
+		}
+	} else {
+		for k := range s {
+			if _, found := o[k]; found {
+				result[k] = struct{}{}
+			}
+		}
+	}
+	return result
+}
+
 func IsMainContext(ctx context.Context) bool {
 	val := ctx.Value(mainContect)
 	if val == nil {

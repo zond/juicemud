@@ -117,16 +117,16 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	}
 	go func() {
 		log.Panic(g.storage.StartQueue(ctx, func(ctx context.Context, ev *structs.Event) {
-			var call Caller
+			var call structs.Caller
 			if ev.Call.Name != "" {
-				call = JSCall(ev.Call)
+				call = &ev.Call
 			}
 			go func() {
 				if err := g.loadRunSave(ctx, ev.Object, call); err != nil {
 					log.Printf("trying to execute %+v: %v", ev, err)
 				}
 			}()
-		}, g.emitMovementToNeighbourhood))
+		}, g.emitMovement))
 	}()
 	bootJS, _, err := g.storage.LoadSource(ctx, bootSource)
 	if err != nil {

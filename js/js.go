@@ -263,7 +263,7 @@ func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, erro
 	}
 }
 
-func (t Target) Run(ctx context.Context, call *structs.Call, timeout time.Duration) (*Result, error) {
+func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Duration) (*Result, error) {
 	m := <-machines
 	defer func() { machines <- m }()
 
@@ -283,6 +283,15 @@ func (t Target) Run(ctx context.Context, call *structs.Call, timeout time.Durati
 	if _, err := rc.withTimeout(ctx, func() (*v8go.Value, error) {
 		return rc.m.vctx.RunScript(t.Source, t.Origin)
 	}, &timeout); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+
+	if caller == nil {
+		return rc.collectResult(nil)
+	}
+
+	call, err := caller.Call()
+	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 

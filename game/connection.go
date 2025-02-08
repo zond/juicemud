@@ -395,7 +395,7 @@ func (c *Connection) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := c.game.loadRunSave(c.sess.Context(), c.user.Object, &AnyCall{
+	if err := c.game.loadRunSave(c.sess.Context(), c.user.Object, &structs.AnyCall{
 		Name: connectedEventType,
 		Tag:  emitEventTag,
 		Content: map[string]any{
