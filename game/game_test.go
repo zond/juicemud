@@ -108,7 +108,7 @@ func BenchmarkLoadNeighbourhood(b *testing.B) {
 		populate(b, g, neighbour4, 5)
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if _, err := g.loadNeighbourhood(context.Background(), self); err != nil {
+			if _, _, err := g.loadDeepNeighbourhoodOf(context.Background(), self.Id); err != nil {
 				b.Fatal(err)
 			}
 		}

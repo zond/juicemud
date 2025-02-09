@@ -32,19 +32,19 @@ func TestQueue(t *testing.T) {
 			runWG.Done()
 		}()
 		if err := q.Push(ctx, &structs.Event{
-			At:     int64(q.After(100 * time.Millisecond)),
+			At:     uint64(q.After(100 * time.Millisecond)),
 			Object: "a",
 		}); err != nil {
 			t.Fatal(err)
 		}
 		if err := q.Push(ctx, &structs.Event{
-			At:     int64(q.After(10 * time.Millisecond)),
+			At:     uint64(q.After(10 * time.Millisecond)),
 			Object: "b",
 		}); err != nil {
 			t.Fatal(err)
 		}
 		if err := q.Push(ctx, &structs.Event{
-			At:     int64(q.After(200 * time.Millisecond)),
+			At:     uint64(q.After(200 * time.Millisecond)),
 			Object: "c",
 		}); err != nil {
 			t.Fatal(err)

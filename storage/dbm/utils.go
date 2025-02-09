@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zond/juicemud/structs"
 )
 
 func withFile(t testing.TB, suffix string, f func(string)) {
@@ -28,7 +30,7 @@ func WithHash(t testing.TB, f func(Hash)) {
 	})
 }
 
-func WithTypeHash[T any, S Serializable[T]](t testing.TB, f func(TypeHash[T, S])) {
+func WithTypeHash[T any, S structs.Serializable[T]](t testing.TB, f func(TypeHash[T, S])) {
 	t.Helper()
 	withFile(t, ".tkh", func(path string) {
 		dbm, err := OpenTypeHash[T, S](path)
@@ -51,7 +53,7 @@ func WithTree(t testing.TB, f func(Tree)) {
 	})
 }
 
-func WithTypeTree[T any, S Serializable[T]](t testing.TB, f func(TypeTree[T, S])) {
+func WithTypeTree[T any, S structs.Serializable[T]](t testing.TB, f func(TypeTree[T, S])) {
 	t.Helper()
 	t.Helper()
 	withFile(t, ".tkt", func(path string) {

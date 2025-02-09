@@ -2,7 +2,6 @@ package game
 
 import (
 	"crypto/subtle"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/buildkite/shellwords"
 	"github.com/gliderlabs/ssh"
+	"github.com/pkg/errors"
 	"github.com/rodaine/table"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/digest"
@@ -28,8 +28,8 @@ var (
 )
 
 var (
-	envByObjectID     = juicemud.NewSyncMap[string, *Connection]()
-	consoleByObjectID = juicemud.NewSyncMap[string, *Fanout]()
+	connectionByObjectID = juicemud.NewSyncMap[string, *Connection]()
+	consoleByObjectID    = juicemud.NewSyncMap[string, *Fanout]()
 )
 
 func addConsole(id string, term *term.Terminal) {
@@ -96,7 +96,7 @@ func (c *Connection) SelectReturn(prompt string, options []string) (string, erro
 }
 
 func (c *Connection) scan() error {
-	viewer, neigh, err := c.game.loadNeighbourhoodOf(c.sess.Context(), c.user.Object)
+	viewer, neigh, err := c.game.loadDeepNeighbourhoodOf(c.sess.Context(), c.user.Object)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -107,10 +107,36 @@ func (c *Connection) scan() error {
 	for _, exit := range neigh.Location.Container.Exits {
 		if neigh, found := neigh.Neighbours[exit.Destination]; found {
 			fmt.Fprintln(c.term)
-			fmt.Fprintln(c.term, "Via %s, you see:")
+			fmt.Fprintf(c.term, "Via exit %s, you see:\n", exit.Name())
 			if err := c.describeLocation(neigh); err != nil {
 				return juicemud.WithStack(err)
 			}
+		}
+	}
+	return nil
+}
+
+func (c *Connection) renderMovement(m *movement) error {
+	_, neigh, err := c.game.loadNeighbourhoodOf(c.sess.Context(), c.user.Object)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if m.Source != "" {
+		if exit, found := neigh.FindLocation(m.Source); !found {
+			return errors.Errorf("renderMovement got movement from unknown source: %+v", m)
+		} else if exit != nil {
+			fmt.Fprintf(c.term, "Via exit %s, you see %v leave.\n", exit.Name(), m.Object.Name())
+		} else {
+			fmt.Fprintf(c.term, "%v leaves.\n", m.Object.Name())
+		}
+	}
+	if m.Destination != "" {
+		if exit, found := neigh.FindLocation(m.Destination); !found {
+			return errors.Errorf("renderMovement got movement to unknown destination: %+v", m)
+		} else if exit != nil {
+			fmt.Fprintf(c.term, "Via exit %s, you see %v arrive.\n", exit.Name(), m.Object.Name())
+		} else {
+			fmt.Fprintf(c.term, "%v arrives.\n", m.Object.Name())
 		}
 	}
 	return nil
@@ -232,6 +258,7 @@ func (c *Connection) commands() []command {
 				if len(parts) != 2 {
 					fmt.Fprintln(c.term, "usage: /create [path]")
 				}
+
 				return nil
 			},
 		},
@@ -253,7 +280,7 @@ func (c *Connection) commands() []command {
 			wizard: true,
 			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, target *structs.Object) error {
 				addConsole(target.Id, c.term)
-				fmt.Fprintln(c.term, "#%s/%s connected to console", target.Name(), target.Id)
+				fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), target.Id)
 				return nil
 			}),
 		},
@@ -262,7 +289,7 @@ func (c *Connection) commands() []command {
 			wizard: true,
 			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, target *structs.Object) error {
 				delConsole(target.Id, c.term)
-				fmt.Fprintln(c.term, "#%s/%s disconnected from console", target.Name(), target.Id)
+				fmt.Fprintf(c.term, "#%s/%s disconnected from console\n", target.Name(), target.Id)
 				return nil
 			}),
 		},
@@ -438,8 +465,8 @@ func (c *Connection) Process() error {
 	if c.user == nil {
 		return errors.New("can't process without user")
 	}
-	envByObjectID.Set(string(c.user.Object), c)
-	defer envByObjectID.Del(string(c.user.Object))
+	connectionByObjectID.Set(string(c.user.Object), c)
+	defer connectionByObjectID.Del(string(c.user.Object))
 	for {
 		line, err := c.term.ReadLine()
 		if err != nil {

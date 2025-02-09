@@ -17,7 +17,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/game/skills"
-	"github.com/zond/juicemud/storage/dbm"
 
 	goccy "github.com/goccy/go-json"
 )
@@ -43,6 +42,31 @@ func NextObjectID() (string, error) {
 		return "", juicemud.WithStack(err)
 	}
 	return encoding.EncodeToString(result), nil
+}
+
+type Serializable[T any] interface {
+	Marshal([]byte)
+	Unmarshal([]byte) error
+	Size() int
+	*T
+}
+
+func Clone[T any, S Serializable[T]](t *T) (*T, error) {
+	s := S(t)
+	b := make([]byte, s.Size())
+	s.Marshal(b)
+	result := new(T)
+	if err := S(result).Unmarshal(b); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return result, nil
+}
+
+func (e *Exit) Name() string {
+	if len(e.Descriptions) == 0 {
+		return "nameless"
+	}
+	return e.Descriptions[0].Short
 }
 
 func (o *Object) Name() string {
@@ -293,7 +317,7 @@ func (l *Location) Detections(target *Object, addedChallenges Challenges) iter.S
 	return func(yield func(*Detection, error) bool) {
 		for _, viewer := range l.All() {
 			if viewer.Id != target.Id {
-				clone, err := dbm.Clone(target)
+				clone, err := Clone(target)
 				if err != nil {
 					yield(nil, juicemud.WithStack(err))
 				} else {
@@ -310,7 +334,7 @@ func (l *Location) Detections(target *Object, addedChallenges Challenges) iter.S
 
 // Detections yeilds each detection event of target in the location, and in all neighbours - with neighbour-exit-to-location
 // transmit challenges taken into account.
-func (n *Neighbourhood) Detections(target *Object) iter.Seq2[*Detection, error] {
+func (n *DeepNeighbourhood) Detections(target *Object) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
 		for det, err := range n.Location.Detections(target, nil) {
 			yield(det, err)
@@ -328,6 +352,25 @@ func (n *Neighbourhood) Detections(target *Object) iter.Seq2[*Detection, error] 
 }
 
 type Neighbourhood struct {
+	Location   *Object
+	Neighbours map[string]*Object
+}
+
+// FindLocation returns the path leading to locID in this neighbourhood, and whether it was found.
+// Empty path means the locID is the center of the neighbourhood (Neighbourhood.Location).
+func (n *Neighbourhood) FindLocation(locID string) (*Exit, bool) {
+	if n.Location.Id == locID {
+		return nil, true
+	}
+	for _, exit := range n.Location.Exits {
+		if neigh, found := n.Neighbours[exit.Destination]; found && neigh.Id == locID {
+			return &exit, true
+		}
+	}
+	return nil, false
+}
+
+type DeepNeighbourhood struct {
 	Location   *Location
 	Neighbours map[string]*Location
 }
@@ -335,7 +378,7 @@ type Neighbourhood struct {
 // Filter will filter the location for the viewer, then all neighbours that still have exits.
 // The neighbours will also be filtered after the exit challenges are added, and any neighbours
 // without descriptions will not be added.
-func (n *Neighbourhood) Filter(viewer *Object) {
+func (n *DeepNeighbourhood) Filter(viewer *Object) {
 	n.Location.Filter(viewer)
 	neighbours := map[string]*Location{}
 	for _, exit := range n.Location.Container.Exits {
@@ -349,7 +392,7 @@ func (n *Neighbourhood) Filter(viewer *Object) {
 	n.Neighbours = neighbours
 }
 
-func (n *Neighbourhood) All() iter.Seq2[string, *Object] {
+func (n *DeepNeighbourhood) All() iter.Seq2[string, *Object] {
 	return func(yield func(string, *Object) bool) {
 		for k, v := range n.Location.All() {
 			if !yield(k, v) {

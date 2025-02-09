@@ -8,6 +8,7 @@ import (
 
 	"github.com/estraier/tkrzw-go"
 	"github.com/zond/juicemud"
+	"github.com/zond/juicemud/structs"
 )
 
 type Hash struct {
@@ -45,25 +46,7 @@ func (h Hash) Del(k string) error {
 	return nil
 }
 
-type Serializable[T any] interface {
-	Marshal([]byte)
-	Unmarshal([]byte) error
-	Size() int
-	*T
-}
-
-func Clone[T any, S Serializable[T]](t *T) (*T, error) {
-	s := S(t)
-	b := make([]byte, s.Size())
-	s.Marshal(b)
-	result := new(T)
-	if err := S(result).Unmarshal(b); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	return result, nil
-}
-
-type TypeHash[T any, S Serializable[T]] struct {
+type TypeHash[T any, S structs.Serializable[T]] struct {
 	Hash
 }
 
@@ -139,7 +122,7 @@ func (h TypeHash[T, S]) SProc(key string, fun func(string, *T) (*T, error)) SPro
 	}
 }
 
-type SProc[T any, S Serializable[T]] struct {
+type SProc[T any, S structs.Serializable[T]] struct {
 	K string
 	F func(string, *T) (*T, error)
 }
@@ -220,7 +203,7 @@ type Tree struct {
 	Hash
 }
 
-type TypeTree[T any, S Serializable[T]] struct {
+type TypeTree[T any, S structs.Serializable[T]] struct {
 	TypeHash[T, S]
 }
 
@@ -258,7 +241,7 @@ func OpenHash(path string) (Hash, error) {
 	return Hash{dbm, &sync.RWMutex{}}, nil
 }
 
-func OpenTypeHash[T any, S Serializable[T]](path string) (TypeHash[T, S], error) {
+func OpenTypeHash[T any, S structs.Serializable[T]](path string) (TypeHash[T, S], error) {
 	h, err := OpenHash(path)
 	if err != nil {
 		return TypeHash[T, S]{}, juicemud.WithStack(err)
@@ -279,7 +262,7 @@ func OpenTree(path string) (Tree, error) {
 	return Tree{Hash{dbm, &sync.RWMutex{}}}, nil
 }
 
-func OpenTypeTree[T any, S Serializable[T]](path string) (TypeTree[T, S], error) {
+func OpenTypeTree[T any, S structs.Serializable[T]](path string) (TypeTree[T, S], error) {
 	t, err := OpenTree(path)
 	if err != nil {
 		return TypeTree[T, S]{}, juicemud.WithStack(err)
