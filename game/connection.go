@@ -2,6 +2,7 @@ package game
 
 import (
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/buildkite/shellwords"
 	"github.com/gliderlabs/ssh"
-	"github.com/pkg/errors"
 	"github.com/rodaine/table"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/digest"
@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	OperationAborted = errors.New("operation aborted")
+	ErrOperationAborted = errors.New("operation aborted")
 )
 
 var (
@@ -479,7 +479,7 @@ func (c *Connection) Connect() error {
 		})
 	}
 	var err error
-	for err = sel(); errors.Is(err, OperationAborted); err = sel() {
+	for err = sel(); errors.Is(err, ErrOperationAborted); err = sel() {
 	}
 	if err != nil {
 		return juicemud.WithStack(err)
@@ -511,7 +511,7 @@ func (c *Connection) loginUser() error {
 			return err
 		}
 		if username == "abort" {
-			return juicemud.WithStack(OperationAborted)
+			return juicemud.WithStack(ErrOperationAborted)
 		}
 		if user, err = c.game.storage.LoadUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintln(c.term, "Username not found!")
@@ -547,7 +547,7 @@ func (c *Connection) createUser() error {
 			return err
 		}
 		if username == "abort" {
-			return juicemud.WithStack(OperationAborted)
+			return juicemud.WithStack(ErrOperationAborted)
 		}
 		if _, err = c.game.storage.LoadUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
 			user = &storage.User{
@@ -576,7 +576,7 @@ func (c *Connection) createUser() error {
 				return err
 			}
 			if selection == "abort" {
-				return juicemud.WithStack(OperationAborted)
+				return juicemud.WithStack(ErrOperationAborted)
 			} else if selection == "y" {
 				user.PasswordHash = digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
 				c.user = user

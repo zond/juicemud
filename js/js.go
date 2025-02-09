@@ -247,6 +247,7 @@ type result struct {
 
 func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, error), timeout *time.Duration) (*v8go.Value, error) {
 	results := make(chan result, 1)
+	thisTimeout := *timeout
 	go func() {
 		t := time.Now()
 		val, err := f()
@@ -257,7 +258,7 @@ func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, erro
 	select {
 	case res := <-results:
 		return res.value, juicemud.WithStack(res.err)
-	case <-time.After(*timeout):
+	case <-time.After(thisTimeout):
 		rc.m.iso.TerminateExecution()
 		return nil, juicemud.WithStack(ErrTimeout)
 	}

@@ -4,16 +4,20 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/estraier/tkrzw-go"
 	"github.com/zond/juicemud"
 )
 
 type Hash struct {
-	dbm *tkrzw.DBM
+	dbm   *tkrzw.DBM
+	mutex *sync.RWMutex
 }
 
 func (h Hash) Get(k string) ([]byte, error) {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
 	b, stat := h.dbm.Get(k)
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
 		return nil, juicemud.WithStack(os.ErrNotExist)
@@ -24,6 +28,8 @@ func (h Hash) Get(k string) ([]byte, error) {
 }
 
 func (h Hash) Set(k string, v []byte, overwrite bool) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
 	if stat := h.dbm.Set(k, v, overwrite); !stat.IsOK() {
 		return juicemud.WithStack(stat)
 	}
@@ -31,6 +37,8 @@ func (h Hash) Set(k string, v []byte, overwrite bool) error {
 }
 
 func (h Hash) Del(k string) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
 	if stat := h.dbm.Remove(k); !stat.IsOK() {
 		return juicemud.WithStack(stat)
 	}
@@ -60,6 +68,8 @@ type TypeHash[T any, S Serializable[T]] struct {
 }
 
 func (h TypeHash[T, S]) Get(k string) (*T, error) {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
 	b, stat := h.dbm.Get(k)
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
 		return nil, juicemud.WithStack(os.ErrNotExist)
@@ -74,6 +84,8 @@ func (h TypeHash[T, S]) Get(k string) (*T, error) {
 }
 
 func (h TypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
 	ids := make([]string, 0, len(keys))
 	for key := range keys {
 		ids = append(ids, key)
@@ -91,6 +103,8 @@ func (h TypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
 }
 
 func (h TypeHash[T, S]) Set(k string, v *T, overwrite bool) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
 	s := S(v)
 	b := make([]byte, s.Size())
 	s.Marshal(b)
@@ -157,6 +171,8 @@ func (j SProc[T, S]) Proc(k string, v []byte) ([]byte, error) {
 }
 
 func (h Hash) Proc(pairs []Proc, write bool) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
 	outputs := make([][]byte, len(pairs))
 	procs := make([]tkrzw.KeyProcPair, len(pairs)*2)
 	var abort error
@@ -209,6 +225,8 @@ type TypeTree[T any, S Serializable[T]] struct {
 }
 
 func (t TypeTree[T, S]) First() (*T, error) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
 	iter := t.dbm.MakeIterator()
 	defer iter.Destruct()
 	if stat := iter.First(); !stat.IsOK() {
@@ -237,7 +255,7 @@ func OpenHash(path string) (Hash, error) {
 	if !stat.IsOK() {
 		return Hash{}, juicemud.WithStack(stat)
 	}
-	return Hash{dbm}, nil
+	return Hash{dbm, &sync.RWMutex{}}, nil
 }
 
 func OpenTypeHash[T any, S Serializable[T]](path string) (TypeHash[T, S], error) {
@@ -258,7 +276,7 @@ func OpenTree(path string) (Tree, error) {
 	if !stat.IsOK() {
 		return Tree{}, juicemud.WithStack(stat)
 	}
-	return Tree{Hash{dbm}}, nil
+	return Tree{Hash{dbm, &sync.RWMutex{}}}, nil
 }
 
 func OpenTypeTree[T any, S Serializable[T]](path string) (TypeTree[T, S], error) {

@@ -2,6 +2,7 @@ package game
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gliderlabs/ssh"
-	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/storage"
