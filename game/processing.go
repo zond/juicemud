@@ -16,6 +16,10 @@ import (
 	"rogchap.com/v8go"
 )
 
+var (
+	jsContextLocks = juicemud.NewSyncMap[string, bool]()
+)
+
 const (
 	defaultReactionDelay = 100 * time.Millisecond
 )

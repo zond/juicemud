@@ -31,10 +31,12 @@ const (
 	userSource    = "/user.js"
 	genesisSource = "/genesis.js"
 	bootSource    = "/boot.js"
+	emptySource   = "/empty.js"
 )
 
 const (
 	genesisID = "genesis"
+	emptyID   = ""
 )
 
 const (
@@ -67,11 +69,20 @@ setDescriptions([
   },
 ]);
 `,
+		emptySource: "// This code runs the top level container of all content.",
 	}
 	initialObjects = map[string]func(*structs.Object) error{
 		genesisID: func(o *structs.Object) error {
 			o.Id = genesisID
+			o.Location = emptyID
 			o.SourcePath = genesisSource
+			return nil
+		},
+		emptyID: func(o *structs.Object) error {
+			o.Id = emptyID
+			o.Location = emptyID
+			o.Content = map[string]bool{genesisID: true}
+			o.SourcePath = emptySource
 			return nil
 		},
 	}

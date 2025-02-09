@@ -253,7 +253,7 @@ func OpenTree(path string) (Tree, error) {
 	stat := dbm.Open(fmt.Sprintf("%s.tkt", path), true, map[string]string{
 		"update_mode":      "UPDATE_APPENDING",
 		"record_comp_mode": "RECORD_COMP_NONE",
-		"key_comparator":   "SignedBigEndianKeyComparator",
+		"key_comparator":   "LexicalKeyComparator",
 	})
 	if !stat.IsOK() {
 		return Tree{}, juicemud.WithStack(stat)

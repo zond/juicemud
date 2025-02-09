@@ -217,6 +217,17 @@ func TestProc(t *testing.T) {
 	})
 }
 
+func TestStructTree(t *testing.T) {
+	WithTypeTree(t, func(st TypeTree[TestObj, *TestObj]) {
+		if err := st.Set(string([]byte{24, 34, 149, 40, 93, 3, 23, 184, 24, 34, 149, 40, 87, 33, 87, 16}), &TestObj{I: 10}, false); err != nil {
+			t.Fatal(fmt.Errorf("Set 1: %w", err))
+		}
+		if err := st.Set(string([]byte{24, 34, 149, 40, 93, 3, 23, 184, 24, 34, 149, 40, 87, 34, 77, 40}), &TestObj{I: 10}, false); err != nil {
+			t.Fatal(fmt.Errorf("Set 2: %w", err))
+		}
+	})
+}
+
 func TestFirst(t *testing.T) {
 	WithTypeTree(t, func(st TypeTree[TestObj, *TestObj]) {
 		for _, vInt := range rand.Perm(100) {

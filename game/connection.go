@@ -3,6 +3,7 @@ package game
 import (
 	"crypto/subtle"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -29,7 +30,6 @@ var (
 var (
 	envByObjectID     = juicemud.NewSyncMap[string, *Connection]()
 	consoleByObjectID = juicemud.NewSyncMap[string, *Fanout]()
-	jsContextLocks    = juicemud.NewSyncMap[string, bool]()
 )
 
 func addConsole(id string, term *term.Terminal) {
@@ -287,7 +287,49 @@ func (c *Connection) commands() []command {
 			},
 		},
 		{
-			names:  m("!chwrite"),
+			names:  m("/enter"),
+			wizard: true,
+			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, target *structs.Object) error {
+				if obj.Id == target.Id {
+					fmt.Fprintln(c.term, "Unable to climb into your own navel.")
+					return nil
+				}
+				if obj.Location == target.Id {
+					return nil
+				}
+				oldLoc := obj.Location
+				obj.Location = target.Id
+				if err := c.game.storage.StoreObject(c.sess.Context(), &oldLoc, obj); err != nil {
+					return juicemud.WithStack(err)
+				}
+				return juicemud.WithStack(c.look())
+			}),
+		},
+		{
+			names:  m("/exit"),
+			wizard: true,
+			f: func(c *Connection, s string) error {
+				obj, err := c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if obj.Location == "" {
+					fmt.Fprintln(c.term, "Unable to leave the universe.")
+					return nil
+				}
+				loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				obj.Location = loc.Location
+				if err := c.game.storage.StoreObject(c.sess.Context(), &loc.Id, obj); err != nil {
+					return juicemud.WithStack(err)
+				}
+				return juicemud.WithStack(c.look())
+			},
+		},
+		{
+			names:  m("/chwrite"),
 			wizard: true,
 			f: func(c *Connection, s string) error {
 				parts, err := shellwords.SplitPosix(s)
@@ -309,7 +351,7 @@ func (c *Connection) commands() []command {
 			},
 		},
 		{
-			names:  m("!chread"),
+			names:  m("/chread"),
 			wizard: true,
 			f: func(c *Connection, s string) error {
 				parts, err := shellwords.SplitPosix(s)
@@ -331,7 +373,7 @@ func (c *Connection) commands() []command {
 			},
 		},
 		{
-			names:  m("!ls"),
+			names:  m("/ls"),
 			wizard: true,
 			f: func(c *Connection, s string) error {
 				parts, err := shellwords.SplitPosix(s)
@@ -414,6 +456,7 @@ func (c *Connection) Process() error {
 						return juicemud.WithStack(err)
 					} else if has {
 						if err := cmd.f(c, line); err != nil {
+							log.Printf("%s\n%s", err, juicemud.StackTrace(err))
 							fmt.Fprintln(c.term, err)
 						}
 					}
