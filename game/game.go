@@ -134,6 +134,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			go func() {
 				if err := g.loadRunSave(ctx, ev.Object, call); err != nil {
 					log.Printf("trying to execute %+v: %v", ev, err)
+					log.Printf("%v", juicemud.StackTrace(err))
 				}
 			}()
 		}, g.emitMovement))

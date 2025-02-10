@@ -3,7 +3,6 @@ package game
 import (
 	"crypto/subtle"
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -24,7 +23,7 @@ import (
 )
 
 var (
-	ErrOperationAborted = errors.New("operation aborted")
+	ErrOperationAborted = fmt.Errorf("operation aborted")
 )
 
 var (
@@ -154,6 +153,7 @@ func (c *Connection) describeLocation(loc *structs.Location) error {
 	}
 	if len(loc.Container.Exits) > 0 {
 		fmt.Fprintln(c.term)
+		fmt.Fprintln(c.term, "Exits:")
 		fmt.Fprintln(c.term, structs.Exits(loc.Container.Exits).Short())
 	}
 	return nil
@@ -185,11 +185,12 @@ func m(s ...string) map[string]bool {
 type defaultObject int
 
 const (
-	defaultSelf defaultObject = iota
+	defaultNone defaultObject = iota
+	defaultSelf
 	defaultLoc
 )
 
-func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection, self *structs.Object, target *structs.Object) error) func(*Connection, string) error {
+func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection, self *structs.Object, targets ...*structs.Object) error) func(*Connection, string) error {
 	return func(c *Connection, s string) error {
 		parts, err := shellwords.SplitPosix(s)
 		if err != nil {
@@ -201,6 +202,9 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 				return juicemud.WithStack(err)
 			}
 			switch def {
+			case defaultNone:
+				fmt.Fprintf(c.term, "usage: %s [target]\n", parts[0])
+				return nil
 			case defaultSelf:
 				return f(c, obj, obj)
 			case defaultLoc:
@@ -210,22 +214,25 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 				}
 				loc.Filter(obj)
 				return f(c, obj, loc)
+			default:
+				return nil
 			}
-		} else if len(parts) == 2 {
-			obj, loc, err := c.game.loadLocationOf(c.sess.Context(), c.user.Object)
-			if err != nil {
-				return juicemud.WithStack(err)
-			}
-			loc.Filter(obj)
-			target, err := loc.Identify(parts[1])
+		}
+		obj, loc, err := c.game.loadLocationOf(c.sess.Context(), c.user.Object)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		loc.Filter(obj)
+		targets := []*structs.Object{}
+		for _, pattern := range parts[1:] {
+			target, err := loc.Identify(pattern)
 			if err != nil {
 				fmt.Fprintln(c.term, err.Error())
 				return nil
 			}
-			return f(c, obj, target)
+			targets = append(targets, target)
 		}
-		fmt.Fprintln(c.term, "usage: /state [pattern]?")
-		return nil
+		return f(c, obj, targets...)
 	}
 }
 
@@ -246,6 +253,36 @@ func (c *Connection) commands() []command {
 				}
 				return nil
 			},
+		},
+		{
+			names:  m("/move"),
+			wizard: true,
+			f: c.identifyingCommand(defaultNone, func(c *Connection, self *structs.Object, targets ...*structs.Object) error {
+				if len(targets) == 1 {
+					if targets[0].Id == self.Location {
+						return errors.New("Can't move current location")
+					}
+					loc, err := c.game.storage.LoadObject(c.sess.Context(), self.Location, c.game.rerunSource)
+					if err != nil {
+						return juicemud.WithStack(err)
+					}
+					oldLoc := targets[0].Location
+					targets[0].Location = loc.Location
+					return juicemud.WithStack(c.game.storage.StoreObject(c.sess.Context(), &oldLoc, targets[0]))
+				}
+				dest := targets[len(targets)-1]
+				for _, target := range targets[:len(targets)-1] {
+					if target.Id == self.Location {
+						return errors.New("Can't move current location")
+					}
+					oldLoc := target.Location
+					target.Location = dest.Id
+					if err := c.game.storage.StoreObject(c.sess.Context(), &oldLoc, target); err != nil {
+						return juicemud.WithStack(err)
+					}
+				}
+				return nil
+			}),
 		},
 		{
 			names:  m("/create"),
@@ -292,43 +329,54 @@ func (c *Connection) commands() []command {
 		{
 			names:  m("/inspect"),
 			wizard: true,
-			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, target *structs.Object) error {
-				js, err := goccy.MarshalIndent(target, "", "  ")
-				if err != nil {
-					return juicemud.WithStack(err)
+			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
+				for _, target := range targets {
+					js, err := goccy.MarshalIndent(target, "", "  ")
+					if err != nil {
+						return juicemud.WithStack(err)
+					}
+					fmt.Fprintln(c.term, string(js))
 				}
-				fmt.Fprintln(c.term, string(js))
 				return nil
 			}),
 		},
 		{
 			names:  m("/debug"),
 			wizard: true,
-			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, target *structs.Object) error {
-				addConsole(target.Id, c.term)
-				fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), target.Id)
+			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
+				for _, target := range targets {
+					addConsole(target.Id, c.term)
+					fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), target.Id)
+				}
 				return nil
 			}),
 		},
 		{
 			names:  m("/undebug"),
 			wizard: true,
-			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, target *structs.Object) error {
-				delConsole(target.Id, c.term)
-				fmt.Fprintf(c.term, "#%s/%s disconnected from console\n", target.Name(), target.Id)
+			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
+				for _, target := range targets {
+					delConsole(target.Id, c.term)
+					fmt.Fprintf(c.term, "#%s/%s disconnected from console\n", target.Name(), target.Id)
+				}
 				return nil
 			}),
 		},
 		{
 			names: m("l", "look"),
-			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, target *structs.Object) error {
-				if obj.Location == target.Id {
-					return c.look()
-				}
-				fmt.Fprintln(c.term, target.Name())
-				if len(target.Descriptions) > 0 && target.Descriptions[0].Long != "" {
-					fmt.Fprintln(c.term)
-					fmt.Fprintln(c.term, target.Descriptions[0].Long)
+			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, targets ...*structs.Object) error {
+				for _, target := range targets {
+					if obj.Location == target.Id {
+						if err := c.look(); err != nil {
+							return juicemud.WithStack(err)
+						}
+					} else {
+						fmt.Fprintln(c.term, target.Name())
+						if len(target.Descriptions) > 0 && target.Descriptions[0].Long != "" {
+							fmt.Fprintln(c.term)
+							fmt.Fprintln(c.term, target.Descriptions[0].Long)
+						}
+					}
 				}
 				return nil
 			}),
@@ -342,7 +390,12 @@ func (c *Connection) commands() []command {
 		{
 			names:  m("/enter"),
 			wizard: true,
-			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, target *structs.Object) error {
+			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, targets ...*structs.Object) error {
+				if len(targets) != 1 {
+					fmt.Fprintln(c.term, "usage: /enter [target]")
+					return nil
+				}
+				target := targets[0]
 				if obj.Id == target.Id {
 					fmt.Fprintln(c.term, "Unable to climb into your own navel.")
 					return nil
@@ -509,7 +562,6 @@ func (c *Connection) Process() error {
 						return juicemud.WithStack(err)
 					} else if has {
 						if err := cmd.f(c, line); err != nil {
-							log.Printf("%s\n%s", err, juicemud.StackTrace(err))
 							fmt.Fprintln(c.term, err)
 						}
 					}

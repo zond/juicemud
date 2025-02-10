@@ -5,6 +5,7 @@ package storage
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,7 +208,14 @@ func (s *Storage) UNSAFEEnsureObject(ctx context.Context, obj *structs.Object) e
 	}, true))
 }
 
+var (
+	ErrCircularContainer = fmt.Errorf("objects can't contain themselves")
+)
+
 func (s *Storage) StoreObject(ctx context.Context, claimedOldLocation *string, object *structs.Object) error {
+	if object.Id != "" && object.Location == object.Id {
+		return juicemud.WithStack(ErrCircularContainer)
+	}
 	var m *Movement
 	var pairs []dbm.Proc
 	if claimedOldLocation == nil || *claimedOldLocation == object.Location {

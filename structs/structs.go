@@ -292,7 +292,7 @@ var indexRegexp = regexp.MustCompile(`^((\d+)\.)?(.*)$`)
 func (l *Location) Identify(s string) (*Object, error) {
 	match := indexRegexp.FindStringSubmatch(s)
 	indexString, pattern := match[2], match[3]
-	index := 0
+	index := -1
 	if indexString != "" {
 		var err error
 		if index, err = strconv.Atoi(indexString); err != nil {
@@ -310,6 +310,12 @@ func (l *Location) Identify(s string) (*Object, error) {
 	}
 	if len(objs) == 0 {
 		return nil, errors.Errorf("No %q found", pattern)
+	}
+	if len(objs) == 1 && (index == 0 || index == -1) {
+		return objs[0], nil
+	}
+	if index == -1 {
+		return nil, errors.Errorf("%v %q found, pick one", len(objs), pattern)
 	}
 	if index < len(objs) {
 		return objs[index], nil
