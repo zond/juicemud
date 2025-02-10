@@ -120,17 +120,19 @@ func BenchmarkCall(b *testing.B) {
 	b.StopTimer()
 	ctx := context.Background()
 	withGame(b, func(g *Game) {
-		user := &storage.User{
-			Name:         "tester",
-			PasswordHash: "blapp",
-			Owner:        false,
-		}
-		if err := g.createUser(ctx, user); err != nil {
+		obj, err := structs.MakeObject(ctx)
+		if err != nil {
 			b.Fatal(err)
 		}
+		obj.SourcePath = userSource
+		obj.Location = genesisID
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if err := g.loadRunSave(ctx, user.Object, nil); err != nil {
+			if err := g.loadRunSave(ctx, obj.Id, &structs.AnyCall{
+				Name:    connectedEventType,
+				Tag:     emitEventTag,
+				Content: map[string]any{},
+			}); err != nil {
 				b.Fatal(err)
 			}
 		}

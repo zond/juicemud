@@ -196,41 +196,45 @@ type Movement struct {
 	Destination string
 }
 
+func (s *Storage) UNSAFEEnsureObject(ctx context.Context, obj *structs.Object) error {
+	return juicemud.WithStack(s.objects.Proc([]dbm.Proc{
+		s.objects.SProc(obj.Id, func(key string, value *structs.Object) (*structs.Object, error) {
+			if value == nil {
+				return obj, nil
+			}
+			return value, nil
+		}),
+	}, true))
+}
+
 func (s *Storage) StoreObject(ctx context.Context, claimedOldLocation *string, object *structs.Object) error {
 	var m *Movement
 	var pairs []dbm.Proc
 	if claimedOldLocation == nil || *claimedOldLocation == object.Location {
-		if object.Location == "" {
-			pairs = []dbm.Proc{
-				s.objects.SProc(object.Id, func(key string, value *structs.Object) (*structs.Object, error) {
-					if value == nil {
-						return object, nil
+		pairs = []dbm.Proc{
+			s.objects.SProc(object.Location, func(key string, value *structs.Object) (*structs.Object, error) {
+				if value == nil {
+					return nil, errors.Wrapf(os.ErrNotExist, "can't find location %q", object.Location)
+				}
+				if _, found := value.Content[object.Id]; !found {
+					m = &Movement{
+						Object:      object,
+						Source:      "",
+						Destination: object.Location,
 					}
-					if value.Location != object.Location {
-						return nil, errors.Errorf("object is moved from %q to %q without updating old location", value.Location, object.Location)
-					}
+				}
+				value.Content[object.Id] = true
+				return value, nil
+			}),
+			s.objects.SProc(object.Id, func(key string, value *structs.Object) (*structs.Object, error) {
+				if value == nil {
 					return object, nil
-				}),
-			}
-		} else {
-			pairs = []dbm.Proc{
-				s.objects.SProc(object.Location, func(key string, value *structs.Object) (*structs.Object, error) {
-					if value == nil {
-						return nil, errors.Wrapf(os.ErrNotExist, "can't find location %q", object.Location)
-					}
-					value.Content[object.Id] = true
-					return value, nil
-				}),
-				s.objects.SProc(object.Id, func(key string, value *structs.Object) (*structs.Object, error) {
-					if value == nil {
-						return object, nil
-					}
-					if value.Location != object.Location {
-						return nil, errors.Errorf("object is moved from %q to %q without updating old location", value.Location, object.Location)
-					}
-					return object, nil
-				}),
-			}
+				}
+				if value.Location != object.Location {
+					return nil, errors.Errorf("object is moved from %q to %q without updating old location", value.Location, object.Location)
+				}
+				return object, nil
+			}),
 		}
 	} else {
 		m = &Movement{
@@ -504,6 +508,16 @@ func getChildren(ctx context.Context, db sqlx.QueryerContext, parent int64) ([]F
 
 func (s *Storage) LoadChildren(ctx context.Context, parent int64) ([]File, error) {
 	return getChildren(ctx, s.sql, parent)
+}
+
+func (s *Storage) FileExists(ctx context.Context, path string) (bool, error) {
+	row := s.sql.QueryRowContext(ctx, "SELECT COUNT(*) FROM File WHERE PATH = ?", path)
+	count := 0
+	row.Scan(&count)
+	if err := row.Err(); err != nil {
+		return false, juicemud.WithStack(err)
+	}
+	return count > 0, nil
 }
 
 func (s *Storage) loadFile(ctx context.Context, db sqlx.QueryerContext, path string) (*File, error) {

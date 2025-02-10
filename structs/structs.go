@@ -207,6 +207,11 @@ func (o *Object) Filter(viewer *Object) {
 	o.Exits = exits
 }
 
+func (o *Object) Describe() string {
+	b, _ := goccy.MarshalIndent(o, "", "  ")
+	return string(b)
+}
+
 type Exits []Exit
 
 func (e Exits) Short() string {
@@ -235,6 +240,11 @@ func (c Content) Short() []string {
 type Location struct {
 	Container *Object
 	Content   Content
+}
+
+func (l *Location) Describe() string {
+	b, _ := goccy.MarshalIndent(l, "", "  ")
+	return string(b)
 }
 
 // AddDescriptionChallenges will merge the addedChalls into the container and the content.
@@ -356,6 +366,11 @@ type Neighbourhood struct {
 	Neighbours map[string]*Object
 }
 
+func (n *Neighbourhood) Describe() string {
+	b, _ := goccy.MarshalIndent(n, "", "  ")
+	return string(b)
+}
+
 // FindLocation returns the path leading to locID in this neighbourhood, and whether it was found.
 // Empty path means the locID is the center of the neighbourhood (Neighbourhood.Location).
 func (n *Neighbourhood) FindLocation(locID string) (*Exit, bool) {
@@ -373,6 +388,11 @@ func (n *Neighbourhood) FindLocation(locID string) (*Exit, bool) {
 type DeepNeighbourhood struct {
 	Location   *Location
 	Neighbours map[string]*Location
+}
+
+func (n *DeepNeighbourhood) Describe() string {
+	b, _ := goccy.MarshalIndent(n, "", "  ")
+	return string(b)
 }
 
 // Filter will filter the location for the viewer, then all neighbours that still have exits.

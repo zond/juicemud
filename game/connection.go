@@ -257,8 +257,35 @@ func (c *Connection) commands() []command {
 				}
 				if len(parts) != 2 {
 					fmt.Fprintln(c.term, "usage: /create [path]")
+					return nil
 				}
-
+				exists, err := c.game.storage.FileExists(c.sess.Context(), parts[1])
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if !exists {
+					fmt.Fprintf(c.term, "%q doesn't exist", parts[1])
+					return nil
+				}
+				self, err := c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				obj, err := structs.MakeObject(c.sess.Context())
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				obj.SourcePath = parts[1]
+				obj.Location = self.Location
+				if err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
+					Name: createdEventType,
+					Tag:  emitEventTag,
+					Content: map[string]any{
+						"creator": self,
+					},
+				}); err != nil {
+					return juicemud.WithStack(err)
+				}
 				return nil
 			},
 		},
@@ -270,7 +297,6 @@ func (c *Connection) commands() []command {
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				fmt.Fprintf(c.term, "#%s/%s\n", target.Name(), target.Id)
 				fmt.Fprintln(c.term, string(js))
 				return nil
 			}),
@@ -511,17 +537,6 @@ func (c *Connection) Connect() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := c.game.loadRunSave(c.sess.Context(), c.user.Object, &structs.AnyCall{
-		Name: connectedEventType,
-		Tag:  emitEventTag,
-		Content: map[string]any{
-			"remote":   c.sess.RemoteAddr(),
-			"username": c.user.Name,
-			"object":   c.user.Object,
-		},
-	}); err != nil {
-		return juicemud.WithStack(err)
-	}
 	if err := c.look(); err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -561,6 +576,18 @@ func (c *Connection) loginUser() error {
 	}
 	storage.AuthenticateUser(c.sess.Context(), c.user)
 	fmt.Fprintf(c.term, "Welcome back, %v!\n\n", c.user.Name)
+	if err := c.game.loadRunSave(c.sess.Context(), c.user.Object, &structs.AnyCall{
+		Name: connectedEventType,
+		Tag:  emitEventTag,
+		Content: map[string]any{
+			"remote":   c.sess.RemoteAddr(),
+			"username": c.user.Name,
+			"object":   c.user.Object,
+			"cause":    "login",
+		},
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
 	return nil
 }
 
@@ -612,7 +639,26 @@ func (c *Connection) createUser() error {
 			fmt.Fprintln(c.term, "Passwords don't match!")
 		}
 	}
-	if err := c.game.createUser(c.sess.Context(), c.user); err != nil {
+	obj, err := structs.MakeObject(c.sess.Context())
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	obj.SourcePath = userSource
+	obj.Location = genesisID
+	user.Object = obj.Id
+	if err := c.game.storage.StoreUser(c.sess.Context(), user, false); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
+		Name: connectedEventType,
+		Tag:  emitEventTag,
+		Content: map[string]any{
+			"remote":   c.sess.RemoteAddr(),
+			"username": c.user.Name,
+			"object":   c.user.Object,
+			"cause":    "create",
+		},
+	}); err != nil {
 		return juicemud.WithStack(err)
 	}
 	storage.AuthenticateUser(c.sess.Context(), c.user)

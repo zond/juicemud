@@ -20,6 +20,7 @@ import (
 const (
 	connectedEventType = "connected"
 	movementEventType  = "movement"
+	createdEventType   = "created"
 )
 
 const (
@@ -71,19 +72,17 @@ setDescriptions([
 `,
 		emptySource: "// This code runs the top level container of all content.",
 	}
-	initialObjects = map[string]func(*structs.Object) error{
-		genesisID: func(o *structs.Object) error {
-			o.Id = genesisID
-			o.Location = emptyID
-			o.SourcePath = genesisSource
-			return nil
+	initialObjects = map[string]*structs.Object{
+		genesisID: {
+			Id:         genesisID,
+			Location:   emptyID,
+			SourcePath: genesisSource,
 		},
-		emptyID: func(o *structs.Object) error {
-			o.Id = emptyID
-			o.Location = emptyID
-			o.Content = map[string]bool{genesisID: true}
-			o.SourcePath = emptySource
-			return nil
+		emptyID: {
+			Id:         emptyID,
+			Location:   emptyID,
+			Content:    map[string]bool{genesisID: true},
+			SourcePath: emptySource,
 		},
 	}
 	initialGroups = []storage.Group{
@@ -113,8 +112,8 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			}
 		}
 	}
-	for idString, setup := range initialObjects {
-		if err := s.EnsureObject(ctx, idString, setup); err != nil {
+	for _, obj := range initialObjects {
+		if err := s.UNSAFEEnsureObject(ctx, obj); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}
@@ -173,28 +172,4 @@ func (g *Game) HandleSession(sess ssh.Session) {
 			log.Println(juicemud.StackTrace(err))
 		}
 	}
-}
-
-func (g *Game) createObject(ctx context.Context, f func(*structs.Object) error) error {
-	object, err := structs.MakeObject(ctx)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	if err := f(object); err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	if err := g.storage.StoreObject(ctx, nil, object); err != nil {
-		return juicemud.WithStack(err)
-	}
-	return nil
-}
-
-func (g *Game) createUser(ctx context.Context, user *storage.User) error {
-	return juicemud.WithStack(g.createObject(ctx, func(object *structs.Object) error {
-		object.SourcePath = userSource
-		object.Location = genesisID
-		user.Object = object.Id
-		return juicemud.WithStack(g.storage.StoreUser(ctx, user, false))
-	}))
 }
