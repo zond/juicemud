@@ -547,16 +547,24 @@ type objectAttempter struct {
 }
 
 func (o objectAttempter) attempt(c *Connection, name string, line string) (bool, error) {
-	obj, found, err := c.game.loadRunSave(c.sess.Context(), o.id, &structs.AnyCall{
+	jsContextLocks.Lock(o.id)
+	defer jsContextLocks.Unlock(o.id)
+
+	obj, err := c.game.storage.LoadObject(c.sess.Context(), o.id, c.game.rerunSource)
+	if err != nil {
+		return false, juicemud.WithStack(err)
+	}
+	if found, err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
 		Name: name,
 		Tag:  commandEventTag,
 		Content: map[string]any{
 			"name": name,
 			"line": line,
 		},
-	})
-	if found || err != nil {
-		return found, err
+	}); err != nil {
+		return false, juicemud.WithStack(err)
+	} else if found {
+		return found, nil
 	}
 
 	actionCall := &structs.AnyCall{
@@ -573,6 +581,21 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (bool,
 		return found, err
 	}
 
+	loc.Filter(obj)
+
+	for _, exit := range loc.Exits {
+		if exit.Name() == name {
+			if structs.Challenges(exit.UseChallenges).Check(obj, loc.Id) {
+				oldLoc := obj.Location
+				obj.Location = exit.Destination
+				if err := c.game.storage.StoreObject(c.sess.Context(), &oldLoc, obj); err != nil {
+					return false, juicemud.WithStack(err)
+				}
+				return true, juicemud.WithStack(c.look())
+			}
+		}
+	}
+
 	delete(loc.Content, o.id)
 	for sibID := range loc.Content {
 		_, found, err = c.game.loadRunSave(c.sess.Context(), sibID, actionCall)
@@ -583,16 +606,6 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (bool,
 	return false, nil
 }
 
-/*
-Command priority:
-- debug command (defined here as Go, examples: "debug", "undebug")
-- self commands  (defined in the User Object as JS, examples: "emote", "say", "kill")
-- env commands (defined here as Go, examples: "l", "look", "inv")
-- location directions (defined in Location Object as JS, examples: "n", "se")
-- location commands  (defined in Location Object as JS, examples: "open door", "pull switch")
-- sibling commands (defined in sibling Objects as JS, examples: "turn on robot", "give money")
-All commands should be in the Object so that we don't need to run JS to find matches.
-*/
 func (c *Connection) Process() error {
 	if c.user == nil {
 		return errors.New("can't process without user")
@@ -600,7 +613,7 @@ func (c *Connection) Process() error {
 	connectionByObjectID.Set(string(c.user.Object), c)
 	defer connectionByObjectID.Del(string(c.user.Object))
 
-	commandSets := []attempter{c.basicCommands(), objectAttempter{c.user.Object}}
+	commandSets := []attempter{objectAttempter{c.user.Object}, c.basicCommands()}
 	if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
 		return juicemud.WithStack(err)
 	} else if has {
