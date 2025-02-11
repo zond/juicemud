@@ -173,6 +173,25 @@ type command struct {
 	f     func(*Connection, string) error
 }
 
+type attempter interface {
+	attempt(conn *Connection, name string, line string) (bool, error)
+}
+
+type commands []command
+
+func (c commands) attempt(conn *Connection, name string, line string) (bool, error) {
+	for _, cmd := range c {
+		if cmd.names[name] {
+			if err := cmd.f(conn, line); err != nil {
+				return true, juicemud.WithStack(err)
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+
+}
+
 func m(s ...string) map[string]bool {
 	res := map[string]bool{}
 	for _, p := range s {
@@ -235,7 +254,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 	}
 }
 
-func (c *Connection) wizCommands() []command {
+func (c *Connection) wizCommands() commands {
 	return []command{
 		{
 			names: m("/groups"),
@@ -489,7 +508,7 @@ func (c *Connection) wizCommands() []command {
 	}
 }
 
-func (c *Connection) basicCommands() []command {
+func (c *Connection) basicCommands() commands {
 	return []command{
 		{
 			names: m("l", "look"),
@@ -523,18 +542,6 @@ var (
 	whitespacePattern = regexp.MustCompile(`\s+`)
 )
 
-func (c *Connection) attempt(commands []command, name string, line string) (bool, error) {
-	for _, cmd := range commands {
-		if cmd.names[name] {
-			if err := cmd.f(c, line); err != nil {
-				return true, juicemud.WithStack(err)
-			}
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 /*
 Command priority:
 - debug command (defined here as Go, examples: "debug", "undebug")
@@ -552,11 +559,11 @@ func (c *Connection) Process() error {
 	connectionByObjectID.Set(string(c.user.Object), c)
 	defer connectionByObjectID.Del(string(c.user.Object))
 
-	commandSets := [][]command{c.basicCommands()}
+	commandSets := []attempter{c.basicCommands()}
 	if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
 		return juicemud.WithStack(err)
 	} else if has {
-		commandSets = append([][]command{c.wizCommands()}, commandSets...)
+		commandSets = append([]attempter{c.wizCommands()}, commandSets...)
 	}
 
 	for {
@@ -569,7 +576,7 @@ func (c *Connection) Process() error {
 			continue
 		}
 		for _, commands := range commandSets {
-			if found, err := c.attempt(commands, words[0], line); err != nil {
+			if found, err := commands.attempt(c, words[0], line); err != nil {
 				fmt.Fprintln(c.term, err)
 			} else if found {
 				break
