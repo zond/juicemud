@@ -24,7 +24,12 @@ const (
 )
 
 const (
+	// Tag for events that are game infrastructure.
 	emitEventTag = "emit"
+	// Tag for events that are commands from a player to their object.
+	commandEventTag = "command"
+	// Tag for events that are actions an object takes on other objects.
+	actionEventTag = "action"
 )
 
 const (
@@ -132,7 +137,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 				call = &ev.Call
 			}
 			go func() {
-				if err := g.loadRunSave(ctx, ev.Object, call); err != nil {
+				if _, _, err := g.loadRunSave(ctx, ev.Object, call); err != nil {
 					log.Printf("trying to execute %+v: %v", ev, err)
 					log.Printf("%v", juicemud.StackTrace(err))
 				}

@@ -138,7 +138,8 @@ func (g *Game) emitMovement(ctx context.Context, bigM *storage.Movement) error {
 }
 
 func (g *Game) rerunSource(ctx context.Context, object *structs.Object) error {
-	return g.run(ctx, object, nil)
+	_, err := g.run(ctx, object, nil)
+	return juicemud.WithStack(err)
 }
 
 func (g *Game) loadLocationOf(ctx context.Context, id string) (*structs.Object, *structs.Location, error) {
@@ -334,30 +335,29 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 
 /*
 Some events we should send to objects:
-- moved: Object changed Location.
 - received: Object got new Content.
 - transmitted: Object lost Content.
 */
-func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller) error {
+func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller) (bool, error) {
 	if caller != nil {
 		call, err := caller.Call()
 		if err != nil {
-			return juicemud.WithStack(err)
+			return false, juicemud.WithStack(err)
 		}
 		if call != nil {
 			t, err := g.storage.SourceModTime(ctx, object.SourcePath)
 			if err != nil {
-				return juicemud.WithStack(err)
+				return false, juicemud.WithStack(err)
 			}
 			if object.SourceModTime >= t && !object.HasCallback(call.Name, call.Tag) {
-				return nil
+				return false, nil
 			}
 		}
 	}
 
 	source, modTime, err := g.storage.LoadSource(ctx, object.SourcePath)
 	if err != nil {
-		return juicemud.WithStack(err)
+		return false, juicemud.WithStack(err)
 	}
 
 	callbacks := js.Callbacks{}
@@ -376,39 +376,43 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		if errors.As(err, &jserr) {
 			log.New(consoleByObjectID.Get(string(object.Id)), "", 0).Printf("---- error in %s ----\n%s\n%s", jserr.Location, jserr.Message, jserr.StackTrace)
 		}
-		return juicemud.WithStack(err)
+		return false, juicemud.WithStack(err)
 	}
 	object.State = res.State
 	object.Callbacks = res.Callbacks
 	object.SourceModTime = modTime
-	return nil
+	return true, nil
 }
 
-func (g *Game) runSave(ctx context.Context, object *structs.Object, caller structs.Caller) error {
+func (g *Game) runSave(ctx context.Context, object *structs.Object, caller structs.Caller) (bool, error) {
 	oldLocation := object.Location
-	if err := g.run(ctx, object, caller); err != nil {
-		return juicemud.WithStack(err)
+	found, err := g.run(ctx, object, caller)
+	if err != nil {
+		return false, juicemud.WithStack(err)
 	}
-	return juicemud.WithStack(g.storage.StoreObject(ctx, &oldLocation, object))
+	if err := g.storage.StoreObject(ctx, &oldLocation, object); err != nil {
+		return false, juicemud.WithStack(err)
+	}
+	return found, nil
 }
 
-func (g *Game) loadRunSave(ctx context.Context, id string, caller structs.Caller) error {
+func (g *Game) loadRunSave(ctx context.Context, id string, caller structs.Caller) (*structs.Object, bool, error) {
 	jsContextLocks.Lock(id)
 	defer jsContextLocks.Unlock(id)
 
 	if caller != nil {
 		call, err := caller.Call()
 		if err != nil {
-			return juicemud.WithStack(err)
+			return nil, false, juicemud.WithStack(err)
 		}
 		if call.Name == movementEventType && call.Tag == emitEventTag {
 			if c, found := connectionByObjectID.GetHas(id); found {
 				m := &movement{}
 				if err := goccy.Unmarshal([]byte(call.Message), m); err != nil {
-					return juicemud.WithStack(err)
+					return nil, false, juicemud.WithStack(err)
 				}
 				if err := c.renderMovement(m); err != nil {
-					return juicemud.WithStack(err)
+					return nil, false, juicemud.WithStack(err)
 				}
 			}
 		}
@@ -416,7 +420,8 @@ func (g *Game) loadRunSave(ctx context.Context, id string, caller structs.Caller
 
 	object, err := g.storage.LoadObject(ctx, id, nil)
 	if err != nil {
-		return juicemud.WithStack(err)
+		return nil, false, juicemud.WithStack(err)
 	}
-	return juicemud.WithStack(g.runSave(ctx, object, caller))
+	found, err := g.runSave(ctx, object, caller)
+	return object, found, juicemud.WithStack(err)
 }

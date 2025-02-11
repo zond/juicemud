@@ -329,7 +329,7 @@ func (c *Connection) wizCommands() commands {
 				}
 				obj.SourcePath = parts[1]
 				obj.Location = self.Location
-				if err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
+				if _, err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
 					Name: createdEventType,
 					Tag:  emitEventTag,
 					Content: map[string]any{
@@ -542,6 +542,47 @@ var (
 	whitespacePattern = regexp.MustCompile(`\s+`)
 )
 
+type objectAttempter struct {
+	id string
+}
+
+func (o objectAttempter) attempt(c *Connection, name string, line string) (bool, error) {
+	obj, found, err := c.game.loadRunSave(c.sess.Context(), o.id, &structs.AnyCall{
+		Name: name,
+		Tag:  commandEventTag,
+		Content: map[string]any{
+			"name": name,
+			"line": line,
+		},
+	})
+	if found || err != nil {
+		return found, err
+	}
+
+	actionCall := &structs.AnyCall{
+		Name: name,
+		Tag:  actionEventTag,
+		Content: map[string]any{
+			"name": name,
+			"line": line,
+		},
+	}
+
+	loc, found, err := c.game.loadRunSave(c.sess.Context(), obj.Location, actionCall)
+	if found || err != nil {
+		return found, err
+	}
+
+	delete(loc.Content, o.id)
+	for sibID := range loc.Content {
+		_, found, err = c.game.loadRunSave(c.sess.Context(), sibID, actionCall)
+		if found || err != nil {
+			return found, err
+		}
+	}
+	return false, nil
+}
+
 /*
 Command priority:
 - debug command (defined here as Go, examples: "debug", "undebug")
@@ -559,7 +600,7 @@ func (c *Connection) Process() error {
 	connectionByObjectID.Set(string(c.user.Object), c)
 	defer connectionByObjectID.Del(string(c.user.Object))
 
-	commandSets := []attempter{c.basicCommands()}
+	commandSets := []attempter{c.basicCommands(), objectAttempter{c.user.Object}}
 	if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
 		return juicemud.WithStack(err)
 	} else if has {
@@ -638,7 +679,7 @@ func (c *Connection) loginUser() error {
 	}
 	storage.AuthenticateUser(c.sess.Context(), c.user)
 	fmt.Fprintf(c.term, "Welcome back, %v!\n\n", c.user.Name)
-	if err := c.game.loadRunSave(c.sess.Context(), c.user.Object, &structs.AnyCall{
+	if _, _, err := c.game.loadRunSave(c.sess.Context(), c.user.Object, &structs.AnyCall{
 		Name: connectedEventType,
 		Tag:  emitEventTag,
 		Content: map[string]any{
@@ -711,7 +752,7 @@ func (c *Connection) createUser() error {
 	if err := c.game.storage.StoreUser(c.sess.Context(), user, false); err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
+	if _, err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
 		Name: connectedEventType,
 		Tag:  emitEventTag,
 		Content: map[string]any{
