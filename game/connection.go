@@ -169,9 +169,8 @@ func (c *Connection) look() error {
 }
 
 type command struct {
-	names  map[string]bool
-	wizard bool
-	f      func(*Connection, string) error
+	names map[string]bool
+	f     func(*Connection, string) error
 }
 
 func m(s ...string) map[string]bool {
@@ -236,11 +235,10 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 	}
 }
 
-func (c *Connection) commands() []command {
+func (c *Connection) wizCommands() []command {
 	return []command{
 		{
-			names:  m("/groups"),
-			wizard: true,
+			names: m("/groups"),
 			f: func(c *Connection, s string) error {
 				groups, err := c.game.storage.UserGroups(c.sess.Context(), c.user)
 				if err != nil {
@@ -255,8 +253,7 @@ func (c *Connection) commands() []command {
 			},
 		},
 		{
-			names:  m("/move"),
-			wizard: true,
+			names: m("/move"),
 			f: c.identifyingCommand(defaultNone, func(c *Connection, self *structs.Object, targets ...*structs.Object) error {
 				if len(targets) == 1 {
 					if targets[0].Id == self.Location {
@@ -285,8 +282,7 @@ func (c *Connection) commands() []command {
 			}),
 		},
 		{
-			names:  m("/create"),
-			wizard: true,
+			names: m("/create"),
 			f: func(c *Connection, s string) error {
 				parts, err := shellwords.SplitPosix(s)
 				if err != nil {
@@ -327,8 +323,7 @@ func (c *Connection) commands() []command {
 			},
 		},
 		{
-			names:  m("/inspect"),
-			wizard: true,
+			names: m("/inspect"),
 			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
 				for _, target := range targets {
 					js, err := goccy.MarshalIndent(target, "", "  ")
@@ -341,8 +336,7 @@ func (c *Connection) commands() []command {
 			}),
 		},
 		{
-			names:  m("/debug"),
-			wizard: true,
+			names: m("/debug"),
 			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
 				for _, target := range targets {
 					addConsole(target.Id, c.term)
@@ -352,8 +346,7 @@ func (c *Connection) commands() []command {
 			}),
 		},
 		{
-			names:  m("/undebug"),
-			wizard: true,
+			names: m("/undebug"),
 			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
 				for _, target := range targets {
 					delConsole(target.Id, c.term)
@@ -363,33 +356,7 @@ func (c *Connection) commands() []command {
 			}),
 		},
 		{
-			names: m("l", "look"),
-			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, targets ...*structs.Object) error {
-				for _, target := range targets {
-					if obj.Location == target.Id {
-						if err := c.look(); err != nil {
-							return juicemud.WithStack(err)
-						}
-					} else {
-						fmt.Fprintln(c.term, target.Name())
-						if len(target.Descriptions) > 0 && target.Descriptions[0].Long != "" {
-							fmt.Fprintln(c.term)
-							fmt.Fprintln(c.term, target.Descriptions[0].Long)
-						}
-					}
-				}
-				return nil
-			}),
-		},
-		{
-			names: m("scan"),
-			f: func(c *Connection, s string) error {
-				return c.scan()
-			},
-		},
-		{
-			names:  m("/enter"),
-			wizard: true,
+			names: m("/enter"),
 			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, targets ...*structs.Object) error {
 				if len(targets) != 1 {
 					fmt.Fprintln(c.term, "usage: /enter [target]")
@@ -412,8 +379,7 @@ func (c *Connection) commands() []command {
 			}),
 		},
 		{
-			names:  m("/exit"),
-			wizard: true,
+			names: m("/exit"),
 			f: func(c *Connection, s string) error {
 				obj, err := c.game.storage.LoadObject(c.sess.Context(), c.user.Object, c.game.rerunSource)
 				if err != nil {
@@ -435,8 +401,7 @@ func (c *Connection) commands() []command {
 			},
 		},
 		{
-			names:  m("/chwrite"),
-			wizard: true,
+			names: m("/chwrite"),
 			f: func(c *Connection, s string) error {
 				parts, err := shellwords.SplitPosix(s)
 				if err != nil {
@@ -457,8 +422,7 @@ func (c *Connection) commands() []command {
 			},
 		},
 		{
-			names:  m("/chread"),
-			wizard: true,
+			names: m("/chread"),
 			f: func(c *Connection, s string) error {
 				parts, err := shellwords.SplitPosix(s)
 				if err != nil {
@@ -479,8 +443,7 @@ func (c *Connection) commands() []command {
 			},
 		},
 		{
-			names:  m("/ls"),
-			wizard: true,
+			names: m("/ls"),
 			f: func(c *Connection, s string) error {
 				parts, err := shellwords.SplitPosix(s)
 				if err != nil {
@@ -526,9 +489,51 @@ func (c *Connection) commands() []command {
 	}
 }
 
+func (c *Connection) basicCommands() []command {
+	return []command{
+		{
+			names: m("l", "look"),
+			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, targets ...*structs.Object) error {
+				for _, target := range targets {
+					if obj.Location == target.Id {
+						if err := c.look(); err != nil {
+							return juicemud.WithStack(err)
+						}
+					} else {
+						fmt.Fprintln(c.term, target.Name())
+						if len(target.Descriptions) > 0 && target.Descriptions[0].Long != "" {
+							fmt.Fprintln(c.term)
+							fmt.Fprintln(c.term, target.Descriptions[0].Long)
+						}
+					}
+				}
+				return nil
+			}),
+		},
+		{
+			names: m("scan"),
+			f: func(c *Connection, s string) error {
+				return c.scan()
+			},
+		},
+	}
+}
+
 var (
 	whitespacePattern = regexp.MustCompile(`\s+`)
 )
+
+func (c *Connection) attempt(commands []command, name string, line string) (bool, error) {
+	for _, cmd := range commands {
+		if cmd.names[name] {
+			if err := cmd.f(c, line); err != nil {
+				return true, juicemud.WithStack(err)
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
 /*
 Command priority:
@@ -546,6 +551,14 @@ func (c *Connection) Process() error {
 	}
 	connectionByObjectID.Set(string(c.user.Object), c)
 	defer connectionByObjectID.Del(string(c.user.Object))
+
+	commandSets := [][]command{c.basicCommands()}
+	if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
+		return juicemud.WithStack(err)
+	} else if has {
+		commandSets = append([][]command{c.wizCommands()}, commandSets...)
+	}
+
 	for {
 		line, err := c.term.ReadLine()
 		if err != nil {
@@ -555,21 +568,11 @@ func (c *Connection) Process() error {
 		if len(words) == 0 {
 			continue
 		}
-		for _, cmd := range c.commands() {
-			if cmd.names[words[0]] {
-				if cmd.wizard {
-					if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
-						return juicemud.WithStack(err)
-					} else if has {
-						if err := cmd.f(c, line); err != nil {
-							fmt.Fprintln(c.term, err)
-						}
-					}
-				} else {
-					if err := cmd.f(c, line); err != nil {
-						fmt.Fprintln(c.term, err)
-					}
-				}
+		for _, commands := range commandSets {
+			if found, err := c.attempt(commands, words[0], line); err != nil {
+				fmt.Fprintln(c.term, err)
+			} else if found {
+				break
 			}
 		}
 	}

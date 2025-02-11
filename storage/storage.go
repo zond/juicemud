@@ -209,7 +209,7 @@ func (s *Storage) UNSAFEEnsureObject(ctx context.Context, obj *structs.Object) e
 }
 
 var (
-	ErrCircularContainer = fmt.Errorf("objects can't contain themselves")
+	ErrCircularContainer = fmt.Errorf("Objects can't contain themselves.")
 )
 
 func (s *Storage) StoreObject(ctx context.Context, claimedOldLocation *string, object *structs.Object) error {
