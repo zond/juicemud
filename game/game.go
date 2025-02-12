@@ -62,8 +62,8 @@ addCallback('connected', ['emit'], (obj) => {
     state.object = obj.object;
 	setDescriptions([
 		{
-			short: obj.username,
-			unique: true,
+			Short: obj.username,
+			Unique: true,
 		}
 	]);
 });
@@ -71,8 +71,8 @@ addCallback('connected', ['emit'], (obj) => {
 		genesisSource: `// This code runs the room where newly created users are dropped.
 setDescriptions([
   {
-		short: 'Black cosmos',
-		long: 'This is the darkness of space before creation. No stars twinkle.',
+		Short: 'Black cosmos',
+		Long: 'This is the darkness of space before creation. No stars twinkle.',
   },
 ]);
 `,
