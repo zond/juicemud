@@ -63,6 +63,7 @@ addCallback('connected', ['emit'], (obj) => {
 	setDescriptions([
 		{
 			short: obj.username,
+			unique: true,
 		}
 	]);
 });

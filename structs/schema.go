@@ -260,6 +260,7 @@ func (challenge *Challenge) UnmarshalPlain(tn int, b []byte) (n int, err error) 
 type Description struct {
     MapIcon int32
     Short string
+    Unique bool
     Long string
     Tags []string
     Challenges []Challenge
@@ -277,6 +278,7 @@ func (description *Description) Size() int {
 func (description *Description) size(id uint16) (s int) {
     s += bstd.SizeInt32() + 2
     s += bstd.SizeString(description.Short) + 2
+    s += bstd.SizeBool() + 2
     s += bstd.SizeString(description.Long) + 2
     s += bstd.SizeSlice(description.Tags, bstd.SizeString) + 2
     s += bstd.SizeSlice(description.Challenges, func (s Challenge) int { return s.SizePlain() }) + 2
@@ -293,6 +295,7 @@ func (description *Description) size(id uint16) (s int) {
 func (description *Description) SizePlain() (s int) {
     s += bstd.SizeInt32()
     s += bstd.SizeString(description.Short)
+    s += bstd.SizeBool()
     s += bstd.SizeString(description.Long)
     s += bstd.SizeSlice(description.Tags, bstd.SizeString)
     s += bstd.SizeSlice(description.Challenges, func (s Challenge) int { return s.SizePlain() })
@@ -311,11 +314,13 @@ func (description *Description) marshal(tn int, b []byte, id uint16) (n int) {
     n = bstd.MarshalInt32(n, b, description.MapIcon)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 2)
     n = bstd.MarshalString(n, b, description.Short)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 3)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed8, 3)
+    n = bstd.MarshalBool(n, b, description.Unique)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 4)
     n = bstd.MarshalString(n, b, description.Long)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 4)
-    n = bstd.MarshalSlice(n, b, description.Tags, bstd.MarshalString)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 5)
+    n = bstd.MarshalSlice(n, b, description.Tags, bstd.MarshalString)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 6)
     n = bstd.MarshalSlice(n, b, description.Challenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
 
     n += 2
@@ -329,6 +334,7 @@ func (description *Description) MarshalPlain(tn int, b []byte) (n int) {
     n = tn
     n = bstd.MarshalInt32(n, b, description.MapIcon)
     n = bstd.MarshalString(n, b, description.Short)
+    n = bstd.MarshalBool(n, b, description.Unique)
     n = bstd.MarshalString(n, b, description.Long)
     n = bstd.MarshalSlice(n, b, description.Tags, bstd.MarshalString)
     n = bstd.MarshalSlice(n, b, description.Challenges, func (n int, b []byte, s Challenge) int { return s.MarshalPlain(n, b) })
@@ -379,7 +385,7 @@ func (description *Description) unmarshal(tn int, b []byte, r []uint16, id uint1
         return
     }
     if ok {
-        if n, description.Long, err = bstd.UnmarshalString(n, b); err != nil {
+        if n, description.Unique, err = bstd.UnmarshalBool(n, b); err != nil {
             return
         }
     }
@@ -390,11 +396,22 @@ func (description *Description) unmarshal(tn int, b []byte, r []uint16, id uint1
         return
     }
     if ok {
-        if n, description.Tags, err = bstd.UnmarshalSlice[string](n, b, bstd.UnmarshalString); err != nil {
+        if n, description.Long, err = bstd.UnmarshalString(n, b); err != nil {
             return
         }
     }
     if n, ok, err = bgenimpl.HandleCompatibility(n, b, descriptionRIds, 5); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, description.Tags, err = bstd.UnmarshalSlice[string](n, b, bstd.UnmarshalString); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, descriptionRIds, 6); err != nil {
         if err == bgenimpl.ErrEof {
             return n, nil
         }
@@ -416,6 +433,9 @@ func (description *Description) UnmarshalPlain(tn int, b []byte) (n int, err err
         return
     }
     if n, description.Short, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, description.Unique, err = bstd.UnmarshalBool(n, b); err != nil {
         return
     }
     if n, description.Long, err = bstd.UnmarshalString(n, b); err != nil {

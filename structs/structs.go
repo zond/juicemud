@@ -17,6 +17,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/game/skills"
+	"github.com/zond/juicemud/lang"
 
 	goccy "github.com/goccy/go-json"
 )
@@ -74,6 +75,21 @@ func (o *Object) Name() string {
 		return "nameless"
 	}
 	return o.Descriptions[0].Short
+}
+
+func (o *Object) Unique() bool {
+	if len(o.Descriptions) == 0 {
+		return false
+	}
+	return o.Descriptions[0].Unique
+}
+
+func (o *Object) Indef() string {
+	name := o.Name()
+	if o.Unique() {
+		return name
+	}
+	return lang.Indef(name)
 }
 
 func (o *Object) HasCallback(name string, tag string) bool {
@@ -229,10 +245,22 @@ func (e Exits) Short() string {
 type Content map[string]*Object
 
 func (c Content) Short() []string {
-	result := make(sort.StringSlice, 0, len(c))
+	result := sort.StringSlice{}
+
+	indef := map[string]int{}
 	for _, obj := range c {
-		result = append(result, obj.Descriptions[0].Short)
+		name := obj.Name()
+		if obj.Unique() {
+			result = append(result, name)
+		} else {
+			indef[name] += 1
+		}
 	}
+
+	for name, count := range indef {
+		result = append(result, lang.Card(count, name))
+	}
+
 	sort.Sort(result)
 	return result
 }

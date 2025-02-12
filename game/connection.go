@@ -124,18 +124,18 @@ func (c *Connection) renderMovement(m *movement) error {
 		if exit, found := neigh.FindLocation(m.Source); !found {
 			return errors.Errorf("renderMovement got movement from unknown source: %+v", m)
 		} else if exit != nil {
-			fmt.Fprintf(c.term, "Via exit %s, you see %v leave.\n", exit.Name(), m.Object.Name())
+			fmt.Fprintf(c.term, "Via exit %s, you see %v leave.\n", exit.Name(), m.Object.Indef())
 		} else {
-			fmt.Fprintf(c.term, "%v leaves.\n", m.Object.Name())
+			fmt.Fprintf(c.term, "%v leaves.\n", m.Object.Indef())
 		}
 	}
 	if m.Destination != "" {
 		if exit, found := neigh.FindLocation(m.Destination); !found {
 			return errors.Errorf("renderMovement got movement to unknown destination: %+v", m)
 		} else if exit != nil {
-			fmt.Fprintf(c.term, "Via exit %s, you see %v arrive.\n", exit.Name(), m.Object.Name())
+			fmt.Fprintf(c.term, "Via exit %s, you see %v arrive.\n", exit.Name(), m.Object.Indef())
 		} else {
-			fmt.Fprintf(c.term, "%v arrives.\n", m.Object.Name())
+			fmt.Fprintf(c.term, "%v arrives.\n", m.Object.Indef())
 		}
 	}
 	return nil
@@ -264,7 +264,7 @@ func (c *Connection) wizCommands() commands {
 					return juicemud.WithStack(err)
 				}
 				sort.Sort(groups)
-				fmt.Fprintf(c.term, "Member of %v\n", lang.Declare(len(groups), "groups"))
+				fmt.Fprintf(c.term, "Member of %v\n", lang.Card(len(groups), "groups"))
 				for _, group := range groups {
 					fmt.Fprintln(c.term, group.Name)
 				}
