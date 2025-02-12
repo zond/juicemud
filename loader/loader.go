@@ -8,7 +8,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 
+	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/game"
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
@@ -19,6 +21,8 @@ import (
 type data struct {
 	Objects []structs.Object
 }
+
+var nonWordReg = regexp.MustCompile(`\W`)
 
 func main() {
 	dir := flag.String("dir", filepath.Join(os.Getenv("HOME"), ".juicemud"), "Where to save database and settings.")
@@ -31,7 +35,8 @@ func main() {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := juicemud.MakeMainContext(context.Background())
+
 	store, err := storage.New(ctx, *dir)
 	if err != nil {
 		log.Fatal(err)
@@ -49,13 +54,13 @@ func main() {
 
 	data := &data{}
 	if err := goccy.NewDecoder(f).Decode(data); err != nil {
-		log.Fatal(err)
+		log.Fatalf("decoding data: %v", err)
 	}
 
 	realIDs := map[string]string{}
 	for _, obj := range data.Objects {
 		if realIDs[obj.Id], err = structs.NextObjectID(); err != nil {
-			log.Fatal(err)
+			log.Fatalf("generating next object: %v", err)
 		}
 	}
 
@@ -63,27 +68,26 @@ func main() {
 		oldID := *id
 		var found bool
 		if *id, found = realIDs[oldID]; !found {
-			log.Fatal("old ID %q not found among real IDs", oldID)
+			log.Fatalf("old ID %q not found among real IDs", oldID)
 		}
 	}
 
 	for i := range data.Objects {
 		obj := &data.Objects[i]
 		replace(&obj.Id)
-		replace(&obj.Location)
 		for j := range obj.Exits {
 			exit := &obj.Exits[j]
 			replace(&exit.Destination)
 		}
-		obj.SourcePath = fmt.Sprintf("/%s.js", obj.Id)
+		obj.SourcePath = fmt.Sprintf("/%s.%v.js", nonWordReg.ReplaceAllString(obj.Name(), "_"), i)
 		sourceBuf := &bytes.Buffer{}
 		descBytes, err := goccy.MarshalIndent(obj.Descriptions, "", "  ")
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("marshalling descriptions for source: %v", err)
 		}
 		exitBytes, err := goccy.MarshalIndent(obj.Exits, "", "  ")
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("marshalling exits for source: %v", err)
 		}
 		fmt.Fprintf(sourceBuf, `// Source for %v/%v
 
@@ -92,10 +96,13 @@ setDescriptions(%s);
 setExits(%s);
 `, obj.Name(), obj.Id, string(descBytes), string(exitBytes))
 		if err := store.UNSAFEEnsureObject(ctx, obj); err != nil {
-			log.Fatal(err)
+			log.Fatalf("storing obj %q: %v", obj.Id, err)
+		}
+		if _, _, err := store.EnsureFile(ctx, obj.SourcePath); err != nil {
+			log.Fatalf("creating file %q: %v", obj.SourcePath, err)
 		}
 		if err := store.StoreSource(ctx, obj.SourcePath, sourceBuf.Bytes()); err != nil {
-			log.Fatal(err)
+			log.Fatalf("storing source %q: %v", obj.SourcePath, err)
 		}
 	}
 }
