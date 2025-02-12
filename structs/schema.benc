@@ -32,7 +32,6 @@ ctr Object {
     string id = 1;
     <string, <string, bool>> callbacks = 2;
     string state = 3;
-
     string location = 4;
     <string, bool> content = 5;
     <string, Skill> skills = 6;

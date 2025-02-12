@@ -67,11 +67,11 @@ func (r *responseWriter) WriteHeader(status int) {
 }
 
 func main() {
-	sshIface := flag.String("ssh", "127.0.0.1:15000", "Where to listen to SSH connections")
-	httpsIface := flag.String("https", "127.0.0.1:8081", "Where to listen to HTTPS connections for WebDAV")
-	httpIface := flag.String("http", "127.0.0.1:8080", "Where to listen to HTTP connections for WebDAV")
-	hostname := flag.String("hostname", "", "Hostname for HTTPS certificate signatures, will use -https value if empty")
-	dir := flag.String("dir", filepath.Join(os.Getenv("HOME"), ".juicemud"), "Where to save database and settings")
+	sshIface := flag.String("ssh", "127.0.0.1:15000", "Where to listen to SSH connections.")
+	httpsIface := flag.String("https", "127.0.0.1:8081", "Where to listen to HTTPS connections for WebDAV.")
+	httpIface := flag.String("http", "127.0.0.1:8080", "Where to listen to HTTP connections for WebDAV.")
+	hostname := flag.String("hostname", "", "Hostname for HTTPS certificate signatures, will use -https value if empty.")
+	dir := flag.String("dir", filepath.Join(os.Getenv("HOME"), ".juicemud"), "Where to save database and settings.")
 
 	flag.Parse()
 
@@ -123,7 +123,6 @@ func main() {
 	}
 	g, err := game.New(ctx, store)
 	if err != nil {
-		log.Println(juicemud.StackTrace(err))
 		log.Fatal(err)
 	}
 
