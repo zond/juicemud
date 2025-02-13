@@ -28,31 +28,27 @@ func (s SkillDuration) Duration() time.Duration {
 }
 
 type Skill struct {
-	// Skills might have Duration.
-	// This takes the shape of the result of the skill check not changing for a given
-	// subject, object, and skill when used again.
-	// The Duration of a skill is n seconds, where the likelihood that the skill check
-	// is the same after n seconds is 50%, and the likelihood that the skill check is
-	// the same after 3 x n seconds is 0%.
+	// Approximate time a skill check will be reused.
 	Duration SkillDuration
-	// Skills might take time to Recharge.
-	// This takes the shape of a skill success likelihood being multiplied with
-	// a factor that starts at 0 when the skill was last used by the same subject,
-	// and gets 50% closer to 1 every n seconds.
-	// The Recharge of a skill is 8 * n seconds, i.e. when the factor is
-	// 1 - 0.5^8 ~= 0.996.
-	// TL;DR Recharge is when the skill is freely usable again. 0 means immediately.
+	// Time for skill to recharge.
 	Recharge SkillDuration
+	// Success likelihood multiplier when immediately reused.
+	Reuse float32
 }
 
 type Use struct {
 	User  string
 	Skill string
 	At    time.Time
+
+	reuse float32
 }
 
 func (s Use) RNG(target string) *rand.Rand {
 	skill, foundSkill := Skills.GetHas(s.Skill)
+	if skill.Duration == 0 {
+		foundSkill = false
+	}
 
 	// Seed a hash with who does what to whom.
 	h := fnv.New64()
@@ -84,11 +80,8 @@ func (s Use) RNG(target string) *rand.Rand {
 	return result
 }
 
-func (s Use) Recharge() time.Time {
-	if sk, found := Skills.GetHas(s.Skill); found {
-		return s.At.Add(sk.Recharge.Duration())
-	}
-	return s.At
+func (s Use) RechargedAt() time.Time {
+	return s.At.Add(Skills.Get(s.Skill).Recharge.Duration())
 }
 
 func (s Use) key() string {
@@ -104,47 +97,57 @@ type Application struct {
 
 func (s Application) Check() bool {
 	// Success likelihood is ELO with 10 instead of 400 as "90% likely to win delta".
-	// success := float64(skillUses.recharge(s.use)) / (1.0 + math.Pow(10, float64(s.challenge-s.level)*0.1))
-	success := skillUses.recharge(s.Use) / float32(1.0+math.Pow(10, float64(s.Level-s.Challenge)*0.1))
+	success := skillUses.reuse(s.Use) / float32(1.0+math.Pow(10, float64(s.Level-s.Challenge)*0.1))
 	return s.Use.RNG(s.Target).Float32() > success
 }
 
 type globalSkillUses struct {
-	heap  *heap.Heap[Use]
-	uses  map[string]Use
-	mutex sync.Mutex
+	oldestUses    *heap.Heap[Use]
+	mostRecentUse map[string]Use
+	mutex         sync.Mutex
 }
 
 var (
 	skillUses = &globalSkillUses{
-		heap: heap.New(func(a, b Use) bool {
-			return a.Recharge().Before(b.Recharge())
+		oldestUses: heap.New(func(a, b Use) bool {
+			return a.RechargedAt().Before(b.RechargedAt())
 		}),
-		uses: map[string]Use{},
+		mostRecentUse: map[string]Use{},
 	}
 )
 
-func (g *globalSkillUses) recharge(s Use) float32 {
+func (g *globalSkillUses) reuse(s Use) (result float32) {
+	sk, found := Skills.GetHas(s.Skill)
+	if !found {
+		return 1.0
+	}
+
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
+
 	defer func() {
-		g.uses[s.key()] = s
-		g.heap.Push(s)
+		if mostRecent, found := g.mostRecentUse[s.key()]; !found || !mostRecent.At.After(s.At) {
+			s.reuse = result
+			g.mostRecentUse[s.key()] = s
+		}
+		g.oldestUses.Push(s)
 	}()
-	for oldest, found := g.heap.Peek(); found && oldest.Recharge().Before(s.At); oldest, found = g.heap.Peek() {
+
+	for oldest, found := g.oldestUses.Peek(); found && oldest.RechargedAt().Before(s.At); oldest, found = g.oldestUses.Peek() {
 		key := oldest.key()
-		if latest, found := g.uses[key]; found && latest.At.UnixNano() <= oldest.At.UnixNano() {
-			delete(g.uses, key)
+		if latest, found := g.mostRecentUse[key]; found && latest.At.UnixNano() <= oldest.At.UnixNano() {
+			delete(g.mostRecentUse, key)
 		}
-		g.heap.Pop()
+		g.oldestUses.Pop()
 	}
-	if old, found := g.uses[s.key()]; found {
-		if sk, found := Skills.GetHas(s.Skill); found {
-			return 1.0 - float32(math.Pow(0.5, 8*float64(s.At.Sub(old.At))/float64(sk.Recharge.Nanoseconds())))
-		} else {
-			return 1.0
-		}
+
+	if old, found := g.mostRecentUse[s.key()]; found {
+		sinceLastUse := float64(s.At.Sub(old.At))
+		rechargeFraction := sinceLastUse / float64(sk.Recharge.Nanoseconds())
+		rechargeFactor := float32(math.Pow(0.5, -(8*rechargeFraction-8)) - math.Pow(0.5, 8))
+		practicalReuse := old.reuse * sk.Reuse
+		return float32(math.Min(1, float64((practicalReuse + (1-practicalReuse)*rechargeFactor))))
 	} else {
-		return 1.0
+		return 1
 	}
 }
