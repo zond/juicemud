@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/zond/juicemud"
-	"github.com/zond/juicemud/game/skills"
 	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
@@ -229,53 +228,53 @@ func (g *Game) loadNeighbourhoodAt(ctx context.Context, loc string) (*structs.Ne
 }
 
 func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
-	callbacks["getSkills"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+	callbacks["getSkillConfigs"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 0 {
-			return rc.Throw("getSkills takes no arguments")
+			return rc.Throw("getSkillConfigs takes no arguments")
 		}
-		res, err := rc.JSFromGo(skills.Skills)
+		res, err := rc.JSFromGo(structs.SkillConfigs)
 		if err != nil {
-			return rc.Throw("trying to convert %v to *v8go.Value: %v", skills.Skills, err)
+			return rc.Throw("trying to convert %v to *v8go.Value: %v", structs.SkillConfigs, err)
 		}
 		return res
 	}
-	callbacks["setSkills"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+	callbacks["setSkillConfigs"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
-		if len(args) != 2 || !args[0].IsString() || !args[1].IsObject() {
-			return rc.Throw("setSkills takes [string, Object] arguments")
+		if len(args) != 1 || !args[0].IsObject() {
+			return rc.Throw("setSkillConfigss takes [Object] arguments")
 		}
-		if err := rc.Copy(&skills.Skills, args[1]); err != nil {
-			return rc.Throw("trying to convert %v to &skill{}: %v", args[1], err)
+		if err := rc.Copy(&structs.SkillConfigs, args[0]); err != nil {
+			return rc.Throw("trying to convert %v to structs.SkillConfigs: %v", args[0], err)
 		}
 		return nil
 
 	}
-	callbacks["getSkill"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+	callbacks["getSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 1 || !args[0].IsString() {
-			return rc.Throw("getSkills takes [string] arguments")
+			return rc.Throw("getSkillConfig takes [string] arguments")
 		}
-		skill, found := skills.Skills.GetHas(args[0].String())
+		skill, found := structs.SkillConfigs.GetHas(args[0].String())
 		if !found {
 			return nil
 		}
 		res, err := rc.JSFromGo(skill)
 		if err != nil {
-			return rc.Throw("trying to convert %v to *v8go.Value: %v", skills.Skills, err)
+			return rc.Throw("trying to convert %v to *v8go.Value: %v", structs.SkillConfigs, err)
 		}
 		return res
 	}
-	callbacks["setSkill"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+	callbacks["setSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 2 || !args[0].IsString() || !args[1].IsObject() {
-			return rc.Throw("setSkill takes [string, Object] arguments")
+			return rc.Throw("setSkillConfig takes [string, Object] arguments")
 		}
-		skill := skills.Skill{}
+		skill := structs.SkillConfig{}
 		if err := rc.Copy(&skill, args[1]); err != nil {
-			return rc.Throw("trying to convert %v to &skill{}: %v", args[1], err)
+			return rc.Throw("trying to convert %v to &structs.SkillConfig{}: %v", args[1], err)
 		}
-		skills.Skills.Set(args[0].String(), skill)
+		structs.SkillConfigs.Set(args[0].String(), skill)
 		return nil
 	}
 }

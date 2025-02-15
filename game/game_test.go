@@ -128,7 +128,7 @@ func BenchmarkCall(b *testing.B) {
 		obj.Location = genesisID
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if err := g.loadRunSave(ctx, obj.Id, &structs.AnyCall{
+			if _, _, err := g.loadRunSave(ctx, obj.Id, &structs.AnyCall{
 				Name:    connectedEventType,
 				Tag:     emitEventTag,
 				Content: map[string]any{},

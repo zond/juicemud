@@ -56,6 +56,11 @@ type Connection struct {
 	user *storage.User
 }
 
+// func (c *Connection) Linebreak(s string) string {
+// 	result := &bytes.Buffer{}
+
+// }
+
 func (c *Connection) SelectExec(options map[string]func() error) error {
 	commandNames := make(sort.StringSlice, 0, len(options))
 	for name := range options {

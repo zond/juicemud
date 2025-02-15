@@ -10,8 +10,11 @@ import (
 
 // Struct - Skill
 type Skill struct {
+    Name string
     Theoretical float32
     Practical float32
+    LastUsedAt uint64
+    LastBase float32
 }
 
 // Reserved Ids - Skill
@@ -24,7 +27,10 @@ func (skill *Skill) Size() int {
 
 // Nested Size - Skill
 func (skill *Skill) size(id uint16) (s int) {
+    s += bstd.SizeString(skill.Name) + 2
     s += bstd.SizeFloat32() + 2
+    s += bstd.SizeFloat32() + 2
+    s += bstd.SizeUint64() + 2
     s += bstd.SizeFloat32() + 2
 
     if id > 255 {
@@ -37,7 +43,10 @@ func (skill *Skill) size(id uint16) (s int) {
 
 // SizePlain - Skill
 func (skill *Skill) SizePlain() (s int) {
+    s += bstd.SizeString(skill.Name)
     s += bstd.SizeFloat32()
+    s += bstd.SizeFloat32()
+    s += bstd.SizeUint64()
     s += bstd.SizeFloat32()
     return
 }
@@ -50,10 +59,16 @@ func (skill *Skill) Marshal(b []byte) {
 // Nested Marshal - Skill
 func (skill *Skill) marshal(tn int, b []byte, id uint16) (n int) {
     n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 1)
-    n = bstd.MarshalFloat32(n, b, skill.Theoretical)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 1)
+    n = bstd.MarshalString(n, b, skill.Name)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 2)
+    n = bstd.MarshalFloat32(n, b, skill.Theoretical)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 3)
     n = bstd.MarshalFloat32(n, b, skill.Practical)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 4)
+    n = bstd.MarshalUint64(n, b, skill.LastUsedAt)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 5)
+    n = bstd.MarshalFloat32(n, b, skill.LastBase)
 
     n += 2
     b[n-2] = 1
@@ -64,8 +79,11 @@ func (skill *Skill) marshal(tn int, b []byte, id uint16) (n int) {
 // MarshalPlain - Skill
 func (skill *Skill) MarshalPlain(tn int, b []byte) (n int) {
     n = tn
+    n = bstd.MarshalString(n, b, skill.Name)
     n = bstd.MarshalFloat32(n, b, skill.Theoretical)
     n = bstd.MarshalFloat32(n, b, skill.Practical)
+    n = bstd.MarshalUint64(n, b, skill.LastUsedAt)
+    n = bstd.MarshalFloat32(n, b, skill.LastBase)
     return n
 }
 
@@ -91,7 +109,7 @@ func (skill *Skill) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, e
         return
     }
     if ok {
-        if n, skill.Theoretical, err = bstd.UnmarshalFloat32(n, b); err != nil {
+        if n, skill.Name, err = bstd.UnmarshalString(n, b); err != nil {
             return
         }
     }
@@ -102,7 +120,40 @@ func (skill *Skill) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, e
         return
     }
     if ok {
+        if n, skill.Theoretical, err = bstd.UnmarshalFloat32(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, skillRIds, 3); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
         if n, skill.Practical, err = bstd.UnmarshalFloat32(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, skillRIds, 4); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, skill.LastUsedAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, skillRIds, 5); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, skill.LastBase, err = bstd.UnmarshalFloat32(n, b); err != nil {
             return
         }
     }
@@ -113,10 +164,19 @@ func (skill *Skill) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, e
 // UnmarshalPlain - Skill
 func (skill *Skill) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     n = tn
+    if n, skill.Name, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
     if n, skill.Theoretical, err = bstd.UnmarshalFloat32(n, b); err != nil {
         return
     }
     if n, skill.Practical, err = bstd.UnmarshalFloat32(n, b); err != nil {
+        return
+    }
+    if n, skill.LastUsedAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+        return
+    }
+    if n, skill.LastBase, err = bstd.UnmarshalFloat32(n, b); err != nil {
         return
     }
     return

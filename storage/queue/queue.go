@@ -36,10 +36,10 @@ func (q *Queue) At(t time.Time) structs.Timestamp {
 }
 
 func (q *Queue) until(at structs.Timestamp) time.Duration {
-	return time.Nanosecond * time.Duration(uint64(at)-uint64(q.now()))
+	return time.Nanosecond * time.Duration(uint64(at)-uint64(q.Now()))
 }
 
-func (q *Queue) now() structs.Timestamp {
+func (q *Queue) Now() structs.Timestamp {
 	return structs.Timestamp(time.Now().UnixNano()) + q.offset
 }
 
@@ -98,7 +98,7 @@ func (q *Queue) Start(ctx context.Context, handler func(context.Context, *struct
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 	for !q.closed || q.nextEvent != nil {
-		for q.nextEvent != nil && structs.Timestamp(q.nextEvent.At) <= q.now() {
+		for q.nextEvent != nil && structs.Timestamp(q.nextEvent.At) <= q.Now() {
 			handler(ctx, q.nextEvent)
 			if err := q.tree.Del(q.nextEvent.Key); err != nil {
 				return juicemud.WithStack(err)
