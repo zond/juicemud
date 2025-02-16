@@ -576,8 +576,8 @@ func (s *Skill) improvement(at Timestamp, challenge float64, effective float64) 
 	if sk, found := SkillConfigs.GetHas(s.Name); found && sk.Recharge.Duration() > recharge {
 		recharge = sk.Recharge.Duration()
 	}
-	rechargeCoeff := s.specificRecharge(at, Duration(recharge))
-	skillCoeff := 0.1481 * math.Pow(0.5, effective)
+	rechargeCoeff := math.Min(1, float64(at.Time().Sub(Timestamp(s.LastUsedAt).Time()))/float64(recharge))
+	skillCoeff := 0.0355 * math.Pow(0.9, effective)
 	theoryCoeff := math.Max(1, float64(1+3*(s.Theoretical-s.Practical)))
 	challengeCoeff := 1 / (1 + math.Abs(challenge-effective))
 	perUse := float64(recharge) / float64(6*time.Minute)
@@ -594,7 +594,7 @@ func (s *Skill) Effective(at Timestamp) float64 {
 	if config, found := SkillConfigs.GetHas(s.Name); found && config.Forget != 0 {
 		nanosSinceLastUse := at.Nanoseconds() - Timestamp(s.LastUsedAt).Nanoseconds()
 		forgetFraction := float64(nanosSinceLastUse) / float64(config.Forget.Nanoseconds())
-		forgetCoeff := math.Pow(0.5, 8*forgetFraction)
+		forgetCoeff := 1 + (-1 / (1 + math.Exp(8-8*forgetFraction))) + (1 / math.Exp(8))
 		practicalPart := float64(s.Practical - permanentSkill)
 		return practicalPart*forgetCoeff + float64(permanentSkill)
 	}

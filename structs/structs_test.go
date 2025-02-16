@@ -109,35 +109,58 @@ func TestLearn(t *testing.T) {
 	recharge := 6 * time.Minute
 	SkillConfigs.Set("TestLearn", SkillConfig{
 		Recharge: Duration(recharge),
+		Forget:   Duration(time.Hour * 24 * 31 * 6),
 	})
-	timeToTen := func(multiple float64) time.Duration {
+	timeTo := func(target float32, multiple float64) time.Duration {
 		step := time.Duration(multiple * float64(recharge))
 		dur := time.Duration(0)
-		for s.Practical < 10 {
-			at := Timestamp(s.LastUsedAt).Time().Add(step)
+		daily := time.Duration(0)
+		var at time.Time
+		for s.Practical < target {
+			if daily < time.Hour*2 {
+				at = Timestamp(s.LastUsedAt).Time().Add(step)
+				dur += step
+			} else {
+				daily = 0
+				at = Timestamp(s.LastUsedAt).Time().Add(time.Hour * 22)
+			}
+			dur += step
+			//			before := s.Effective(Stamp(at))
 			SkillUse{
 				User:   "a",
 				Skill:  s,
 				Target: "b",
 				At:     at,
 			}.Check(s.Effective(Stamp(at)))
-			dur += step
+			//			log.Printf("%v: %v %v", dur, s.Effective(Stamp(at)), s.Effective(Stamp(at))-before)
 		}
 		return dur
 	}
-	assertClose(t, timeToTen(1.0), 1000*time.Hour, time.Hour)
+	assertClose(t, timeTo(5, 1.0), 37*time.Hour, time.Hour)
 	s.Practical = 0
 	s.Theoretical = 0
-	assertClose(t, timeToTen(0.5), 8510*time.Hour, time.Hour)
+	assertClose(t, timeTo(10, 1.0), 100*time.Hour, time.Hour)
 	s.Practical = 0
 	s.Theoretical = 0
-	assertClose(t, timeToTen(2.0), 1992*time.Hour, time.Hour)
+	assertClose(t, timeTo(10, 0.5), 99*time.Hour, time.Hour)
+	s.Practical = 0
+	s.Theoretical = 0
+	assertClose(t, timeTo(10, 2.0), 199*time.Hour, time.Hour)
 	s.Practical = 5
 	s.Theoretical = 5
-	assertClose(t, timeToTen(1.0), 970*time.Hour, time.Hour)
+	assertClose(t, timeTo(10, 1.0), 62*time.Hour, time.Hour)
 	s.Practical = 5
 	s.Theoretical = 10
-	assertClose(t, timeToTen(1.0), 320*time.Hour, time.Hour)
+	assertClose(t, timeTo(10, 1.0), 12*time.Hour, time.Hour)
+	s.Practical = 9
+	s.Theoretical = 10
+	assertClose(t, timeTo(10, 1.0), 7*time.Hour, time.Hour)
+	s.Practical = 9
+	s.Theoretical = 9
+	assertClose(t, timeTo(10, 1.0), 15*time.Hour, time.Hour)
+	s.Practical = 0
+	s.Theoretical = 0
+	assertClose(t, timeTo(20, 1.0), 386*time.Hour, time.Hour)
 }
 
 func TestRechargeWithReuse(t *testing.T) {
