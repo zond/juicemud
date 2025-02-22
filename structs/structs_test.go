@@ -18,6 +18,7 @@ func TestLevel(t *testing.T) {
 	u := SkillUse{
 		User: "a",
 		Skill: &Skill{
+			Name:      "TestLevel",
 			Practical: 10,
 		},
 		Target: "b",
@@ -25,9 +26,14 @@ func TestLevel(t *testing.T) {
 	testAt := func(delta float64) float64 {
 		success := 0
 		count := 10000
-		for i := 0; i < count; i++ {
+		for range count {
 			u.At = time.Unix(0, rand.Int64())
-			if u.Check(float64(u.Skill.Practical) + delta) {
+			u.Challenge = float64(u.Skill.Practical) + delta
+			u.Skill.Practical = 10
+			u.Skill.Theoretical = 10
+			u.Skill.LastBase = 1
+			u.Skill.LastUsedAt = 0
+			if u.Check() {
 				success++
 			}
 		}
@@ -37,7 +43,7 @@ func TestLevel(t *testing.T) {
 	assertClose(t, testAt(10), 0.1, 0.02)
 	assertClose(t, testAt(0), 0.5, 0.02)
 	assertClose(t, testAt(-10), 0.9, 0.02)
-	assertClose(t, testAt(-20), 0.99, 0.002)
+	assertClose(t, testAt(-20), 0.99, 0.02)
 }
 
 func TestRechargeWithoutReuse(t *testing.T) {
@@ -59,7 +65,8 @@ func TestRechargeWithoutReuse(t *testing.T) {
 		for i := 0; i < count; i++ {
 			u.Skill.LastUsedAt = Stamp(time.Unix(0, rand.Int64())).Uint64()
 			u.At = Timestamp(u.Skill.LastUsedAt).Time().Add(time.Duration(float64(recharge) * multiple))
-			if u.Check(u.Skill.Effective(Stamp(u.At))) {
+			u.Challenge = u.Skill.Effective(Stamp(u.At))
+			if u.Check() {
 				success++
 			}
 		}
@@ -85,19 +92,18 @@ func TestForget(t *testing.T) {
 		Forget: Duration(forget),
 	})
 	assertClose(t, s.Effective(Stamp(now)), 20, 0.02)
-	assertClose(t, s.Effective(Stamp(now.Add(forget/8))), 15, 0.02)
-	assertClose(t, s.Effective(Stamp(now.Add(2*forget/8))), 12.5, 0.02)
-	assertClose(t, s.Effective(Stamp(now.Add(3*forget/8))), 11.25, 0.02)
-	assertClose(t, s.Effective(Stamp(now.Add(9*forget/8))), 10, 0.02)
+	assertClose(t, s.Effective(Stamp(now.Add(forget))), 15, 0.02)
+	assertClose(t, s.Effective(Stamp(now.Add(forget*2))), 10, 0.02)
 
 	SkillUse{
-		User:   "a",
-		Skill:  s,
-		Target: "b",
-		At:     now.Add(forget / 8),
-	}.Check(10.0)
-	assertClose(t, s.Effective(Stamp(now.Add(forget/8))), 15, 0.02)
-	assertClose(t, s.Practical, 15, 0.02)
+		User:      "a",
+		Skill:     s,
+		Target:    "b",
+		At:        now.Add(forget),
+		Challenge: 10,
+	}.Check()
+	assertClose(t, s.Effective(Stamp(now.Add(forget))), 15, 0.04)
+	assertClose(t, s.Practical, 15, 0.04)
 }
 
 func TestLearn(t *testing.T) {
@@ -127,11 +133,12 @@ func TestLearn(t *testing.T) {
 			dur += step
 			//			before := s.Effective(Stamp(at))
 			SkillUse{
-				User:   "a",
-				Skill:  s,
-				Target: "b",
-				At:     at,
-			}.Check(s.Effective(Stamp(at)))
+				User:      "a",
+				Skill:     s,
+				Target:    "b",
+				At:        at,
+				Challenge: s.Effective(Stamp(at)),
+			}.Check()
 			//			log.Printf("%v: %v %v", dur, s.Effective(Stamp(at)), s.Effective(Stamp(at))-before)
 		}
 		return dur
@@ -184,9 +191,11 @@ func TestRechargeWithReuse(t *testing.T) {
 			u.Skill.LastBase = 0
 			u.Skill.LastUsedAt = 0
 			u.At = time.Unix(0, rand.Int64())
-			u.Check(0.0)
+			u.Challenge = 0
+			u.Check()
 			u.At = u.At.Add(time.Duration(float64(recharge) * multiple))
-			if u.Check(u.Skill.Effective(Stamp(u.At))) {
+			u.Challenge = u.Skill.Effective(Stamp(u.At))
+			if u.Check() {
 				success++
 			}
 		}

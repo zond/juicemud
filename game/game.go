@@ -78,7 +78,7 @@ setDescriptions([
 `,
 		emptySource: "// This code runs the top level container of all content.",
 	}
-	initialObjects = map[string]*structs.Object{
+	initialObjects = map[string]*structs.ObjectDO{
 		genesisID: {
 			Id:         genesisID,
 			Location:   emptyID,
@@ -119,7 +119,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		}
 	}
 	for _, obj := range initialObjects {
-		if err := s.UNSAFEEnsureObject(ctx, obj); err != nil {
+		if err := s.UNSAFEEnsureObject(ctx, structs.DressObject(&structs.Object{Unsafe: obj})); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}
@@ -138,12 +138,12 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 				call = &ev.Call
 			}
 			go func() {
-				if _, _, err := g.loadRunSave(ctx, ev.Object, call); err != nil {
+				if _, _, err := g.loadRun(ctx, ev.Object, call); err != nil {
 					log.Printf("trying to execute %+v: %v", ev, err)
 					log.Printf("%v", juicemud.StackTrace(err))
 				}
 			}()
-		}, g.emitMovement))
+		}))
 	}()
 	bootJS, _, err := g.storage.LoadSource(ctx, bootSource)
 	if err != nil {

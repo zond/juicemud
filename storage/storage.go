@@ -31,15 +31,19 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	objects, err := dbm.OpenTypeHash[structs.Object](filepath.Join(dir, "objects"))
+	objects, err := dbm.OpenLiveTypeHash[structs.Object](filepath.Join(dir, "objects"))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	queueTree, err := dbm.OpenTree(filepath.Join(dir, "queue"))
+	queueTree, err := dbm.OpenTypeTree[structs.Event](filepath.Join(dir, "queue"))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	modTimes, err := dbm.OpenHash(filepath.Join(dir, "modTimes"))
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	skills, err := dbm.OpenTypeHash[structs.Skill](filepath.Join(dir, "skills"))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -48,6 +52,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 		sources:  sources,
 		modTimes: modTimes,
 		objects:  objects,
+		skills:   skills,
 		queue:    queue.New(ctx, queueTree),
 	}
 	for _, prototype := range []any{File{}, FileSync{}, Group{}, User{}, GroupMember{}} {
@@ -59,12 +64,12 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 }
 
 type Storage struct {
-	queue           *queue.Queue
-	sql             *sqly.DB
-	sources         dbm.Hash
-	modTimes        dbm.Hash
-	objects         dbm.TypeHash[structs.Object, *structs.Object]
-	movementHandler MovementHandler
+	queue    *queue.Queue
+	sql      *sqly.DB
+	sources  *dbm.Hash
+	modTimes *dbm.Hash
+	objects  *dbm.LiveTypeHash[structs.Object, *structs.Object]
+	skills   *dbm.TypeHash[structs.Skill, *structs.Skill]
 }
 
 func (s *Storage) Queue() *queue.Queue {
@@ -73,10 +78,7 @@ func (s *Storage) Queue() *queue.Queue {
 
 type EventHandler func(context.Context, *structs.Event)
 
-type MovementHandler func(context.Context, *Movement) error
-
-func (s *Storage) StartQueue(ctx context.Context, eventHandler EventHandler, movementHandler MovementHandler) error {
-	s.movementHandler = movementHandler
+func (s *Storage) StartQueue(ctx context.Context, eventHandler EventHandler) error {
 	return juicemud.WithStack(s.queue.Start(ctx, eventHandler))
 }
 
@@ -88,6 +90,51 @@ func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, para
 		return errors.Wrapf(err, "Executing %q(%+v):", sql, params)
 	}
 	return nil
+}
+
+type Skill struct {
+	*structs.Skill
+	objectID string
+	storage  *Storage
+	depth    int
+}
+
+func (s *Skill) NoStore() *structs.Skill {
+	return s.Skill
+}
+
+func (s *Skill) StoreAfter(ctx context.Context, f func(*structs.Skill) error) error {
+	s.depth++
+	defer func() {
+		s.depth--
+	}()
+	if err := f(s.Skill); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if s.depth == 1 {
+		return s.storage.skills.Set(fmt.Sprintf("%s.%s", s.objectID, s.Skill.Name), s.Skill, true)
+	}
+	return nil
+}
+
+func (s *Storage) LoadSkill(ctx context.Context, objectID string, skillName string) (*Skill, error) {
+	result, err := s.skills.Get(fmt.Sprintf("%s.%s", objectID, skillName))
+	if errors.Is(err, os.ErrNotExist) {
+		return &Skill{
+			Skill: &structs.Skill{
+				Name: skillName,
+			},
+			objectID: objectID,
+			storage:  s,
+		}, nil
+	} else if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return &Skill{
+		Skill:    result,
+		objectID: objectID,
+		storage:  s,
+	}, err
 }
 
 func (s *Storage) LoadSource(ctx context.Context, path string) ([]byte, int64, error) {
@@ -128,17 +175,13 @@ type Refresh func(ctx context.Context, object *structs.Object) error
 
 func (s *Storage) maybeRefresh(ctx context.Context, obj *structs.Object, ref Refresh) error {
 	if ref != nil {
-		t, err := s.SourceModTime(ctx, obj.SourcePath)
+		t, err := s.SourceModTime(ctx, obj.GetSourcePath())
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		if t > obj.SourceModTime {
-			oldLoc := obj.Location
+		needRefresh := t > obj.GetSourceModTime()
+		if needRefresh {
 			if err := ref(ctx, obj); err != nil {
-				return juicemud.WithStack(err)
-			}
-			obj.SourceModTime = t
-			if err := s.StoreObject(ctx, &oldLoc, obj); err != nil {
 				return juicemud.WithStack(err)
 			}
 		}
@@ -163,6 +206,7 @@ func (s *Storage) LoadObjects(ctx context.Context, ids map[string]bool, ref Refr
 	return res, nil
 }
 
+// TODO: Rename to AccessObject
 // Loads the object with the given ID. If a Refresh is given, it will be run if the
 // object source is newer than the last run of the object.
 func (s *Storage) LoadObject(ctx context.Context, id string, ref Refresh) (*structs.Object, error) {
@@ -176,21 +220,6 @@ func (s *Storage) LoadObject(ctx context.Context, id string, ref Refresh) (*stru
 	return res, nil
 }
 
-func (s *Storage) EnsureObject(ctx context.Context, id string, setup func(*structs.Object) error) error {
-	return juicemud.WithStack(s.objects.Proc([]dbm.Proc{
-		s.objects.SProc(id, func(k string, v *structs.Object) (*structs.Object, error) {
-			if v != nil {
-				return v, nil
-			}
-			object := &structs.Object{Id: id}
-			if err := setup(object); err != nil {
-				return nil, juicemud.WithStack(err)
-			}
-			return object, nil
-		}),
-	}, true))
-}
-
 type Movement struct {
 	Object      *structs.Object
 	Source      string
@@ -198,98 +227,46 @@ type Movement struct {
 }
 
 func (s *Storage) UNSAFEEnsureObject(ctx context.Context, obj *structs.Object) error {
-	return juicemud.WithStack(s.objects.Proc([]dbm.Proc{
-		s.objects.SProc(obj.Id, func(key string, value *structs.Object) (*structs.Object, error) {
-			if value == nil {
-				return obj, nil
-			}
-			return value, nil
-		}),
-	}, true))
+	return juicemud.WithStack(s.objects.SetIfMissing(obj))
+}
+
+func (s *Storage) StoreObject(ctx context.Context, obj *structs.Object) error {
+	return juicemud.WithStack(s.objects.Set(obj))
 }
 
 var (
-	ErrCircularContainer = fmt.Errorf("Objects can't contain themselves.")
+	ErrCircularContainer = fmt.Errorf("objects can't contain themselves.")
 )
 
-func (s *Storage) StoreObject(ctx context.Context, claimedOldLocation *string, object *structs.Object) error {
-	if object.Id != "" && object.Location == object.Id {
+func (s *Storage) MoveObject(ctx context.Context, object *structs.Object, destination string) error {
+	if object.GetId() == destination {
 		return juicemud.WithStack(ErrCircularContainer)
 	}
-	var m *Movement
-	var pairs []dbm.Proc
-	if claimedOldLocation == nil || *claimedOldLocation == object.Location {
-		pairs = []dbm.Proc{
-			s.objects.SProc(object.Location, func(key string, value *structs.Object) (*structs.Object, error) {
-				if value == nil {
-					return nil, errors.Wrapf(os.ErrNotExist, "can't find location %q", object.Location)
-				}
-				if _, found := value.Content[object.Id]; !found {
-					m = &Movement{
-						Object:      object,
-						Source:      "",
-						Destination: object.Location,
-					}
-				}
-				value.Content[object.Id] = true
-				return value, nil
-			}),
-			s.objects.SProc(object.Id, func(key string, value *structs.Object) (*structs.Object, error) {
-				if value == nil {
-					return object, nil
-				}
-				if value.Location != object.Location {
-					return nil, errors.Errorf("object is moved from %q to %q without updating old location", value.Location, object.Location)
-				}
-				return object, nil
-			}),
-		}
-	} else {
-		m = &Movement{
-			Object:      object,
-			Source:      *claimedOldLocation,
-			Destination: object.Location,
-		}
-		// Loc is changed, verify that the old one is what's there right now, that obj can
-		// be removed from old loc, and added to new loc, before all are saved.
-		pairs = []dbm.Proc{
-			s.objects.SProc(object.Id, func(key string, value *structs.Object) (*structs.Object, error) {
-				if value == nil {
-					return nil, errors.Errorf("can't find old version of %q", object.Id)
-				}
-				if value.Location != *claimedOldLocation {
-					return nil, errors.Errorf("object in %q claims to move from %q to %q", value.Location, *claimedOldLocation, object.Location)
-				}
-				return object, nil
-			}),
-			s.objects.SProc(object.Location, func(key string, value *structs.Object) (*structs.Object, error) {
-				if value == nil {
-					return nil, errors.Errorf("can't find new location %q", object.Location)
-				}
-				value.Content[object.Id] = true
-				return value, nil
-			}),
-			s.objects.SProc(*claimedOldLocation, func(key string, value *structs.Object) (*structs.Object, error) {
-				if value == nil {
-					return nil, errors.Errorf("can't find old location %q", object.Location)
-				}
-				if _, found := value.Content[object.Id]; !found {
-					return nil, errors.Errorf("object claimed to be contained by %q, but wasn't", *claimedOldLocation)
-				}
-				delete(value.Content, object.Id)
-				return value, nil
-			}),
-		}
-	}
-	if err := s.objects.Proc(pairs, true); err != nil {
+
+	oldContainer, err := s.objects.Get(object.Unsafe.Location)
+	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if m != nil {
-		if err := s.movementHandler(ctx, m); err != nil {
-			return juicemud.WithStack(err)
-		}
+
+	newContainer, err := s.objects.Get(destination)
+	if err != nil {
+		return juicemud.WithStack(err)
 	}
-	return nil
+
+	return juicemud.WithStack(structs.WithLock(func() error {
+		if object.Unsafe.Location != "" { // This is an exception for new objects being moved into the world.
+			if _, found := oldContainer.Unsafe.Content[object.Unsafe.Id]; !found {
+				return errors.Errorf("%q not found in %q", object.Unsafe.Id, oldContainer.Unsafe.Id)
+			}
+		}
+		if _, found := newContainer.Unsafe.Content[object.Unsafe.Id]; found {
+			return errors.Errorf("%q already in %q", object.Unsafe.Id, newContainer.Unsafe.Id)
+		}
+		delete(oldContainer.Unsafe.Content, object.Unsafe.Id)
+		newContainer.Unsafe.Content[object.Unsafe.Id] = true
+		object.Unsafe.Location = newContainer.Unsafe.Id
+		return nil
+	}, object, oldContainer, newContainer))
 }
 
 type FileSync struct {

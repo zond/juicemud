@@ -14,7 +14,7 @@ import (
 
 func TestQueue(t *testing.T) {
 	ctx := context.Background()
-	dbm.WithTree(t, func(tr dbm.Tree) {
+	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
 		got := []string{}
 		mut := &sync.Mutex{}
 		taskWG := &sync.WaitGroup{}

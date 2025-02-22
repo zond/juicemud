@@ -19,7 +19,7 @@ import (
 )
 
 type data struct {
-	Objects []structs.Object
+	Objects []structs.ObjectDO
 }
 
 var nonWordReg = regexp.MustCompile(`\W`)
@@ -74,12 +74,13 @@ func main() {
 
 	for i := range data.Objects {
 		obj := &data.Objects[i]
+		wrapper := &structs.Object{Unsafe: &data.Objects[i]}
 		replace(&obj.Id)
 		for j := range obj.Exits {
 			exit := &obj.Exits[j]
 			replace(&exit.Destination)
 		}
-		obj.SourcePath = fmt.Sprintf("/%s.%v.js", nonWordReg.ReplaceAllString(obj.Name(), "_"), i)
+		obj.SourcePath = fmt.Sprintf("/%s.%v.js", nonWordReg.ReplaceAllString(wrapper.Name(), "_"), i)
 		sourceBuf := &bytes.Buffer{}
 		descBytes, err := goccy.MarshalIndent(obj.Descriptions, "", "  ")
 		if err != nil {
@@ -94,8 +95,9 @@ func main() {
 setDescriptions(%s);
 
 setExits(%s);
-`, obj.Name(), obj.Id, string(descBytes), string(exitBytes))
-		if err := store.UNSAFEEnsureObject(ctx, obj); err != nil {
+`, wrapper.Name(), obj.Id, string(descBytes), string(exitBytes))
+		wrapper.Unsafe = obj
+		if err := store.UNSAFEEnsureObject(ctx, wrapper); err != nil {
 			log.Fatalf("storing obj %q: %v", obj.Id, err)
 		}
 		if _, _, err := store.EnsureFile(ctx, obj.SourcePath); err != nil {

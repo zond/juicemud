@@ -1,4 +1,5 @@
 //go:generate bencgen --in schema.benc --out ./ --file schema --lang go
+//go:generate go run ../../decorator/decorator.go -in schema.go -out decorated.go -pkg dbm
 package dbm
 
 import (
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/bxcodec/faker/v4"
@@ -24,7 +26,7 @@ var (
 )
 
 func init() {
-	err := faker.FakeData(&fakeObject, options.WithRandomMapAndSliceMaxSize(10))
+	err := faker.FakeData(&fakeObject.Unsafe, options.WithRandomMapAndSliceMaxSize(10))
 	if err != nil {
 		log.Panic(err)
 	}
@@ -34,13 +36,13 @@ func BenchmarkHash(b *testing.B) {
 	b.StopTimer()
 	by := make([]byte, fakeObject.Size())
 	fakeObject.Marshal(by)
-	WithHash(b, func(h Hash) {
+	WithHash(b, func(h *Hash) {
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if err := h.Set(fakeObject.Id, by, true); err != nil {
+			if err := h.Set(fakeObject.GetId(), by, true); err != nil {
 				b.Fatal(err)
 			}
-			_, err := h.Get(fakeObject.Id)
+			_, err := h.Get(fakeObject.GetId())
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -51,13 +53,37 @@ func BenchmarkHash(b *testing.B) {
 
 func BenchmarkStructHash(b *testing.B) {
 	b.StopTimer()
-	WithTypeHash[structs.Object](b, func(h TypeHash[structs.Object, *structs.Object]) {
+	WithTypeHash(b, func(h *TypeHash[structs.Object, *structs.Object]) {
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if err := h.Set(fakeObject.Id, &fakeObject, true); err != nil {
+			if err := h.Set(fakeObject.GetId(), &fakeObject, true); err != nil {
 				b.Fatal(err)
 			}
-			_, err := h.Get(fakeObject.Id)
+			_, err := h.Get(fakeObject.GetId())
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+	})
+}
+
+func BenchmarkStructHashSmall(b *testing.B) {
+	b.StopTimer()
+	sk := structs.Skill{
+		Name:        "str",
+		Practical:   1.0,
+		Theoretical: 1.0,
+		LastBase:    1.0,
+		LastUsedAt:  100.0,
+	}
+	WithTypeHash(b, func(h *TypeHash[structs.Skill, *structs.Skill]) {
+		b.StartTimer()
+		for i := 0; i < b.N; i++ {
+			if err := h.Set(sk.Name, &sk, true); err != nil {
+				b.Fatal(err)
+			}
+			_, err := h.Get(sk.Name)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -67,7 +93,7 @@ func BenchmarkStructHash(b *testing.B) {
 }
 
 var (
-	benchTree TypeTree[structs.Event, *structs.Event]
+	benchTree *TypeTree[structs.Event, *structs.Event]
 )
 
 func TestMain(m *testing.M) {
@@ -133,8 +159,8 @@ func BenchmarkStructTree(b *testing.B) {
 }
 
 func TestGetStruct(t *testing.T) {
-	WithTypeHash[TestObj](t, func(sh TypeHash[TestObj, *TestObj]) {
-		want := &TestObj{I: 1, S: "s"}
+	WithTypeHash(t, func(sh *TypeHash[Obj, *Obj]) {
+		want := &Obj{I: 1, S: "s"}
 		if err := sh.Set("a", want, true); err != nil {
 			t.Fatal(err)
 		}
@@ -148,9 +174,46 @@ func TestGetStruct(t *testing.T) {
 	})
 }
 
+func TestLiveTypeHash(t *testing.T) {
+	WithLiveTypeHash(t, func(lh *LiveTypeHash[Live, *Live]) {
+		done := lh.Start()
+		var err error
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+		go func() {
+			err = <-done
+			wg.Done()
+		}()
+		to := &Live{Unsafe: &LiveDO{}}
+		to.Unsafe.Id = "id"
+		if err := lh.Set(to); err != nil {
+			t.Fatal(err)
+		}
+		cpy1, err := lh.Get(to.GetId())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cpy1.SetS("aaa")
+		cpy2, err := lh.Get(to.GetId())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lh.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if cpy2.GetS() != "aaa" {
+			t.Errorf("got %q, want 'aaa'", cpy2.GetS())
+		}
+		close(done)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestGetStructMulti(t *testing.T) {
-	WithTypeHash[TestObj](t, func(sh TypeHash[TestObj, *TestObj]) {
-		want := map[string]*TestObj{"s": &TestObj{I: 1, S: "s"}, "s2": &TestObj{I: 2, S: "s2"}}
+	WithTypeHash(t, func(sh *TypeHash[Obj, *Obj]) {
+		want := map[string]*Obj{"s": {I: 1, S: "s"}, "s2": {I: 2, S: "s2"}}
 		for _, obj := range want {
 			if err := sh.Set(obj.S, obj, true); err != nil {
 				t.Fatal(err)
@@ -167,8 +230,8 @@ func TestGetStructMulti(t *testing.T) {
 }
 
 func TestProc(t *testing.T) {
-	WithTypeHash(t, func(sh TypeHash[TestObj, *TestObj]) {
-		want := map[string]*TestObj{"s": &TestObj{I: 1, S: "s"}, "s2": &TestObj{I: 2, S: "s2"}}
+	WithTypeHash(t, func(sh *TypeHash[Obj, *Obj]) {
+		want := map[string]*Obj{"s": {I: 1, S: "s"}, "s2": {I: 2, S: "s2"}}
 		for _, obj := range want {
 			if err := sh.Set(obj.S, obj, true); err != nil {
 				t.Fatal(err)
@@ -176,11 +239,11 @@ func TestProc(t *testing.T) {
 		}
 		wantErr := fmt.Errorf("wantErr")
 		if err := sh.Proc([]Proc{
-			sh.SProc("s", func(s string, to *TestObj) (*TestObj, error) {
+			sh.SProc("s", func(s string, to *Obj) (*Obj, error) {
 				to.I = 14
 				return to, nil
 			}),
-			sh.SProc("s2", func(s string, to *TestObj) (*TestObj, error) {
+			sh.SProc("s2", func(s string, to *Obj) (*Obj, error) {
 				return nil, wantErr
 			}),
 		}, true); !errors.Is(err, wantErr) {
@@ -194,11 +257,11 @@ func TestProc(t *testing.T) {
 			t.Errorf("got %+v, want %+v: %v", got, want, diff)
 		}
 		if err := sh.Proc([]Proc{
-			sh.SProc("s", func(s string, to *TestObj) (*TestObj, error) {
+			sh.SProc("s", func(s string, to *Obj) (*Obj, error) {
 				to.I = 14
 				return to, nil
 			}),
-			sh.SProc("s2", func(s string, to *TestObj) (*TestObj, error) {
+			sh.SProc("s2", func(s string, to *Obj) (*Obj, error) {
 				to.I = 44
 				return to, nil
 			}),
@@ -218,23 +281,23 @@ func TestProc(t *testing.T) {
 }
 
 func TestStructTree(t *testing.T) {
-	WithTypeTree(t, func(st TypeTree[TestObj, *TestObj]) {
-		if err := st.Set(string([]byte{24, 34, 149, 40, 93, 3, 23, 184, 24, 34, 149, 40, 87, 33, 87, 16}), &TestObj{I: 10}, false); err != nil {
+	WithTypeTree(t, func(st *TypeTree[Obj, *Obj]) {
+		if err := st.Set(string([]byte{24, 34, 149, 40, 93, 3, 23, 184, 24, 34, 149, 40, 87, 33, 87, 16}), &Obj{I: 10}, false); err != nil {
 			t.Fatal(fmt.Errorf("Set 1: %w", err))
 		}
-		if err := st.Set(string([]byte{24, 34, 149, 40, 93, 3, 23, 184, 24, 34, 149, 40, 87, 34, 77, 40}), &TestObj{I: 10}, false); err != nil {
+		if err := st.Set(string([]byte{24, 34, 149, 40, 93, 3, 23, 184, 24, 34, 149, 40, 87, 34, 77, 40}), &Obj{I: 10}, false); err != nil {
 			t.Fatal(fmt.Errorf("Set 2: %w", err))
 		}
 	})
 }
 
 func TestFirst(t *testing.T) {
-	WithTypeTree(t, func(st TypeTree[TestObj, *TestObj]) {
+	WithTypeTree(t, func(st *TypeTree[Obj, *Obj]) {
 		for _, vInt := range rand.Perm(100) {
 			v := uint32(vInt)
 			key := make([]byte, binary.Size(v))
 			binary.BigEndian.PutUint32(key, v)
-			if err := st.Set(string(key), &TestObj{I: vInt}, true); err != nil {
+			if err := st.Set(string(key), &Obj{I: vInt}, true); err != nil {
 				t.Fatal(err)
 			}
 		}

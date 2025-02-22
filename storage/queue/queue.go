@@ -13,17 +13,17 @@ import (
 )
 
 type Queue struct {
-	tree      dbm.TypeTree[structs.Event, *structs.Event]
+	tree      *dbm.TypeTree[structs.Event, *structs.Event]
 	cond      *sync.Cond
 	closed    bool
 	nextEvent *structs.Event
 	offset    structs.Timestamp
 }
 
-func New(ctx context.Context, t dbm.Tree) *Queue {
+func New(ctx context.Context, t *dbm.TypeTree[structs.Event, *structs.Event]) *Queue {
 	return &Queue{
 		cond: sync.NewCond(&sync.Mutex{}),
-		tree: dbm.TypeTree[structs.Event, *structs.Event]{TypeHash: dbm.TypeHash[structs.Event, *structs.Event](t)},
+		tree: t,
 	}
 }
 

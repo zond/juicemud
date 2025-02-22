@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/estraier/tkrzw-go"
 	"github.com/zond/juicemud"
@@ -16,7 +17,7 @@ type Hash struct {
 	mutex *sync.RWMutex
 }
 
-func (h Hash) Get(k string) ([]byte, error) {
+func (h *Hash) Get(k string) ([]byte, error) {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
 	b, stat := h.dbm.Get(k)
@@ -28,7 +29,7 @@ func (h Hash) Get(k string) ([]byte, error) {
 	return b, nil
 }
 
-func (h Hash) Set(k string, v []byte, overwrite bool) error {
+func (h *Hash) Set(k string, v []byte, overwrite bool) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	if stat := h.dbm.Set(k, v, overwrite); !stat.IsOK() {
@@ -37,7 +38,7 @@ func (h Hash) Set(k string, v []byte, overwrite bool) error {
 	return nil
 }
 
-func (h Hash) Del(k string) error {
+func (h *Hash) Del(k string) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	if stat := h.dbm.Remove(k); !stat.IsOK() {
@@ -46,11 +47,154 @@ func (h Hash) Del(k string) error {
 	return nil
 }
 
-type TypeHash[T any, S structs.Serializable[T]] struct {
-	Hash
+type LiveTypeHash[T any, S structs.Snapshottable[T]] struct {
+	hash         *TypeHash[T, S]
+	stage        map[string]*T
+	stageMutex   sync.RWMutex
+	updates      map[string]bool
+	lastUpdate   time.Time
+	updatesMutex sync.RWMutex
 }
 
-func (h TypeHash[T, S]) Get(k string) (*T, error) {
+func (l *LiveTypeHash[T, S]) Age() time.Duration {
+	l.updatesMutex.RLock()
+	defer l.updatesMutex.RUnlock()
+	return time.Since(l.lastUpdate)
+}
+
+func (l *LiveTypeHash[T, S]) Flush() error {
+	toUpdate := []string{}
+	l.updatesMutex.Lock()
+	for key := range l.updates {
+		toUpdate = append(toUpdate, key)
+	}
+	l.lastUpdate = time.Now()
+	l.updates = map[string]bool{}
+	l.updatesMutex.Unlock()
+	for _, key := range toUpdate {
+		l.stageMutex.RLock()
+		obj, found := l.stage[key]
+		l.stageMutex.RUnlock()
+		if !found {
+			continue
+		}
+		if err := l.hash.Set(key, obj, true); err != nil {
+			return juicemud.WithStack(err)
+		}
+	}
+	return nil
+}
+
+func (l *LiveTypeHash[T, S]) Start() chan error {
+	done := make(chan error)
+	timer := time.NewTicker(time.Second)
+	go func() {
+		defer timer.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-timer.C:
+				if err := l.Flush(); err != nil {
+					done <- juicemud.WithStack(err)
+					close(done)
+				}
+			}
+		}
+	}()
+	return done
+}
+
+func (l *LiveTypeHash[T, S]) updated(t *T) {
+	l.updatesMutex.Lock()
+	defer l.updatesMutex.Unlock()
+	l.updates[S(t).GetId()] = true
+}
+
+func (l *LiveTypeHash[T, S]) SetIfMissing(t *T) error {
+	id := S(t).GetId()
+
+	l.stageMutex.RLock()
+	_, found := l.stage[id]
+	l.stageMutex.RUnlock()
+	if found {
+		return nil
+	}
+
+	l.stageMutex.Lock()
+	defer l.stageMutex.Unlock()
+
+	_, found = l.stage[id]
+	if found {
+		return nil
+	}
+
+	S(t).SetPostUnlock(l.updated)
+	l.stage[id] = t
+	return juicemud.WithStack(l.hash.Set(id, t, true))
+}
+
+func (l *LiveTypeHash[T, S]) setNOLOCK(t *T) error {
+	id := S(t).GetId()
+
+	S(t).SetPostUnlock(l.updated)
+	l.stage[id] = t
+	return juicemud.WithStack(l.hash.Set(id, t, true))
+}
+
+func (l *LiveTypeHash[T, S]) Set(t *T) error {
+	l.stageMutex.Lock()
+	defer l.stageMutex.Unlock()
+
+	return juicemud.WithStack(l.setNOLOCK(t))
+}
+
+func (l *LiveTypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
+	res := map[string]*T{}
+	var err error
+	for key := range keys {
+		if res[key], err = l.Get(key); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+	}
+	return res, nil
+}
+
+func (l *LiveTypeHash[T, S]) getNOLOCK(k string) (*T, error) {
+	if res, found := l.stage[k]; found {
+		return res, nil
+	}
+
+	res, err := l.hash.Get(k)
+	if err != nil {
+		return nil, err
+	}
+
+	S(res).SetPostUnlock(l.updated)
+	l.stage[k] = res
+
+	return res, nil
+}
+
+func (l *LiveTypeHash[T, S]) Get(k string) (*T, error) {
+	l.stageMutex.RLock()
+	res, found := l.stage[k]
+	l.stageMutex.RUnlock()
+	if found {
+		return res, nil
+	}
+
+	l.stageMutex.Lock()
+	defer l.stageMutex.Unlock()
+
+	return l.getNOLOCK(k)
+}
+
+type TypeHash[T any, S structs.Serializable[T]] struct {
+	*Hash
+}
+
+func (h *TypeHash[T, S]) Get(k string) (*T, error) {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
 	b, stat := h.dbm.Get(k)
@@ -66,7 +210,7 @@ func (h TypeHash[T, S]) Get(k string) (*T, error) {
 	return (*T)(t), nil
 }
 
-func (h TypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
+func (h *TypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
 	ids := make([]string, 0, len(keys))
@@ -85,7 +229,7 @@ func (h TypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
 	return results, nil
 }
 
-func (h TypeHash[T, S]) Set(k string, v *T, overwrite bool) error {
+func (h *TypeHash[T, S]) Set(k string, v *T, overwrite bool) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	s := S(v)
@@ -115,8 +259,8 @@ func (p *BProc) Proc(k string, v []byte) ([]byte, error) {
 	return p.F(k, v)
 }
 
-func (h TypeHash[T, S]) SProc(key string, fun func(string, *T) (*T, error)) SProc[T, S] {
-	return SProc[T, S]{
+func (h TypeHash[T, S]) SProc(key string, fun func(string, *T) (*T, error)) *SProc[T, S] {
+	return &SProc[T, S]{
 		K: key,
 		F: fun,
 	}
@@ -127,11 +271,11 @@ type SProc[T any, S structs.Serializable[T]] struct {
 	F func(string, *T) (*T, error)
 }
 
-func (j SProc[T, S]) Key() string {
+func (j *SProc[T, S]) Key() string {
 	return j.K
 }
 
-func (j SProc[T, S]) Proc(k string, v []byte) ([]byte, error) {
+func (j *SProc[T, S]) Proc(k string, v []byte) ([]byte, error) {
 	var input *T
 	if v != nil {
 		input = new(T)
@@ -153,7 +297,7 @@ func (j SProc[T, S]) Proc(k string, v []byte) ([]byte, error) {
 	return v, nil
 }
 
-func (h Hash) Proc(pairs []Proc, write bool) error {
+func (h *Hash) Proc(pairs []Proc, write bool) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	outputs := make([][]byte, len(pairs))
@@ -200,14 +344,14 @@ func (h Hash) Proc(pairs []Proc, write bool) error {
 }
 
 type Tree struct {
-	Hash
+	*Hash
 }
 
 type TypeTree[T any, S structs.Serializable[T]] struct {
-	TypeHash[T, S]
+	*TypeHash[T, S]
 }
 
-func (t TypeTree[T, S]) First() (*T, error) {
+func (t *TypeTree[T, S]) First() (*T, error) {
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
 	iter := t.dbm.MakeIterator()
@@ -228,7 +372,7 @@ func (t TypeTree[T, S]) First() (*T, error) {
 	return (*T)(first), nil
 }
 
-func OpenHash(path string) (Hash, error) {
+func OpenHash(path string) (*Hash, error) {
 	dbm := tkrzw.NewDBM()
 	stat := dbm.Open(fmt.Sprintf("%s.tkh", path), true, map[string]string{
 		"update_mode":      "UPDATE_APPENDING",
@@ -236,20 +380,32 @@ func OpenHash(path string) (Hash, error) {
 		"restore_mode":     "RESTORE_SYNC|RESTORE_NO_SHORTCUTS|RESTORE_WITH_HARDSYNC",
 	})
 	if !stat.IsOK() {
-		return Hash{}, juicemud.WithStack(stat)
+		return nil, juicemud.WithStack(stat)
 	}
-	return Hash{dbm, &sync.RWMutex{}}, nil
+	return &Hash{dbm, &sync.RWMutex{}}, nil
 }
 
-func OpenTypeHash[T any, S structs.Serializable[T]](path string) (TypeHash[T, S], error) {
+func OpenTypeHash[T any, S structs.Serializable[T]](path string) (*TypeHash[T, S], error) {
 	h, err := OpenHash(path)
 	if err != nil {
-		return TypeHash[T, S]{}, juicemud.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
-	return TypeHash[T, S]{h}, nil
+	return &TypeHash[T, S]{h}, nil
 }
 
-func OpenTree(path string) (Tree, error) {
+func OpenLiveTypeHash[T any, S structs.Snapshottable[T]](path string) (*LiveTypeHash[T, S], error) {
+	h, err := OpenHash(path)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return &LiveTypeHash[T, S]{
+		hash:    &TypeHash[T, S]{h},
+		stage:   map[string]*T{},
+		updates: map[string]bool{},
+	}, nil
+}
+
+func OpenTree(path string) (*Tree, error) {
 	dbm := tkrzw.NewDBM()
 	stat := dbm.Open(fmt.Sprintf("%s.tkt", path), true, map[string]string{
 		"update_mode":      "UPDATE_APPENDING",
@@ -257,15 +413,15 @@ func OpenTree(path string) (Tree, error) {
 		"key_comparator":   "LexicalKeyComparator",
 	})
 	if !stat.IsOK() {
-		return Tree{}, juicemud.WithStack(stat)
+		return nil, juicemud.WithStack(stat)
 	}
-	return Tree{Hash{dbm, &sync.RWMutex{}}}, nil
+	return &Tree{&Hash{dbm, &sync.RWMutex{}}}, nil
 }
 
-func OpenTypeTree[T any, S structs.Serializable[T]](path string) (TypeTree[T, S], error) {
+func OpenTypeTree[T any, S structs.Serializable[T]](path string) (*TypeTree[T, S], error) {
 	t, err := OpenTree(path)
 	if err != nil {
-		return TypeTree[T, S]{}, juicemud.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
-	return TypeTree[T, S]{TypeHash[T, S](t)}, nil
+	return &TypeTree[T, S]{(*TypeHash[T, S])(t)}, nil
 }

@@ -8,24 +8,24 @@ import (
     "github.com/deneonet/benc/impl/gen"
 )
 
-// Struct - TestObj
-type TestObj struct {
+// Struct - Obj
+type Obj struct {
     I int
     S string
 }
 
-// Reserved Ids - TestObj
-var testObjRIds = []uint16{}
+// Reserved Ids - Obj
+var objRIds = []uint16{}
 
-// Size - TestObj
-func (testObj *TestObj) Size() int {
-    return testObj.size(0)
+// Size - Obj
+func (obj *Obj) Size() int {
+    return obj.size(0)
 }
 
-// Nested Size - TestObj
-func (testObj *TestObj) size(id uint16) (s int) {
-    s += bstd.SizeInt(testObj.I) + 2
-    s += bstd.SizeString(testObj.S) + 2
+// Nested Size - Obj
+func (obj *Obj) size(id uint16) (s int) {
+    s += bstd.SizeInt(obj.I) + 2
+    s += bstd.SizeString(obj.S) + 2
 
     if id > 255 {
         s += 5
@@ -35,25 +35,25 @@ func (testObj *TestObj) size(id uint16) (s int) {
     return
 }
 
-// SizePlain - TestObj
-func (testObj *TestObj) SizePlain() (s int) {
-    s += bstd.SizeInt(testObj.I)
-    s += bstd.SizeString(testObj.S)
+// SizePlain - Obj
+func (obj *Obj) SizePlain() (s int) {
+    s += bstd.SizeInt(obj.I)
+    s += bstd.SizeString(obj.S)
     return
 }
 
-// Marshal - TestObj
-func (testObj *TestObj) Marshal(b []byte) {
-    testObj.marshal(0, b, 0)
+// Marshal - Obj
+func (obj *Obj) Marshal(b []byte) {
+    obj.marshal(0, b, 0)
 }
 
-// Nested Marshal - TestObj
-func (testObj *TestObj) marshal(tn int, b []byte, id uint16) (n int) {
+// Nested Marshal - Obj
+func (obj *Obj) marshal(tn int, b []byte, id uint16) (n int) {
     n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Varint, 1)
-    n = bstd.MarshalInt(n, b, testObj.I)
+    n = bstd.MarshalInt(n, b, obj.I)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 2)
-    n = bstd.MarshalString(n, b, testObj.S)
+    n = bstd.MarshalString(n, b, obj.S)
 
     n += 2
     b[n-2] = 1
@@ -61,22 +61,22 @@ func (testObj *TestObj) marshal(tn int, b []byte, id uint16) (n int) {
     return
 }
 
-// MarshalPlain - TestObj
-func (testObj *TestObj) MarshalPlain(tn int, b []byte) (n int) {
+// MarshalPlain - Obj
+func (obj *Obj) MarshalPlain(tn int, b []byte) (n int) {
     n = tn
-    n = bstd.MarshalInt(n, b, testObj.I)
-    n = bstd.MarshalString(n, b, testObj.S)
+    n = bstd.MarshalInt(n, b, obj.I)
+    n = bstd.MarshalString(n, b, obj.S)
     return n
 }
 
-// Unmarshal - TestObj
-func (testObj *TestObj) Unmarshal(b []byte) (err error) {
-    _, err = testObj.unmarshal(0, b, []uint16{}, 0)
+// Unmarshal - Obj
+func (obj *Obj) Unmarshal(b []byte) (err error) {
+    _, err = obj.unmarshal(0, b, []uint16{}, 0)
     return
 }
 
-// Nested Unmarshal - TestObj
-func (testObj *TestObj) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err error) {
+// Nested Unmarshal - Obj
+func (obj *Obj) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err error) {
     var ok bool
     if n, ok, err = bgenimpl.HandleCompatibility(tn, b, r, id); !ok {
         if err == bgenimpl.ErrEof {
@@ -84,25 +84,25 @@ func (testObj *TestObj) unmarshal(tn int, b []byte, r []uint16, id uint16) (n in
         }
         return
     }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, testObjRIds, 1); err != nil {
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objRIds, 1); err != nil {
         if err == bgenimpl.ErrEof {
             return n, nil
         }
         return
     }
     if ok {
-        if n, testObj.I, err = bstd.UnmarshalInt(n, b); err != nil {
+        if n, obj.I, err = bstd.UnmarshalInt(n, b); err != nil {
             return
         }
     }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, testObjRIds, 2); err != nil {
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objRIds, 2); err != nil {
         if err == bgenimpl.ErrEof {
             return n, nil
         }
         return
     }
     if ok {
-        if n, testObj.S, err = bstd.UnmarshalString(n, b); err != nil {
+        if n, obj.S, err = bstd.UnmarshalString(n, b); err != nil {
             return
         }
     }
@@ -110,13 +110,147 @@ func (testObj *TestObj) unmarshal(tn int, b []byte, r []uint16, id uint16) (n in
     return
 }
 
-// UnmarshalPlain - TestObj
-func (testObj *TestObj) UnmarshalPlain(tn int, b []byte) (n int, err error) {
+// UnmarshalPlain - Obj
+func (obj *Obj) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     n = tn
-    if n, testObj.I, err = bstd.UnmarshalInt(n, b); err != nil {
+    if n, obj.I, err = bstd.UnmarshalInt(n, b); err != nil {
         return
     }
-    if n, testObj.S, err = bstd.UnmarshalString(n, b); err != nil {
+    if n, obj.S, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    return
+}
+
+// Struct - LiveDO
+type LiveDO struct {
+    Id string
+    I int
+    S string
+}
+
+// Reserved Ids - LiveDO
+var liveDORIds = []uint16{}
+
+// Size - LiveDO
+func (liveDO *LiveDO) Size() int {
+    return liveDO.size(0)
+}
+
+// Nested Size - LiveDO
+func (liveDO *LiveDO) size(id uint16) (s int) {
+    s += bstd.SizeString(liveDO.Id) + 2
+    s += bstd.SizeInt(liveDO.I) + 2
+    s += bstd.SizeString(liveDO.S) + 2
+
+    if id > 255 {
+        s += 5
+        return
+    }
+    s += 4
+    return
+}
+
+// SizePlain - LiveDO
+func (liveDO *LiveDO) SizePlain() (s int) {
+    s += bstd.SizeString(liveDO.Id)
+    s += bstd.SizeInt(liveDO.I)
+    s += bstd.SizeString(liveDO.S)
+    return
+}
+
+// Marshal - LiveDO
+func (liveDO *LiveDO) Marshal(b []byte) {
+    liveDO.marshal(0, b, 0)
+}
+
+// Nested Marshal - LiveDO
+func (liveDO *LiveDO) marshal(tn int, b []byte, id uint16) (n int) {
+    n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 1)
+    n = bstd.MarshalString(n, b, liveDO.Id)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Varint, 2)
+    n = bstd.MarshalInt(n, b, liveDO.I)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 3)
+    n = bstd.MarshalString(n, b, liveDO.S)
+
+    n += 2
+    b[n-2] = 1
+    b[n-1] = 1
+    return
+}
+
+// MarshalPlain - LiveDO
+func (liveDO *LiveDO) MarshalPlain(tn int, b []byte) (n int) {
+    n = tn
+    n = bstd.MarshalString(n, b, liveDO.Id)
+    n = bstd.MarshalInt(n, b, liveDO.I)
+    n = bstd.MarshalString(n, b, liveDO.S)
+    return n
+}
+
+// Unmarshal - LiveDO
+func (liveDO *LiveDO) Unmarshal(b []byte) (err error) {
+    _, err = liveDO.unmarshal(0, b, []uint16{}, 0)
+    return
+}
+
+// Nested Unmarshal - LiveDO
+func (liveDO *LiveDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err error) {
+    var ok bool
+    if n, ok, err = bgenimpl.HandleCompatibility(tn, b, r, id); !ok {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, liveDORIds, 1); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, liveDO.Id, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, liveDORIds, 2); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, liveDO.I, err = bstd.UnmarshalInt(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, liveDORIds, 3); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, liveDO.S, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    n += 2
+    return
+}
+
+// UnmarshalPlain - LiveDO
+func (liveDO *LiveDO) UnmarshalPlain(tn int, b []byte) (n int, err error) {
+    n = tn
+    if n, liveDO.Id, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, liveDO.I, err = bstd.UnmarshalInt(n, b); err != nil {
+        return
+    }
+    if n, liveDO.S, err = bstd.UnmarshalString(n, b); err != nil {
         return
     }
     return

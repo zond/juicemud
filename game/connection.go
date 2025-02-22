@@ -104,11 +104,13 @@ func (c *Connection) scan() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	neigh.Filter(viewer)
+	if neigh, err = neigh.Filter(viewer); err != nil {
+		return juicemud.WithStack(err)
+	}
 	if err := c.describeLocation(neigh.Location); err != nil {
 		return juicemud.WithStack(err)
 	}
-	for _, exit := range neigh.Location.Container.Exits {
+	for _, exit := range neigh.Location.Container.GetExits() {
 		if neigh, found := neigh.Neighbours[exit.Destination]; found {
 			fmt.Fprintln(c.term)
 			fmt.Fprintf(c.term, "Via exit %s, you see:\n", exit.Name())
@@ -148,18 +150,20 @@ func (c *Connection) renderMovement(m *movement) error {
 
 func (c *Connection) describeLocation(loc *structs.Location) error {
 	fmt.Fprintln(c.term, loc.Container.Name())
-	if len(loc.Container.Descriptions) > 0 && loc.Container.Descriptions[0].Long != "" {
+	descs := loc.Container.GetDescriptions()
+	if len(descs) > 0 && descs[0].Long != "" {
 		fmt.Fprintln(c.term)
-		fmt.Fprintln(c.term, loc.Container.Descriptions[0].Long)
+		fmt.Fprintln(c.term, descs[0].Long)
 	}
 	if len(loc.Content) > 0 {
 		fmt.Fprintln(c.term)
 		fmt.Fprintf(c.term, "%s here\n", lang.Enumerator{Tense: lang.Present}.Do(loc.Content.Short()...))
 	}
-	if len(loc.Container.Exits) > 0 {
+	exits := loc.Container.GetExits()
+	if len(exits) > 0 {
 		fmt.Fprintln(c.term)
 		fmt.Fprintln(c.term, "Exits:")
-		fmt.Fprintln(c.term, structs.Exits(loc.Container.Exits).Short())
+		fmt.Fprintln(c.term, structs.Exits(exits).Short())
 	}
 	return nil
 }
@@ -169,7 +173,9 @@ func (c *Connection) look() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	loc.Filter(viewer)
+	if loc, err = loc.Filter(viewer); err != nil {
+		return juicemud.WithStack(err)
+	}
 	return c.describeLocation(loc)
 }
 
@@ -231,11 +237,13 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 			case defaultSelf:
 				return f(c, obj, obj)
 			case defaultLoc:
-				loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
+				loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.GetLocation(), c.game.rerunSource)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				loc.Filter(obj)
+				if loc, err = loc.Filter(obj); err != nil {
+					return juicemud.WithStack(err)
+				}
 				return f(c, obj, loc)
 			default:
 				return nil
@@ -245,7 +253,9 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		loc.Filter(obj)
+		if loc, err = loc.Filter(obj); err != nil {
+			return juicemud.WithStack(err)
+		}
 		targets := []*structs.Object{}
 		for _, pattern := range parts[1:] {
 			target, err := loc.Identify(pattern)
@@ -280,25 +290,21 @@ func (c *Connection) wizCommands() commands {
 			names: m("/move"),
 			f: c.identifyingCommand(defaultNone, func(c *Connection, self *structs.Object, targets ...*structs.Object) error {
 				if len(targets) == 1 {
-					if targets[0].Id == self.Location {
+					if targets[0].GetId() == self.GetLocation() {
 						return errors.New("Can't move current location")
 					}
-					loc, err := c.game.storage.LoadObject(c.sess.Context(), self.Location, c.game.rerunSource)
+					loc, err := c.game.storage.LoadObject(c.sess.Context(), self.GetLocation(), c.game.rerunSource)
 					if err != nil {
 						return juicemud.WithStack(err)
 					}
-					oldLoc := targets[0].Location
-					targets[0].Location = loc.Location
-					return juicemud.WithStack(c.game.storage.StoreObject(c.sess.Context(), &oldLoc, targets[0]))
+					return juicemud.WithStack(c.game.moveObject(c.sess.Context(), targets[0], loc.GetLocation()))
 				}
 				dest := targets[len(targets)-1]
 				for _, target := range targets[:len(targets)-1] {
-					if target.Id == self.Location {
+					if target.GetId() == self.GetLocation() {
 						return errors.New("Can't move current location")
 					}
-					oldLoc := target.Location
-					target.Location = dest.Id
-					if err := c.game.storage.StoreObject(c.sess.Context(), &oldLoc, target); err != nil {
+					if err := c.game.moveObject(c.sess.Context(), target, dest.GetId()); err != nil {
 						return juicemud.WithStack(err)
 					}
 				}
@@ -332,9 +338,12 @@ func (c *Connection) wizCommands() commands {
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				obj.SourcePath = parts[1]
-				obj.Location = self.Location
-				if _, err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
+				obj.Unsafe.SourcePath = parts[1]
+				obj.Unsafe.Location = self.GetLocation()
+				if err := c.game.storage.StoreObject(c.sess.Context(), obj); err != nil {
+					return juicemud.WithStack(err)
+				}
+				if _, err := c.game.run(c.sess.Context(), obj, &structs.AnyCall{
 					Name: createdEventType,
 					Tag:  emitEventTag,
 					Content: map[string]any{
@@ -363,8 +372,8 @@ func (c *Connection) wizCommands() commands {
 			names: m("/debug"),
 			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
 				for _, target := range targets {
-					addConsole(target.Id, c.term)
-					fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), target.Id)
+					addConsole(target.GetId(), c.term)
+					fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), target.GetId())
 				}
 				return nil
 			}),
@@ -373,8 +382,8 @@ func (c *Connection) wizCommands() commands {
 			names: m("/undebug"),
 			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
 				for _, target := range targets {
-					delConsole(target.Id, c.term)
-					fmt.Fprintf(c.term, "#%s/%s disconnected from console\n", target.Name(), target.Id)
+					delConsole(target.GetId(), c.term)
+					fmt.Fprintf(c.term, "#%s/%s disconnected from console\n", target.Name(), target.GetId())
 				}
 				return nil
 			}),
@@ -387,16 +396,14 @@ func (c *Connection) wizCommands() commands {
 					return nil
 				}
 				target := targets[0]
-				if obj.Id == target.Id {
+				if obj.GetId() == target.GetId() {
 					fmt.Fprintln(c.term, "Unable to climb into your own navel.")
 					return nil
 				}
-				if obj.Location == target.Id {
+				if obj.GetLocation() == target.GetId() {
 					return nil
 				}
-				oldLoc := obj.Location
-				obj.Location = target.Id
-				if err := c.game.storage.StoreObject(c.sess.Context(), &oldLoc, obj); err != nil {
+				if err := c.game.moveObject(c.sess.Context(), obj, target.GetId()); err != nil {
 					return juicemud.WithStack(err)
 				}
 				return juicemud.WithStack(c.look())
@@ -409,16 +416,15 @@ func (c *Connection) wizCommands() commands {
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				if obj.Location == "" {
+				if obj.GetLocation() == "" {
 					fmt.Fprintln(c.term, "Unable to leave the universe.")
 					return nil
 				}
-				loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.Location, c.game.rerunSource)
+				loc, err := c.game.storage.LoadObject(c.sess.Context(), obj.GetLocation(), c.game.rerunSource)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				obj.Location = loc.Location
-				if err := c.game.storage.StoreObject(c.sess.Context(), &loc.Id, obj); err != nil {
+				if err := c.game.moveObject(c.sess.Context(), obj, loc.GetLocation()); err != nil {
 					return juicemud.WithStack(err)
 				}
 				return juicemud.WithStack(c.look())
@@ -519,15 +525,21 @@ func (c *Connection) basicCommands() commands {
 			names: m("l", "look"),
 			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, targets ...*structs.Object) error {
 				for _, target := range targets {
-					if obj.Location == target.Id {
+					if obj.GetLocation() == target.GetId() {
 						if err := c.look(); err != nil {
 							return juicemud.WithStack(err)
 						}
 					} else {
 						fmt.Fprintln(c.term, target.Name())
-						if len(target.Descriptions) > 0 && target.Descriptions[0].Long != "" {
-							fmt.Fprintln(c.term)
-							fmt.Fprintln(c.term, target.Descriptions[0].Long)
+						descs := target.GetDescriptions()
+						if len(descs) > 0 {
+							if descs[0].Long != "" {
+								fmt.Fprintln(c.term)
+								fmt.Fprintln(c.term, descs[0].Long)
+							} else if descs[1].Short != "" {
+								fmt.Fprintln(c.term)
+								fmt.Fprintln(c.term, descs[0].Short)
+							}
 						}
 					}
 				}
@@ -551,25 +563,23 @@ type objectAttempter struct {
 	id string
 }
 
-func (o objectAttempter) attempt(c *Connection, name string, line string) (bool, error) {
-	jsContextLocks.Lock(o.id)
-	defer jsContextLocks.Unlock(o.id)
-
+func (o objectAttempter) attempt(c *Connection, name string, line string) (found bool, err error) {
 	obj, err := c.game.storage.LoadObject(c.sess.Context(), o.id, c.game.rerunSource)
 	if err != nil {
 		return false, juicemud.WithStack(err)
 	}
-	if found, err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
+	found, err = c.game.run(c.sess.Context(), obj, &structs.AnyCall{
 		Name: name,
 		Tag:  commandEventTag,
 		Content: map[string]any{
 			"name": name,
 			"line": line,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		return false, juicemud.WithStack(err)
 	} else if found {
-		return found, nil
+		return true, nil
 	}
 
 	actionCall := &structs.AnyCall{
@@ -581,29 +591,27 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (bool,
 		},
 	}
 
-	loc, found, err := c.game.loadRunSave(c.sess.Context(), obj.Location, actionCall)
+	loc, found, err := c.game.loadRun(c.sess.Context(), obj.GetLocation(), actionCall)
 	if found || err != nil {
 		return found, err
 	}
 
-	loc.Filter(obj)
+	if loc, err = loc.Filter(obj); err != nil {
+		return false, juicemud.WithStack(err)
+	}
 
-	for _, exit := range loc.Exits {
+	for _, exit := range loc.GetExits() {
 		if exit.Name() == name {
-			if structs.Challenges(exit.UseChallenges).Check(obj, loc.Id) {
-				oldLoc := obj.Location
-				obj.Location = exit.Destination
-				if err := c.game.storage.StoreObject(c.sess.Context(), &oldLoc, obj); err != nil {
-					return false, juicemud.WithStack(err)
-				}
-				return true, juicemud.WithStack(c.look())
+			if structs.Challenges(exit.UseChallenges).Check(obj, loc.GetId()) {
+				return true, juicemud.WithStack(c.game.moveObject(c.sess.Context(), obj, exit.Destination))
 			}
 		}
 	}
 
-	delete(loc.Content, o.id)
-	for sibID := range loc.Content {
-		_, found, err = c.game.loadRunSave(c.sess.Context(), sibID, actionCall)
+	cont := loc.GetContent()
+	delete(cont, o.id)
+	for sibID := range cont {
+		_, found, err = c.game.loadRun(c.sess.Context(), sibID, actionCall)
 		if found || err != nil {
 			return found, err
 		}
@@ -697,7 +705,7 @@ func (c *Connection) loginUser() error {
 	}
 	storage.AuthenticateUser(c.sess.Context(), c.user)
 	fmt.Fprintf(c.term, "Welcome back, %v!\n\n", c.user.Name)
-	if _, _, err := c.game.loadRunSave(c.sess.Context(), c.user.Object, &structs.AnyCall{
+	if _, _, err := c.game.loadRun(c.sess.Context(), c.user.Object, &structs.AnyCall{
 		Name: connectedEventType,
 		Tag:  emitEventTag,
 		Content: map[string]any{
@@ -764,13 +772,18 @@ func (c *Connection) createUser() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	obj.SourcePath = userSource
-	obj.Location = genesisID
-	user.Object = obj.Id
+	obj.Unsafe.SourcePath = userSource
+	user.Object = obj.Unsafe.Id
 	if err := c.game.storage.StoreUser(c.sess.Context(), user, false); err != nil {
 		return juicemud.WithStack(err)
 	}
-	if _, err := c.game.runSave(c.sess.Context(), obj, &structs.AnyCall{
+	if err := c.game.storage.StoreObject(c.sess.Context(), obj); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := c.game.moveObject(c.sess.Context(), obj, genesisID); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if _, err := c.game.run(c.sess.Context(), obj, &structs.AnyCall{
 		Name: connectedEventType,
 		Tag:  emitEventTag,
 		Content: map[string]any{

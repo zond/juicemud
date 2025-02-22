@@ -8,7 +8,6 @@ import (
 
 	"github.com/bxcodec/faker/v4"
 	"github.com/bxcodec/faker/v4/pkg/options"
-	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 )
@@ -23,13 +22,13 @@ func fakeObject(t testing.TB, g *Game) *structs.Object {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res.Id = id
-	res.SourcePath = userSource
-	res.Content = map[string]bool{}
-	res.Location = genesisID
-	res.State = "{}"
-	res.Exits = nil
-	if err := g.storage.StoreObject(context.Background(), nil, res); err != nil {
+	res.Unsafe.Id = id
+	res.Unsafe.SourcePath = userSource
+	res.Unsafe.Content = map[string]bool{}
+	res.Unsafe.Location = genesisID
+	res.Unsafe.State = "{}"
+	res.Unsafe.Exits = nil
+	if err := g.storage.StoreObject(context.Background(), res); err != nil {
 		t.Fatal(err)
 	}
 	return res
@@ -39,29 +38,24 @@ func populate(t testing.TB, g *Game, obj *structs.Object, num int) []*structs.Ob
 	res := []*structs.Object{}
 	for i := 0; i < num; i++ {
 		child := fakeObject(t, g)
-		obj.Content[child.Id] = true
-		child.Location = obj.Id
-		prevLoc := genesisID
-		if err := g.storage.StoreObject(context.Background(), &prevLoc, child); err != nil {
-			log.Print(juicemud.StackTrace(err))
-			t.Fatal(err)
-		}
+		obj.Unsafe.Content[child.Unsafe.Id] = true
+		child.Unsafe.Location = obj.Unsafe.Id
 		res = append(res, child)
 	}
 	return res
 }
 
 func connect(t testing.TB, g *Game, obj1, obj2 *structs.Object) {
-	obj1.Exits = append(obj1.Exits, structs.Exit{
-		Destination: obj2.Id,
+	obj1.Unsafe.Exits = append(obj1.Unsafe.Exits, structs.Exit{
+		Destination: obj2.Unsafe.Id,
 	})
-	obj2.Exits = append(obj2.Exits, structs.Exit{
-		Destination: obj1.Id,
+	obj2.Unsafe.Exits = append(obj2.Unsafe.Exits, structs.Exit{
+		Destination: obj1.Unsafe.Id,
 	})
-	if err := g.storage.StoreObject(context.Background(), nil, obj1); err != nil {
+	if err := g.storage.StoreObject(context.Background(), obj1); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.storage.StoreObject(context.Background(), nil, obj2); err != nil {
+	if err := g.storage.StoreObject(context.Background(), obj2); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -108,7 +102,7 @@ func BenchmarkLoadNeighbourhood(b *testing.B) {
 		populate(b, g, neighbour4, 5)
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if _, _, err := g.loadDeepNeighbourhoodOf(context.Background(), self.Id); err != nil {
+			if _, _, err := g.loadDeepNeighbourhoodOf(context.Background(), self.Unsafe.Id); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -124,11 +118,11 @@ func BenchmarkCall(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		obj.SourcePath = userSource
-		obj.Location = genesisID
+		obj.Unsafe.SourcePath = userSource
+		obj.Unsafe.Location = genesisID
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			if _, _, err := g.loadRunSave(ctx, obj.Id, &structs.AnyCall{
+			if _, _, err := g.loadRun(ctx, obj.Unsafe.Id, &structs.AnyCall{
 				Name:    connectedEventType,
 				Tag:     emitEventTag,
 				Content: map[string]any{},
