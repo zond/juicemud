@@ -50,7 +50,7 @@ func main() {
 			if match := doRegexp.FindStringSubmatch(obj.Name()); match != nil {
 				if structType, ok := obj.Type().Underlying().(*types.Struct); ok {
 					backendName := cap(strings.ToLower(match[1]))
-					postUnlockTypeName := fmt.Sprintf("postUnlock%s", backendName)
+					postUnlockTypeName := fmt.Sprintf("PostUnlock%s", backendName)
 					f.Type().Id(postUnlockTypeName).Func().Params(jen.Op("*").Id(backendName))
 					f.Func().Params(
 						jen.Id("f").Id(postUnlockTypeName),
@@ -63,9 +63,19 @@ func main() {
 					)
 					fields := []jen.Code{}
 					fields = append(fields, jen.Id("Unsafe").Op("*").Id(match[0]))
-					fields = append(fields, jen.Id("postUnlock").Id(postUnlockTypeName))
+					fields = append(fields, jen.Id("PostUnlock").Id(postUnlockTypeName).Tag(map[string]string{"json": "-"}))
 					fields = append(fields, jen.Id("mutex").Qual("sync", "RWMutex"))
 					f.Type().Id(backendName).Struct(fields...)
+					f.Func().Params(
+						jen.Id("v").Op("*").Id(backendName),
+					).Id("Describe").Params().Id("string").Block(
+						jen.Id("b").Op(",").Id("_").Op(":=").Qual("github.com/goccy/go-json", "MarshalIndent").Call(
+							jen.Id("v").Dot("Unsafe"),
+							jen.Lit(""),
+							jen.Lit("  "),
+						),
+						jen.Return(jen.Id("string").Call(jen.Id("b"))),
+					)
 					f.Func().Params(
 						jen.Id("v").Op("*").Id(backendName),
 					).Id("Lock").Params().Block(
@@ -75,7 +85,7 @@ func main() {
 						jen.Id("v").Op("*").Id(backendName),
 					).Id("Unlock").Params().Block(
 						jen.Id("v").Dot("mutex").Dot("Unlock").Call(),
-						jen.Id("v").Dot("postUnlock").Dot("call").Call(
+						jen.Id("v").Dot("PostUnlock").Dot("call").Call(
 							jen.Id("v"),
 						),
 					)
@@ -116,7 +126,7 @@ func main() {
 					f.Func().Params(
 						jen.Id("v").Op("*").Id(backendName),
 					).Id("SetPostUnlock").Params(jen.Id("p").Func().Params(jen.Op("*").Id(backendName))).Block(
-						jen.Id("v").Dot("postUnlock").Op("=").Id("p"),
+						jen.Id("v").Dot("PostUnlock").Op("=").Id("p"),
 					)
 					for i := 0; i < structType.NumFields(); i++ {
 						field := structType.Field(i)

@@ -3,6 +3,7 @@
 package dbm
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"flag"
@@ -176,13 +177,13 @@ func TestGetStruct(t *testing.T) {
 
 func TestLiveTypeHash(t *testing.T) {
 	WithLiveTypeHash(t, func(lh *LiveTypeHash[Live, *Live]) {
-		done := lh.Start()
-		var err error
-		wg := sync.WaitGroup{}
-		wg.Add(1)
+		runWG := &sync.WaitGroup{}
+		runWG.Add(1)
 		go func() {
-			err = <-done
-			wg.Done()
+			if err := lh.Start(context.Background()); err != nil {
+				log.Fatal(err)
+			}
+			runWG.Done()
 		}()
 		to := &Live{Unsafe: &LiveDO{}}
 		to.Unsafe.Id = "id"
@@ -204,10 +205,8 @@ func TestLiveTypeHash(t *testing.T) {
 		if cpy2.GetS() != "aaa" {
 			t.Errorf("got %q, want 'aaa'", cpy2.GetS())
 		}
-		close(done)
-		if err != nil {
-			t.Fatal(err)
-		}
+		lh.Close()
+		runWG.Wait()
 	})
 }
 

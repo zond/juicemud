@@ -27,6 +27,10 @@ func Plural(s string) string {
 	return plur.Plural(s)
 }
 
+func Capitalize(s string) string {
+	return strings.ToUpper(s[0:1]) + s[1:]
+}
+
 func Card(count int, s string) string {
 	if count == 0 {
 		return fmt.Sprintf("no %s", Plural(s))

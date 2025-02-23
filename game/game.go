@@ -66,12 +66,14 @@ addCallback('connected', ['emit'], (obj) => {
 			Unique: true,
 		}
 	]);
+	setLearning(true);
 });
 `,
 		genesisSource: `// This code runs the room where newly created users are dropped.
 setDescriptions([
   {
 		Short: 'Black cosmos',
+		Unique: true,
 		Long: 'This is the darkness of space before creation. No stars twinkle.',
   },
 ]);
@@ -132,7 +134,10 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		storage: s,
 	}
 	go func() {
-		log.Panic(g.storage.StartQueue(ctx, func(ctx context.Context, ev *structs.Event) {
+		log.Panic(g.storage.StartObjects(ctx))
+	}()
+	go func() {
+		log.Panic(g.storage.Queue().Start(ctx, func(ctx context.Context, ev *structs.Event) {
 			var call structs.Caller
 			if ev.Call.Name != "" {
 				call = &ev.Call

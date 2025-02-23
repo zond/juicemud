@@ -80,6 +80,7 @@ type Snapshottable[T any] interface {
 	RUnlock()
 	SetPostUnlock(func(t *T))
 	GetId() string
+	Describe() string
 }
 
 func Clone[T any, S Serializable[T]](t *T) (*T, error) {
@@ -279,11 +280,6 @@ func (o *Object) Filter(viewer *Object) (*Object, error) {
 	return cpy, nil
 }
 
-func (o *Object) Describe() string {
-	b, _ := goccy.MarshalIndent(o, "", "  ")
-	return string(b)
-}
-
 type Exits []Exit
 
 func (e Exits) Short() string {
@@ -319,6 +315,21 @@ func (c Content) Short() []string {
 
 	sort.Sort(result)
 	return result
+}
+
+func (c Content) Sorted() iter.Seq2[string, *Object] {
+	return func(yield func(string, *Object) bool) {
+		keys := make(sort.StringSlice, 0, len(c))
+		for k := range c {
+			keys = append(keys, k)
+		}
+		sort.Sort(keys)
+		for _, k := range keys {
+			if !yield(k, c[k]) {
+				return
+			}
+		}
+	}
 }
 
 type Location struct {
@@ -399,7 +410,7 @@ func (l *Location) Identify(s string) (*Object, error) {
 	if Descriptions(l.Container.GetDescriptions()).Matches(pattern) {
 		objs = append(objs, l.Container)
 	}
-	for _, cont := range l.Content {
+	for _, cont := range l.Content.Sorted() {
 		if Descriptions(cont.GetDescriptions()).Matches(pattern) {
 			objs = append(objs, cont)
 		}
@@ -426,11 +437,17 @@ func (l *Location) Detections(target *Object, addedChallenges Challenges) iter.S
 		for viewer := range l.All() {
 			if viewer.GetId() != target.GetId() {
 				if challenged, err := target.AddDescriptionChallenges(addedChallenges); err != nil {
-					yield(nil, juicemud.WithStack(err))
+					if !yield(nil, juicemud.WithStack(err)) {
+						return
+					}
 				} else if filtered, err := challenged.Filter(viewer); err != nil {
-					yield(nil, juicemud.WithStack(err))
+					if !yield(nil, juicemud.WithStack(err)) {
+						return
+					}
 				} else if len(filtered.GetDescriptions()) > 0 {
-					yield(&Detection{Subject: viewer, Object: filtered}, nil)
+					if !yield(&Detection{Subject: viewer, Object: filtered}, nil) {
+						return
+					}
 				}
 			}
 		}
@@ -440,13 +457,17 @@ func (l *Location) Detections(target *Object, addedChallenges Challenges) iter.S
 func (n *DeepNeighbourhood) Detections(target *Object) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
 		for det, err := range n.Location.Detections(target, nil) {
-			yield(det, err)
+			if !yield(det, err) {
+				return
+			}
 		}
 		for _, neighbour := range n.Neighbours {
 			for _, exit := range neighbour.Container.GetExits() {
 				if exit.Destination == n.Location.Container.GetId() {
 					for det, err := range neighbour.Detections(target, Challenges(exit.TransmitChallenges)) {
-						yield(det, err)
+						if !yield(det, err) {
+							return
+						}
 					}
 				}
 			}
@@ -753,9 +774,14 @@ func (o Objects) Unlock() {
 
 func WithLock(f func() error, objs ...*Object) error {
 	toLock := make(Objects, 0, len(objs))
+	seen := map[*Object]bool{}
 	for _, obj := range objs {
-		if obj != nil {
+		if obj == nil {
+			return errors.New("can't lock nil object")
+		}
+		if !seen[obj] {
 			toLock = append(toLock, obj)
+			seen[obj] = true
 		}
 	}
 	toLock.Lock()

@@ -5,7 +5,6 @@ package storage
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,16 +42,11 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	skills, err := dbm.OpenTypeHash[structs.Skill](filepath.Join(dir, "skills"))
-	if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
 	s := &Storage{
 		sql:      sql,
 		sources:  sources,
 		modTimes: modTimes,
 		objects:  objects,
-		skills:   skills,
 		queue:    queue.New(ctx, queueTree),
 	}
 	for _, prototype := range []any{File{}, FileSync{}, Group{}, User{}, GroupMember{}} {
@@ -69,17 +63,14 @@ type Storage struct {
 	sources  *dbm.Hash
 	modTimes *dbm.Hash
 	objects  *dbm.LiveTypeHash[structs.Object, *structs.Object]
-	skills   *dbm.TypeHash[structs.Skill, *structs.Skill]
 }
 
 func (s *Storage) Queue() *queue.Queue {
 	return s.queue
 }
 
-type EventHandler func(context.Context, *structs.Event)
-
-func (s *Storage) StartQueue(ctx context.Context, eventHandler EventHandler) error {
-	return juicemud.WithStack(s.queue.Start(ctx, eventHandler))
+func (s *Storage) StartObjects(ctx context.Context) error {
+	return s.objects.Start(ctx)
 }
 
 func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, params ...any) error {
@@ -90,51 +81,6 @@ func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, para
 		return errors.Wrapf(err, "Executing %q(%+v):", sql, params)
 	}
 	return nil
-}
-
-type Skill struct {
-	*structs.Skill
-	objectID string
-	storage  *Storage
-	depth    int
-}
-
-func (s *Skill) NoStore() *structs.Skill {
-	return s.Skill
-}
-
-func (s *Skill) StoreAfter(ctx context.Context, f func(*structs.Skill) error) error {
-	s.depth++
-	defer func() {
-		s.depth--
-	}()
-	if err := f(s.Skill); err != nil {
-		return juicemud.WithStack(err)
-	}
-	if s.depth == 1 {
-		return s.storage.skills.Set(fmt.Sprintf("%s.%s", s.objectID, s.Skill.Name), s.Skill, true)
-	}
-	return nil
-}
-
-func (s *Storage) LoadSkill(ctx context.Context, objectID string, skillName string) (*Skill, error) {
-	result, err := s.skills.Get(fmt.Sprintf("%s.%s", objectID, skillName))
-	if errors.Is(err, os.ErrNotExist) {
-		return &Skill{
-			Skill: &structs.Skill{
-				Name: skillName,
-			},
-			objectID: objectID,
-			storage:  s,
-		}, nil
-	} else if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	return &Skill{
-		Skill:    result,
-		objectID: objectID,
-		storage:  s,
-	}, err
 }
 
 func (s *Storage) LoadSource(ctx context.Context, path string) ([]byte, int64, error) {
@@ -209,7 +155,7 @@ func (s *Storage) LoadObjects(ctx context.Context, ids map[string]bool, ref Refr
 // TODO: Rename to AccessObject
 // Loads the object with the given ID. If a Refresh is given, it will be run if the
 // object source is newer than the last run of the object.
-func (s *Storage) LoadObject(ctx context.Context, id string, ref Refresh) (*structs.Object, error) {
+func (s *Storage) AccessObject(ctx context.Context, id string, ref Refresh) (*structs.Object, error) {
 	res, err := s.objects.Get(id)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
@@ -232,41 +178,6 @@ func (s *Storage) UNSAFEEnsureObject(ctx context.Context, obj *structs.Object) e
 
 func (s *Storage) StoreObject(ctx context.Context, obj *structs.Object) error {
 	return juicemud.WithStack(s.objects.Set(obj))
-}
-
-var (
-	ErrCircularContainer = fmt.Errorf("objects can't contain themselves.")
-)
-
-func (s *Storage) MoveObject(ctx context.Context, object *structs.Object, destination string) error {
-	if object.GetId() == destination {
-		return juicemud.WithStack(ErrCircularContainer)
-	}
-
-	oldContainer, err := s.objects.Get(object.Unsafe.Location)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	newContainer, err := s.objects.Get(destination)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	return juicemud.WithStack(structs.WithLock(func() error {
-		if object.Unsafe.Location != "" { // This is an exception for new objects being moved into the world.
-			if _, found := oldContainer.Unsafe.Content[object.Unsafe.Id]; !found {
-				return errors.Errorf("%q not found in %q", object.Unsafe.Id, oldContainer.Unsafe.Id)
-			}
-		}
-		if _, found := newContainer.Unsafe.Content[object.Unsafe.Id]; found {
-			return errors.Errorf("%q already in %q", object.Unsafe.Id, newContainer.Unsafe.Id)
-		}
-		delete(oldContainer.Unsafe.Content, object.Unsafe.Id)
-		newContainer.Unsafe.Content[object.Unsafe.Id] = true
-		object.Unsafe.Location = newContainer.Unsafe.Id
-		return nil
-	}, object, oldContainer, newContainer))
 }
 
 type FileSync struct {

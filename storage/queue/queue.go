@@ -87,7 +87,9 @@ func (q *Queue) Push(ctx context.Context, eventer structs.Eventer) error {
 	return nil
 }
 
-func (q *Queue) Start(ctx context.Context, handler func(context.Context, *structs.Event)) error {
+type EventHandler func(context.Context, *structs.Event)
+
+func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 	var err error
 	if q.nextEvent, err = q.peekFirst(ctx); err != nil {
 		return juicemud.WithStack(err)

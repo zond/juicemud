@@ -17,7 +17,6 @@ func TestQueue(t *testing.T) {
 	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
 		got := []string{}
 		mut := &sync.Mutex{}
-		taskWG := &sync.WaitGroup{}
 		q := New(ctx, tr)
 		runWG := &sync.WaitGroup{}
 		runWG.Add(1)
@@ -51,7 +50,6 @@ func TestQueue(t *testing.T) {
 		}
 		q.Close()
 		runWG.Wait()
-		taskWG.Wait()
 		want := []string{"b", "a", "c"}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("got %+v, want %+v", got, want)

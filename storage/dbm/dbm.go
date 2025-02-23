@@ -2,6 +2,8 @@ package dbm
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -48,6 +50,7 @@ func (h *Hash) Del(k string) error {
 }
 
 type LiveTypeHash[T any, S structs.Snapshottable[T]] struct {
+	closed       chan bool
 	hash         *TypeHash[T, S]
 	stage        map[string]*T
 	stageMutex   sync.RWMutex
@@ -78,6 +81,7 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 		if !found {
 			continue
 		}
+		//		log.Printf("Flush storing on disk:\n%v", S(obj).Describe())
 		if err := l.hash.Set(key, obj, true); err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -85,24 +89,23 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 	return nil
 }
 
-func (l *LiveTypeHash[T, S]) Start() chan error {
-	done := make(chan error)
+func (l *LiveTypeHash[T, S]) Close() {
+	close(l.closed)
+}
+
+func (l *LiveTypeHash[T, S]) Start(_ context.Context) error {
 	timer := time.NewTicker(time.Second)
-	go func() {
-		defer timer.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-timer.C:
-				if err := l.Flush(); err != nil {
-					done <- juicemud.WithStack(err)
-					close(done)
-				}
+	for {
+		select {
+		case <-timer.C:
+			if err := l.Flush(); err != nil {
+				return err
 			}
+		case <-l.closed:
+			timer.Stop()
+			return nil
 		}
-	}()
-	return done
+	}
 }
 
 func (l *LiveTypeHash[T, S]) updated(t *T) {
@@ -115,23 +118,24 @@ func (l *LiveTypeHash[T, S]) SetIfMissing(t *T) error {
 	id := S(t).GetId()
 
 	l.stageMutex.RLock()
-	_, found := l.stage[id]
+	_, err := l.getNOLOCK(id)
 	l.stageMutex.RUnlock()
-	if found {
+	if err == nil {
 		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return juicemud.WithStack(err)
 	}
 
 	l.stageMutex.Lock()
 	defer l.stageMutex.Unlock()
 
-	_, found = l.stage[id]
-	if found {
+	if _, err = l.getNOLOCK(id); err == nil {
 		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return juicemud.WithStack(err)
 	}
 
-	S(t).SetPostUnlock(l.updated)
-	l.stage[id] = t
-	return juicemud.WithStack(l.hash.Set(id, t, true))
+	return l.setNOLOCK(t)
 }
 
 func (l *LiveTypeHash[T, S]) setNOLOCK(t *T) error {
@@ -399,6 +403,7 @@ func OpenLiveTypeHash[T any, S structs.Snapshottable[T]](path string) (*LiveType
 		return nil, juicemud.WithStack(err)
 	}
 	return &LiveTypeHash[T, S]{
+		closed:  make(chan bool),
 		hash:    &TypeHash[T, S]{h},
 		stage:   map[string]*T{},
 		updates: map[string]bool{},
