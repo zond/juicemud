@@ -135,6 +135,83 @@ func (s *Storage) maybeRefresh(ctx context.Context, obj *structs.Object, ref Ref
 	return nil
 }
 
+func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
+	if obj.PostUnlock != nil {
+		return errors.Errorf("can't create object already known to storage: %+v", obj)
+	}
+
+	id := obj.GetId()
+	locID := obj.GetLocation()
+
+	loc, err := s.objects.Get(locID)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	return juicemud.WithStack(structs.WithLock(func() error {
+		if obj.Unsafe.Location != locID {
+			return errors.Errorf("%q no longer located in %q", id, locID)
+		}
+		if _, found := loc.Unsafe.Content[id]; found {
+			return errors.Errorf("%q already contains %q", locID, id)
+		}
+		return juicemud.WithStack(s.objects.Proc([]dbm.LProc[structs.Object, *structs.Object]{
+			s.objects.LProc(id, func(_ string, _ *structs.Object) (*structs.Object, error) {
+				return obj, nil
+			}),
+			s.objects.LProc(id, func(_ string, loc *structs.Object) (*structs.Object, error) {
+				loc.Unsafe.Content[id] = true
+				return loc, nil
+			}),
+		}))
+	}, obj, loc))
+}
+
+func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID string) error {
+	if obj.PostUnlock == nil {
+		return errors.Errorf("can't move object unknown to storage: %+v", obj)
+	}
+
+	id := obj.GetId()
+	sourceID := obj.GetLocation()
+
+	source, err := s.objects.Get(sourceID)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	dest, err := s.objects.Get(destID)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	return juicemud.WithStack(structs.WithLock(func() error {
+		if obj.Unsafe.Location != sourceID {
+			return errors.Errorf("%q no longer located in %q", id, sourceID)
+		}
+		if _, found := source.Unsafe.Content[id]; !found {
+			return errors.Errorf("%q doesn't contain %q", sourceID, id)
+		}
+		if _, found := dest.Unsafe.Content[id]; found {
+			return errors.Errorf("%q already contains %q", destID, id)
+		}
+		return juicemud.WithStack(s.objects.Proc([]dbm.LProc[structs.Object, *structs.Object]{
+			s.objects.LProc(id, func(_ string, obj *structs.Object) (*structs.Object, error) {
+				obj.Unsafe.Location = destID
+				return obj, nil
+			}),
+			s.objects.LProc(sourceID, func(_ string, oldLocation *structs.Object) (*structs.Object, error) {
+				delete(oldLocation.Unsafe.Content, id)
+				return oldLocation, nil
+			}),
+			s.objects.LProc(destID, func(_ string, newLocation *structs.Object) (*structs.Object, error) {
+				newLocation.Unsafe.Content[id] = true
+				return newLocation, nil
+			}),
+		}))
+	}, obj, source, dest))
+}
+
 // Loads the objects with the given IDs. If a Refresh is given, it will be run if an
 // object source is newer than the last run of that object.
 func (s *Storage) LoadObjects(ctx context.Context, ids map[string]bool, ref Refresh) (map[string]*structs.Object, error) {
@@ -174,10 +251,6 @@ type Movement struct {
 
 func (s *Storage) UNSAFEEnsureObject(ctx context.Context, obj *structs.Object) error {
 	return juicemud.WithStack(s.objects.SetIfMissing(obj))
-}
-
-func (s *Storage) StoreObject(ctx context.Context, obj *structs.Object) error {
-	return juicemud.WithStack(s.objects.Set(obj))
 }
 
 type FileSync struct {

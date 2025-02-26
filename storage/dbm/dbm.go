@@ -154,14 +154,55 @@ func (l *LiveTypeHash[T, S]) Set(t *T) error {
 }
 
 func (l *LiveTypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
+	l.stageMutex.Lock()
+	defer l.stageMutex.Unlock()
+
 	res := map[string]*T{}
 	var err error
 	for key := range keys {
-		if res[key], err = l.Get(key); err != nil {
+		if res[key], err = l.getNOLOCK(key); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}
 	return res, nil
+}
+
+type LProc[T any, S structs.Snapshottable[T]] struct {
+	K string
+	F func(string, *T) (*T, error)
+}
+
+func (l *LiveTypeHash[T, S]) LProc(key string, fun func(string, *T) (*T, error)) LProc[T, S] {
+	return LProc[T, S]{
+		K: key,
+		F: fun,
+	}
+}
+
+func (l *LiveTypeHash[T, S]) Proc(procs []LProc[T, S]) error {
+	l.stageMutex.Lock()
+	defer l.stageMutex.Unlock()
+
+	postProcs := make([]Proc, len(procs))
+	for i, proc := range procs {
+		foundV, err := l.getNOLOCK(proc.K)
+		if errors.Is(err, os.ErrNotExist) {
+			foundV = nil
+		} else if err != nil {
+			return juicemud.WithStack(err)
+		}
+		newV, err := proc.F(proc.K, foundV)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		if newV == nil {
+			delete(l.stage, proc.K)
+		}
+		postProcs[i] = l.hash.SProc(proc.K, func(k string, v *T) (*T, error) {
+			return newV, nil
+		})
+	}
+	return juicemud.WithStack(l.hash.Proc(postProcs, true))
 }
 
 func (l *LiveTypeHash[T, S]) getNOLOCK(k string) (*T, error) {

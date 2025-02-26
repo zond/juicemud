@@ -69,33 +69,6 @@ type movement struct {
 	Destination *string
 }
 
-func (g *Game) createObject(ctx context.Context, obj *structs.Object) error {
-	if obj.PostUnlock != nil {
-		return errors.Errorf("can't create object already connected to storage: %+v", obj)
-	}
-
-	if err := g.storage.StoreObject(ctx, obj); err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	dest := obj.GetLocation()
-
-	container, err := g.storage.AccessObject(ctx, dest, g.runSource)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	if err := juicemud.WithStack(structs.WithLock(func() error {
-		container.Unsafe.Content[obj.Unsafe.Id] = true
-		obj.Unsafe.Location = container.Unsafe.Id
-		return nil
-	}, obj, container)); err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	return juicemud.WithStack(g.emitMovement(ctx, obj, nil, &dest))
-}
-
 func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *string, destination *string) error {
 	mov := &movement{
 		Object:      obj,
@@ -179,40 +152,23 @@ func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *st
 	return nil
 }
 
+func (g *Game) createObject(ctx context.Context, obj *structs.Object) error {
+	dest := obj.GetLocation()
+	if err := g.storage.CreateObject(ctx, obj); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return juicemud.WithStack(g.emitMovement(ctx, obj, nil, &dest))
+}
+
 var (
 	ErrCircularContainer = errors.New("Objects can't contain themselves.")
 )
 
 func (g *Game) moveObject(ctx context.Context, obj *structs.Object, destination string) error {
-	if obj.PostUnlock == nil {
-		return errors.Errorf("can't move object not connected to storage: %+v", obj)
-	}
-
 	source := obj.GetLocation()
-
-	if obj.GetId() == destination {
-		return juicemud.WithStack(ErrCircularContainer)
-	}
-
-	oldContainer, err := g.storage.AccessObject(ctx, source, g.runSource)
-	if err != nil {
+	if err := g.storage.MoveObject(ctx, obj, destination); err != nil {
 		return juicemud.WithStack(err)
 	}
-
-	newContainer, err := g.storage.AccessObject(ctx, destination, g.runSource)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	if err := juicemud.WithStack(structs.WithLock(func() error {
-		delete(oldContainer.Unsafe.Content, obj.Unsafe.Id)
-		newContainer.Unsafe.Content[obj.Unsafe.Id] = true
-		obj.Unsafe.Location = newContainer.Unsafe.Id
-		return nil
-	}, obj, oldContainer, newContainer)); err != nil {
-		return juicemud.WithStack(err)
-	}
-
 	return juicemud.WithStack(g.emitMovement(ctx, obj, &source, &destination))
 }
 

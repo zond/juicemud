@@ -16,7 +16,7 @@ func (f PostUnlockLive) call(v *Live) {
 
 type Live struct {
 	Unsafe     *LiveDO
-	PostUnlock PostUnlockLive `json:"-"`
+	PostUnlock PostUnlockLive `faker:"-" json:"-"`
 	mutex      sync.RWMutex
 }
 

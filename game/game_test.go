@@ -28,7 +28,7 @@ func fakeObject(t testing.TB, g *Game) *structs.Object {
 	res.Unsafe.Location = genesisID
 	res.Unsafe.State = "{}"
 	res.Unsafe.Exits = nil
-	if err := g.storage.StoreObject(context.Background(), res); err != nil {
+	if err := g.storage.CreateObject(context.Background(), res); err != nil {
 		t.Fatal(err)
 	}
 	return res
@@ -36,10 +36,11 @@ func fakeObject(t testing.TB, g *Game) *structs.Object {
 
 func populate(t testing.TB, g *Game, obj *structs.Object, num int) []*structs.Object {
 	res := []*structs.Object{}
-	for i := 0; i < num; i++ {
+	for range num {
 		child := fakeObject(t, g)
-		obj.Unsafe.Content[child.Unsafe.Id] = true
-		child.Unsafe.Location = obj.Unsafe.Id
+		if err := g.moveObject(context.Background(), child, obj.Unsafe.Id); err != nil {
+			t.Fatal(err)
+		}
 		res = append(res, child)
 	}
 	return res
@@ -52,10 +53,10 @@ func connect(t testing.TB, g *Game, obj1, obj2 *structs.Object) {
 	obj2.Unsafe.Exits = append(obj2.Unsafe.Exits, structs.Exit{
 		Destination: obj1.Unsafe.Id,
 	})
-	if err := g.storage.StoreObject(context.Background(), obj1); err != nil {
+	if err := g.storage.CreateObject(context.Background(), obj1); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.storage.StoreObject(context.Background(), obj2); err != nil {
+	if err := g.storage.CreateObject(context.Background(), obj2); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -94,12 +95,16 @@ func BenchmarkLoadNeighbourhood(b *testing.B) {
 		self := pop[0]
 		neighbour1 := fakeObject(b, g)
 		populate(b, g, neighbour1, 5)
+		connect(b, g, self, neighbour1)
 		neighbour2 := fakeObject(b, g)
 		populate(b, g, neighbour2, 5)
+		connect(b, g, self, neighbour2)
 		neighbour3 := fakeObject(b, g)
 		populate(b, g, neighbour3, 5)
+		connect(b, g, self, neighbour3)
 		neighbour4 := fakeObject(b, g)
 		populate(b, g, neighbour4, 5)
+		connect(b, g, self, neighbour4)
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
 			if _, _, err := g.loadDeepNeighbourhoodOf(context.Background(), self.Unsafe.Id); err != nil {

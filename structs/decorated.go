@@ -16,7 +16,7 @@ func (f PostUnlockObject) call(v *Object) {
 
 type Object struct {
 	Unsafe     *ObjectDO
-	PostUnlock PostUnlockObject `json:"-"`
+	PostUnlock PostUnlockObject `faker:"-" json:"-"`
 	mutex      sync.RWMutex
 }
 

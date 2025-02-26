@@ -63,7 +63,7 @@ func main() {
 					)
 					fields := []jen.Code{}
 					fields = append(fields, jen.Id("Unsafe").Op("*").Id(match[0]))
-					fields = append(fields, jen.Id("PostUnlock").Id(postUnlockTypeName).Tag(map[string]string{"json": "-"}))
+					fields = append(fields, jen.Id("PostUnlock").Id(postUnlockTypeName).Tag(map[string]string{"json": "-", "faker": "-"}))
 					fields = append(fields, jen.Id("mutex").Qual("sync", "RWMutex"))
 					f.Type().Id(backendName).Struct(fields...)
 					f.Func().Params(
