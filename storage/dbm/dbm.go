@@ -197,6 +197,8 @@ func (l *LiveTypeHash[T, S]) Proc(procs []LProc[T, S]) error {
 		}
 		if newV == nil {
 			delete(l.stage, proc.K)
+		} else {
+			newV = S(newV).UnsafeShallowCopy()
 		}
 		postProcs[i] = l.hash.SProc(proc.K, func(k string, v *T) (*T, error) {
 			return newV, nil

@@ -159,7 +159,7 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 			s.objects.LProc(id, func(_ string, _ *structs.Object) (*structs.Object, error) {
 				return obj, nil
 			}),
-			s.objects.LProc(id, func(_ string, loc *structs.Object) (*structs.Object, error) {
+			s.objects.LProc(locID, func(_ string, loc *structs.Object) (*structs.Object, error) {
 				loc.Unsafe.Content[id] = true
 				return loc, nil
 			}),

@@ -20,6 +20,12 @@ type Live struct {
 	mutex      sync.RWMutex
 }
 
+func (v *Live) UnsafeShallowCopy() *Live {
+	return &Live{
+		Unsafe:     v.Unsafe,
+		PostUnlock: v.PostUnlock,
+	}
+}
 func (v *Live) Describe() string {
 	b, _ := gojson.MarshalIndent(v.Unsafe, "", "  ")
 	return string(b)

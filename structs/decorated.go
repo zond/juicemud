@@ -20,6 +20,12 @@ type Object struct {
 	mutex      sync.RWMutex
 }
 
+func (v *Object) UnsafeShallowCopy() *Object {
+	return &Object{
+		Unsafe:     v.Unsafe,
+		PostUnlock: v.PostUnlock,
+	}
+}
 func (v *Object) Describe() string {
 	b, _ := gojson.MarshalIndent(v.Unsafe, "", "  ")
 	return string(b)

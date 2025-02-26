@@ -68,6 +68,16 @@ func main() {
 					f.Type().Id(backendName).Struct(fields...)
 					f.Func().Params(
 						jen.Id("v").Op("*").Id(backendName),
+					).Id("UnsafeShallowCopy").Params().Op("*").Id(backendName).Block(
+						jen.Return(
+							jen.Op("&").Id(backendName).Block(
+								jen.Id("Unsafe").Op(":").Id("v").Dot("Unsafe").Op(","),
+								jen.Id("PostUnlock").Op(":").Id("v").Dot("PostUnlock").Op(","),
+							),
+						),
+					)
+					f.Func().Params(
+						jen.Id("v").Op("*").Id(backendName),
 					).Id("Describe").Params().Id("string").Block(
 						jen.Id("b").Op(",").Id("_").Op(":=").Qual("github.com/goccy/go-json", "MarshalIndent").Call(
 							jen.Id("v").Dot("Unsafe"),

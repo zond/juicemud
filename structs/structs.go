@@ -81,6 +81,7 @@ type Snapshottable[T any] interface {
 	SetPostUnlock(func(t *T))
 	GetId() string
 	Describe() string
+	UnsafeShallowCopy() *T
 }
 
 func Clone[T any, S Serializable[T]](t *T) (*T, error) {
