@@ -359,7 +359,7 @@ func (c *Connection) wizCommands() commands {
 				if err := c.game.createObject(c.sess.Context(), obj); err != nil {
 					return juicemud.WithStack(err)
 				}
-				if _, _, err := c.game.loadRun(c.sess.Context(), obj.GetId(), &structs.AnyCall{
+				if _, err := c.game.run(c.sess.Context(), obj, &structs.AnyCall{
 					Name: createdEventType,
 					Tag:  emitEventTag,
 					Content: map[string]any{
@@ -797,7 +797,7 @@ func (c *Connection) createUser() error {
 	if err := c.game.createObject(c.sess.Context(), obj); err != nil {
 		return juicemud.WithStack(err)
 	}
-	if _, _, err = c.game.loadRun(c.sess.Context(), obj.GetId(), &structs.AnyCall{
+	if _, err = c.game.run(c.sess.Context(), obj, &structs.AnyCall{
 		Name: connectedEventType,
 		Tag:  emitEventTag,
 		Content: map[string]any{
