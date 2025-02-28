@@ -177,13 +177,13 @@ func (c *Challenge) Check(challenger *Object, targetID string) bool {
 	skill := challenger.Unsafe.Skills[c.Skill]
 	skill.Name = c.Skill
 
-	result := SkillUse{
-		Skill:     &skill,
-		User:      challenger.Unsafe.Id,
-		Challenge: float64(c.Level),
-		At:        time.Now(),
-		Target:    targetID,
-	}.Check()
+	result := skillUse{
+		skill:     &skill,
+		user:      challenger.Unsafe.Id,
+		challenge: float64(c.Level),
+		at:        time.Now(),
+		target:    targetID,
+	}.check()
 
 	challenger.Unsafe.Skills[c.Skill] = skill
 
@@ -652,25 +652,22 @@ func (s *Skill) improvement(at Timestamp, challenge float64, effective float64) 
 	return rechargeCoeff * skillCoeff * theoryCoeff * challengeCoeff * perUse
 }
 
+// Returns the effective level of this skill considering amount forgotten since last use.
 func (s *Skill) Effective(at Timestamp) float64 {
-	permanentSkill := 0.5 * s.Theoretical
-
-	if s.Practical <= permanentSkill {
-		return float64(permanentSkill)
-	}
-
 	if config, found := SkillConfigs.GetHas(s.Name); found && config.Forget != 0 {
 		nanosSinceLastUse := at.Nanoseconds() - Timestamp(s.LastUsedAt).Nanoseconds()
 		forgetFraction := float64(nanosSinceLastUse) / float64(config.Forget.Nanoseconds())
 		forgetCoeff := 1 + (-1 / (1 + math.Exp(8-8*forgetFraction))) + (1 / math.Exp(8))
-		practicalPart := float64(s.Practical - permanentSkill)
-		return practicalPart*forgetCoeff + float64(permanentSkill)
+		permanentSkill := 0.5 * s.Theoretical
+		forgettableSkill := float64(s.Practical - permanentSkill)
+		return forgettableSkill*forgetCoeff + float64(permanentSkill)
 	}
 
 	return float64(s.Practical)
 }
 
-func (s *Skill) baseRate(at Timestamp) float64 {
+// Returns the amount of skill level useable considering recharge time.
+func (s *Skill) rechargeCoeff(at Timestamp) float64 {
 	if s.LastUsedAt == 0 {
 		return 1.0
 	}
@@ -684,49 +681,47 @@ func (s *Skill) baseRate(at Timestamp) float64 {
 	return 1.0
 }
 
-type Skillable interface {
-	NoStore() *Skill
-	StoreAfter(context.Context, func(*Skill) error) error
+type skillUse struct {
+	skill     *Skill
+	user      string
+	target    string
+	challenge float64
+	at        time.Time
 }
 
-type SkillUse struct {
-	Skill     *Skill
-	User      string
-	Target    string
-	Challenge float64
-	At        time.Time
-}
+func (s skillUse) check() bool {
+	stamp := Stamp(s.at)
 
-func (s SkillUse) Check() bool {
-	stamp := Stamp(s.At)
+	effective := s.skill.Effective(stamp)
+	s.skill.Practical = float32(effective)
 
-	effective := s.Skill.Effective(stamp)
-	s.Skill.Practical = float32(effective)
+	rechargeCoeff := s.skill.rechargeCoeff(stamp)
+	successChance := rechargeCoeff / (1.0 + math.Pow(10, (s.challenge-effective)*0.1))
 
-	baseRate := s.Skill.baseRate(stamp)
-	successChance := baseRate / (1.0 + math.Pow(10, (s.Challenge-effective)*0.1))
-	s.Skill.Practical += float32(s.Skill.improvement(stamp, s.Challenge, effective))
-	if s.Skill.Practical > s.Skill.Theoretical {
-		s.Skill.Theoretical = s.Skill.Practical
+	s.skill.Practical += float32(s.skill.improvement(stamp, s.challenge, effective))
+	if s.skill.Practical > s.skill.Theoretical {
+		s.skill.Theoretical = s.skill.Practical
 	}
-	s.Skill.LastBase = float32(baseRate)
-	s.Skill.LastUsedAt = stamp.Uint64()
+
+	s.skill.LastBase = float32(rechargeCoeff)
+	s.skill.LastUsedAt = stamp.Uint64()
+
 	return s.rng().Float64() < successChance
 }
 
-func (s SkillUse) rng() *rnd.Rand {
+func (s skillUse) rng() *rnd.Rand {
 	// Seed a hash with who does what to whom.
 	h := fnv.New64()
-	h.Write([]byte(s.User))
-	h.Write([]byte(s.Skill.Name))
-	h.Write([]byte(s.Target))
+	h.Write([]byte(s.user))
+	h.Write([]byte(s.skill.Name))
+	h.Write([]byte(s.target))
 
-	skillConfig := SkillConfigs.Get(s.Skill.Name)
+	skillConfig := SkillConfigs.Get(s.skill.Name)
 
 	// Seed the hash with time step based on skill duration.
-	step := uint64(s.At.UnixNano())
+	step := uint64(s.at.UnixNano())
 	if skillConfig.Duration != 0 {
-		step = uint64(s.At.UnixNano() / skillConfig.Duration.Nanoseconds() / 3)
+		step = uint64(s.at.UnixNano() / skillConfig.Duration.Nanoseconds() / 3)
 	}
 	b := make([]byte, binary.Size(step))
 	binary.BigEndian.PutUint64(b, step)
@@ -738,7 +733,7 @@ func (s SkillUse) rng() *rnd.Rand {
 	// If the skill has a duration then reseed with a second step based on a random offset.
 	if skillConfig.Duration != 0 {
 		offset := result.Int63n(skillConfig.Duration.Nanoseconds())
-		binary.BigEndian.PutUint64(b, uint64((s.At.UnixNano()+offset)/skillConfig.Duration.Nanoseconds()/3))
+		binary.BigEndian.PutUint64(b, uint64((s.at.UnixNano()+offset)/skillConfig.Duration.Nanoseconds()/3))
 		h.Write(b)
 		result = rnd.New(rnd.NewSource(int64(h.Sum64())))
 	}

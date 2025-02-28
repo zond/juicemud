@@ -15,25 +15,25 @@ func assertClose[T float64 | float32 | int | time.Duration](t *testing.T, f1, f2
 }
 
 func TestLevel(t *testing.T) {
-	u := SkillUse{
-		User: "a",
-		Skill: &Skill{
+	u := skillUse{
+		user: "a",
+		skill: &Skill{
 			Name:      "TestLevel",
 			Practical: 10,
 		},
-		Target: "b",
+		target: "b",
 	}
 	testAt := func(delta float64) float64 {
 		success := 0
 		count := 10000
 		for range count {
-			u.At = time.Unix(0, rand.Int64())
-			u.Challenge = float64(u.Skill.Practical) + delta
-			u.Skill.Practical = 10
-			u.Skill.Theoretical = 10
-			u.Skill.LastBase = 1
-			u.Skill.LastUsedAt = 0
-			if u.Check() {
+			u.at = time.Unix(0, rand.Int64())
+			u.challenge = float64(u.skill.Practical) + delta
+			u.skill.Practical = 10
+			u.skill.Theoretical = 10
+			u.skill.LastBase = 1
+			u.skill.LastUsedAt = 0
+			if u.check() {
 				success++
 			}
 		}
@@ -47,13 +47,13 @@ func TestLevel(t *testing.T) {
 }
 
 func TestRechargeWithoutReuse(t *testing.T) {
-	u := SkillUse{
-		User: "a",
-		Skill: &Skill{
+	u := skillUse{
+		user: "a",
+		skill: &Skill{
 			Name:      "TestRechargeWithoutReuse",
 			Practical: 10,
 		},
-		Target: "b",
+		target: "b",
 	}
 	recharge := time.Minute
 	SkillConfigs.Set("TestRechargeWithoutReuse", SkillConfig{
@@ -63,10 +63,10 @@ func TestRechargeWithoutReuse(t *testing.T) {
 		success := 0
 		count := 10000
 		for i := 0; i < count; i++ {
-			u.Skill.LastUsedAt = Stamp(time.Unix(0, rand.Int64())).Uint64()
-			u.At = Timestamp(u.Skill.LastUsedAt).Time().Add(time.Duration(float64(recharge) * multiple))
-			u.Challenge = u.Skill.Effective(Stamp(u.At))
-			if u.Check() {
+			u.skill.LastUsedAt = Stamp(time.Unix(0, rand.Int64())).Uint64()
+			u.at = Timestamp(u.skill.LastUsedAt).Time().Add(time.Duration(float64(recharge) * multiple))
+			u.challenge = u.skill.Effective(Stamp(u.at))
+			if u.check() {
 				success++
 			}
 		}
@@ -95,13 +95,13 @@ func TestForget(t *testing.T) {
 	assertClose(t, s.Effective(Stamp(now.Add(forget))), 15, 0.02)
 	assertClose(t, s.Effective(Stamp(now.Add(forget*2))), 10, 0.02)
 
-	SkillUse{
-		User:      "a",
-		Skill:     s,
-		Target:    "b",
-		At:        now.Add(forget),
-		Challenge: 10,
-	}.Check()
+	skillUse{
+		user:      "a",
+		skill:     s,
+		target:    "b",
+		at:        now.Add(forget),
+		challenge: 10,
+	}.check()
 	assertClose(t, s.Effective(Stamp(now.Add(forget))), 15, 0.04)
 	assertClose(t, s.Practical, 15, 0.04)
 }
@@ -132,13 +132,13 @@ func TestLearn(t *testing.T) {
 			}
 			dur += step
 			//			before := s.Effective(Stamp(at))
-			SkillUse{
-				User:      "a",
-				Skill:     s,
-				Target:    "b",
-				At:        at,
-				Challenge: s.Effective(Stamp(at)),
-			}.Check()
+			skillUse{
+				user:      "a",
+				skill:     s,
+				target:    "b",
+				at:        at,
+				challenge: s.Effective(Stamp(at)),
+			}.check()
 			//			log.Printf("%v: %v %v", dur, s.Effective(Stamp(at)), s.Effective(Stamp(at))-before)
 		}
 		return dur
@@ -171,13 +171,13 @@ func TestLearn(t *testing.T) {
 }
 
 func TestRechargeWithReuse(t *testing.T) {
-	u := SkillUse{
-		User: "a",
-		Skill: &Skill{
+	u := skillUse{
+		user: "a",
+		skill: &Skill{
 			Name:      "TestRechargeWithReuse",
 			Practical: 10,
 		},
-		Target: "b",
+		target: "b",
 	}
 	recharge := time.Minute
 	SkillConfigs.Set("TestRechargeWithReuse", SkillConfig{
@@ -188,14 +188,14 @@ func TestRechargeWithReuse(t *testing.T) {
 		count := 10000
 		success := 0
 		for i := 0; i < count; i++ {
-			u.Skill.LastBase = 0
-			u.Skill.LastUsedAt = 0
-			u.At = time.Unix(0, rand.Int64())
-			u.Challenge = 0
-			u.Check()
-			u.At = u.At.Add(time.Duration(float64(recharge) * multiple))
-			u.Challenge = u.Skill.Effective(Stamp(u.At))
-			if u.Check() {
+			u.skill.LastBase = 0
+			u.skill.LastUsedAt = 0
+			u.at = time.Unix(0, rand.Int64())
+			u.challenge = 0
+			u.check()
+			u.at = u.at.Add(time.Duration(float64(recharge) * multiple))
+			u.challenge = u.skill.Effective(Stamp(u.at))
+			if u.check() {
 				success++
 			}
 		}
@@ -208,13 +208,13 @@ func TestRechargeWithReuse(t *testing.T) {
 }
 
 func TestDuration(t *testing.T) {
-	u := SkillUse{
-		User: "a",
-		Skill: &Skill{
+	u := skillUse{
+		user: "a",
+		skill: &Skill{
 			Name:      "TestDuration",
 			Practical: 10,
 		},
-		Target: "b",
+		target: "b",
 	}
 	SkillConfigs.Set("TestDuration", SkillConfig{
 		Duration: Duration(time.Minute),
@@ -223,9 +223,9 @@ func TestDuration(t *testing.T) {
 		same := 0
 		count := 10000
 		for i := 0; i < count; i++ {
-			u.At = time.Unix(0, rand.Int64())
+			u.at = time.Unix(0, rand.Int64())
 			val1 := u.rng().Float64()
-			u.At = u.At.Add(time.Duration(float64(time.Minute) * multiple))
+			u.at = u.at.Add(time.Duration(float64(time.Minute) * multiple))
 			val2 := u.rng().Float64()
 			if val1 == val2 {
 				same += 1
