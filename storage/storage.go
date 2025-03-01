@@ -5,6 +5,7 @@ package storage
 import (
 	"context"
 	"encoding/binary"
+	"iter"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,12 +66,28 @@ type Storage struct {
 	objects  *dbm.LiveTypeHash[structs.Object, *structs.Object]
 }
 
+func (s *Storage) Close() error {
+	if err := s.queue.Close(); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := s.sql.Close(); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := s.sources.Close(); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := s.modTimes.Close(); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return juicemud.WithStack(s.objects.Close())
+}
+
 func (s *Storage) Queue() *queue.Queue {
 	return s.queue
 }
 
-func (s *Storage) StartObjects(ctx context.Context) error {
-	return s.objects.Start(ctx)
+func (s *Storage) StartObjects(_ context.Context) error {
+	return s.objects.Start()
 }
 
 func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, params ...any) error {
@@ -777,6 +794,28 @@ func (s *Storage) UserAccessToGroupID(ctx context.Context, user *User, groupID i
 		return false, juicemud.WithStack(err)
 	}
 	return true, nil
+}
+
+type Source struct {
+	Path    string
+	Content string
+}
+
+func (s *Storage) EachSource(ctx context.Context) iter.Seq2[Source, error] {
+	return func(yield func(Source, error) bool) {
+		for entry, err := range s.sources.Each() {
+			if !yield(Source{
+				Path:    entry.K,
+				Content: string(entry.V),
+			}, err) {
+				break
+			}
+		}
+	}
+}
+
+func (s *Storage) EachObject(_ context.Context) iter.Seq2[*structs.Object, error] {
+	return s.objects.Each()
 }
 
 func (s *Storage) GetHA1AndUser(ctx context.Context, username string) (string, bool, *User, error) {

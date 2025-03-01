@@ -1,131 +1,146 @@
 {
   "Objects": [
     {
-      "Id": "freedom_plaza",
+      "Id": "GCh1Acup7Wgeo26PpWxH1g",
+      "Callbacks": {
+        "connected": {
+          "emit": true
+        }
+      },
+      "State": "{\"username\":\"zond\",\"object\":\"GCh1Acup7Wgeo26PpWxH1g\"}",
+      "Location": "genesis",
+      "Content": {},
+      "Learning": true,
+      "Skills": {},
       "Descriptions": [
         {
-          "Short": "Freedom Plaza",
-          "Long": "The heart of Freedom City, Freedom Plaza is a bustling intersection of vice, commerce, and crime. Neon signs flicker against the backdrop of dilapidated skyscrapers, while junkies and dealers conduct business in the shadows. The air reeks of ozone and decay."
+          "MapIcon": 0,
+          "Short": "zond",
+          "Unique": true,
+          "Long": "",
+          "Tags": [],
+          "Challenges": []
         }
       ],
-      "Exits": [
-        {
-          "Destination": "rat_alleys",
-          "Descriptions": [
-            {
-              "Short": "alley",
-              "Long": "A narrow, garbage-strewn alley leading into the deeper parts of the slums. You hear the scuttling of rats and the murmurs of unseen figures."
-            }
-          ]
-        },
-        {
-          "Destination": "redlight_district",
-          "Descriptions": [
-            {
-              "Short": "south",
-              "Long": "The neon glow of the Redlight District beckons seductively to the south, promising pleasures both legal and otherwise."
-            }
-          ]
-        }
-      ]
+      "Exits": [],
+      "SourcePath": "/user.js",
+      "SourceModTime": 1740769900663588000
     },
     {
-      "Id": "rat_alleys",
+      "Id": "GCh1XuM3ecCwDPGOxc4+Nw",
+      "Callbacks": {},
+      "State": "{}",
+      "Location": "genesis",
+      "Content": {},
+      "Learning": false,
+      "Skills": {},
       "Descriptions": [
         {
-          "Short": "Rat Alleys",
-          "Long": "These tight corridors between crumbling buildings are a maze of filth and desperation. The stench of urine and garbage is overpowering, and figures huddle in the darkness, watching."
+          "MapIcon": 0,
+          "Short": "apple",
+          "Unique": false,
+          "Long": "",
+          "Tags": [],
+          "Challenges": []
         }
       ],
-      "Exits": [
-        {
-          "Destination": "freedom_plaza",
-          "Descriptions": [
-            {
-              "Short": "street",
-              "Long": "A cracked sidewalk leads back to the relative openness of Freedom Plaza."
-            }
-          ]
-        },
-        {
-          "Destination": "junkyard",
-          "Descriptions": [
-            {
-              "Short": "north",
-              "Long": "A rusting chain-link fence has been cut open here, leading into a scrapyard filled with gutted vehicles and scavengers."
-            }
-          ]
-        }
-      ]
+      "Exits": [],
+      "SourcePath": "/apple.js",
+      "SourceModTime": 1740769949733863000
     },
     {
-      "Id": "junkyard",
-      "Descriptions": [
-        {
-          "Short": "Junkyard",
-          "Long": "A sprawling expanse of twisted metal and broken dreams, the junkyard is home to scavengers picking through the remnants of forgotten technology. A foul-smelling puddle of something unidentifiable sits in the center."
-        }
-      ],
-      "Exits": [
-        {
-          "Destination": "rat_alleys",
-          "Descriptions": [
-            {
-              "Short": "south",
-              "Long": "The way back through the jagged opening in the fence leads into the rat alleys."
-            }
-          ]
-        }
-      ]
+      "Id": "",
+      "Callbacks": {},
+      "State": "{}",
+      "Location": "",
+      "Content": {
+        "genesis": true
+      },
+      "Learning": false,
+      "Skills": {},
+      "Descriptions": [],
+      "Exits": [],
+      "SourcePath": "/empty.js",
+      "SourceModTime": 1740769900667462000
     },
     {
-      "Id": "redlight_district",
+      "Id": "GCh1R0lAPDgDIXZQS6W3TA",
+      "Callbacks": {},
+      "State": "{}",
+      "Location": "genesis",
+      "Content": {
+        "GCh1DR6fRiDFEuRRJzROqA": true
+      },
+      "Learning": false,
+      "Skills": {},
       "Descriptions": [
         {
-          "Short": "Redlight District",
-          "Long": "Pulsing neon, the stench of cheap perfume, and the constant buzz of illicit activity make up the Redlight District. Prostitutes, dealers, and cybernetically-enhanced pimps conduct business under the watchful eye of corporate enforcers."
+          "MapIcon": 0,
+          "Short": "apple",
+          "Unique": false,
+          "Long": "",
+          "Tags": [],
+          "Challenges": []
         }
       ],
-      "Exits": [
-        {
-          "Destination": "freedom_plaza",
-          "Descriptions": [
-            {
-              "Short": "north",
-              "Long": "Heading back north, the glimmering sleaze of the Redlight District fades into the grime of Freedom Plaza."
-            }
-          ]
-        },
-        {
-          "Destination": "cyberden",
-          "Descriptions": [
-            {
-              "Short": "west",
-              "Long": "A narrow doorway marked by a flickering holographic sign advertises the Cyberden, a hub for illegal augmentations and digital transactions."
-            }
-          ]
-        }
-      ]
+      "Exits": [],
+      "SourcePath": "/apple.js",
+      "SourceModTime": 1740769949733863000
     },
     {
-      "Id": "cyberden",
+      "Id": "genesis",
+      "Callbacks": {},
+      "State": "{}",
+      "Location": "",
+      "Content": {
+        "GCh1Acup7Wgeo26PpWxH1g": true,
+        "GCh1R0lAPDgDIXZQS6W3TA": true,
+        "GCh1XuM3ecCwDPGOxc4+Nw": true
+      },
+      "Learning": false,
+      "Skills": {},
       "Descriptions": [
         {
-          "Short": "Cyberden",
-          "Long": "A dimly lit den of wires, circuits, and flesh. Hackers and black-market surgeons tinker with neural implants while disreputable figures whisper deals in the corners. A strong scent of ozone and sterilizing chemicals lingers."
+          "MapIcon": 0,
+          "Short": "Black cosmos",
+          "Unique": true,
+          "Long": "This is the darkness of space before creation. No stars twinkle.",
+          "Tags": [],
+          "Challenges": []
         }
       ],
-      "Exits": [
+      "Exits": [],
+      "SourcePath": "/genesis.js",
+      "SourceModTime": 1740769900665566000
+    },
+    {
+      "Id": "GCh1DR6fRiDFEuRRJzROqA",
+      "Callbacks": {},
+      "State": "{}",
+      "Location": "GCh1R0lAPDgDIXZQS6W3TA",
+      "Content": {},
+      "Learning": false,
+      "Skills": {},
+      "Descriptions": [
         {
-          "Destination": "redlight_district",
-          "Descriptions": [
-            {
-              "Short": "east",
-              "Long": "Beyond the doorway, the garish lights and sounds of the Redlight District await."
-            }
-          ]
+          "MapIcon": 0,
+          "Short": "apple",
+          "Unique": false,
+          "Long": "",
+          "Tags": [],
+          "Challenges": []
         }
-      ]
+      ],
+      "Exits": [],
+      "SourcePath": "/apple.js",
+      "SourceModTime": 1740769949733863000
     }
-  ]
+  ],
+  "Sources": {
+    "/apple.js": "setDescriptions([\n    {\n        Short: \"apple\",\n    }\n]);",
+    "/boot.js": "// This code is run each time the game server starts.",
+    "/empty.js": "// This code runs the top level container of all content.",
+    "/genesis.js": "// This code runs the room where newly created users are dropped.\nsetDescriptions([\n  {\n\t\tShort: 'Black cosmos',\n\t\tUnique: true,\n\t\tLong: 'This is the darkness of space before creation. No stars twinkle.',\n  },\n]);\n",
+    "/user.js": "// This code runs all connected users.\n\naddCallback('connected', ['emit'], (obj) =\u003e {\n    state.username = obj.username;\n    state.object = obj.object;\n\tsetDescriptions([\n\t\t{\n\t\t\tShort: obj.username,\n\t\t\tUnique: true,\n\t\t}\n\t]);\n\tsetLearning(true);\n});\n"
+  }
 }

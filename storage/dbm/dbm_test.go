@@ -3,7 +3,6 @@
 package dbm
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"flag"
@@ -180,7 +179,7 @@ func TestLiveTypeHash(t *testing.T) {
 		runWG := &sync.WaitGroup{}
 		runWG.Add(1)
 		go func() {
-			if err := lh.Start(context.Background()); err != nil {
+			if err := lh.Start(); err != nil {
 				log.Fatal(err)
 			}
 			runWG.Done()

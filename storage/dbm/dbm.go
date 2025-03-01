@@ -2,9 +2,9 @@ package dbm
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"os"
 	"sync"
 	"time"
@@ -17,6 +17,49 @@ import (
 type Hash struct {
 	dbm   *tkrzw.DBM
 	mutex *sync.RWMutex
+}
+
+func (h *Hash) Close() error {
+	if stat := h.dbm.Close(); !stat.IsOK() {
+		return juicemud.WithStack(stat)
+	}
+	return nil
+}
+
+type BEntry struct {
+	K string
+	V []byte
+}
+
+func (h *Hash) Each() iter.Seq2[BEntry, error] {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+	return func(yield func(BEntry, error) bool) {
+		iter := h.dbm.MakeIterator()
+		defer iter.Destruct()
+		iter.First()
+		for {
+			key, value, status := iter.Get()
+			if status.GetCode() == tkrzw.StatusNotFoundError {
+				break
+			} else if !status.IsOK() {
+				if !yield(BEntry{
+					K: string(key),
+					V: value,
+				}, juicemud.WithStack(status)) {
+					break
+				}
+			} else {
+				if !yield(BEntry{
+					K: string(key),
+					V: value,
+				}, nil) {
+					break
+				}
+			}
+			iter.Next()
+		}
+	}
 }
 
 func (h *Hash) Get(k string) ([]byte, error) {
@@ -89,11 +132,30 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 	return nil
 }
 
-func (l *LiveTypeHash[T, S]) Close() {
+func (l *LiveTypeHash[T, S]) Close() error {
+	if err := l.Flush(); err != nil {
+		return juicemud.WithStack(err)
+	}
 	close(l.closed)
+	return juicemud.WithStack(l.hash.Close())
 }
 
-func (l *LiveTypeHash[T, S]) Start(_ context.Context) error {
+func (l *LiveTypeHash[T, S]) Each() iter.Seq2[*T, error] {
+	if err := l.Flush(); err != nil {
+		return func(yield func(*T, error) bool) {
+			yield(nil, juicemud.WithStack(err))
+		}
+	}
+	return func(yield func(*T, error) bool) {
+		for entry, err := range l.hash.Each() {
+			if !yield(entry.V, err) {
+				break
+			}
+		}
+	}
+}
+
+func (l *LiveTypeHash[T, S]) Start() error {
 	timer := time.NewTicker(time.Second)
 	for {
 		select {
@@ -198,6 +260,7 @@ func (l *LiveTypeHash[T, S]) Proc(procs []LProc[T, S]) error {
 		if newV == nil {
 			delete(l.stage, proc.K)
 		} else {
+			S(newV).SetPostUnlock(l.updated)
 			l.stage[proc.K] = newV
 			newV = S(newV).UnsafeShallowCopy()
 		}
@@ -256,6 +319,43 @@ func (h *TypeHash[T, S]) Get(k string) (*T, error) {
 		return nil, juicemud.WithStack(err)
 	}
 	return (*T)(t), nil
+}
+
+type SEntry[T any, S structs.Serializable[T]] struct {
+	K string
+	V *T
+}
+
+func (h *TypeHash[T, S]) Each() iter.Seq2[SEntry[T, S], error] {
+	return func(yield func(SEntry[T, S], error) bool) {
+		for entry, err := range h.Hash.Each() {
+			if err != nil {
+				if !yield(SEntry[T, S]{
+					K: entry.K,
+					V: nil,
+				}, juicemud.WithStack(err)) {
+					break
+				}
+			} else {
+				t := S(new(T))
+				if err := t.Unmarshal(entry.V); err != nil {
+					if !yield(SEntry[T, S]{
+						K: entry.K,
+						V: nil,
+					}, juicemud.WithStack(err)) {
+						break
+					}
+				} else {
+					if !yield(SEntry[T, S]{
+						K: entry.K,
+						V: S(t),
+					}, nil) {
+						break
+					}
+				}
+			}
+		}
+	}
 }
 
 func (h *TypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {

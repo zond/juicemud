@@ -134,10 +134,12 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		storage: s,
 	}
 	go func() {
-		log.Panic(g.storage.StartObjects(ctx))
+		if err := g.storage.StartObjects(ctx); err != nil {
+			log.Panic(err)
+		}
 	}()
 	go func() {
-		log.Panic(g.storage.Queue().Start(ctx, func(ctx context.Context, ev *structs.Event) {
+		if err := g.storage.Queue().Start(ctx, func(ctx context.Context, ev *structs.Event) {
 			var call structs.Caller
 			if ev.Call.Name != "" {
 				call = &ev.Call
@@ -148,7 +150,9 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 					log.Printf("%v", juicemud.StackTrace(err))
 				}
 			}()
-		}))
+		}); err != nil {
+			log.Panic(err)
+		}
 	}()
 	bootJS, _, err := g.storage.LoadSource(ctx, bootSource)
 	if err != nil {

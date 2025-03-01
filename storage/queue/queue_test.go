@@ -48,7 +48,9 @@ func TestQueue(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		q.Close()
+		if err := q.Close(); err != nil {
+			t.Fatal(err)
+		}
 		runWG.Wait()
 		want := []string{"b", "a", "c"}
 		if !reflect.DeepEqual(got, want) {

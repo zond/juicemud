@@ -53,11 +53,13 @@ func (q *Queue) peekFirst(_ context.Context) (*structs.Event, error) {
 	return res, nil
 }
 
-func (q *Queue) Close() {
+func (q *Queue) Close() error {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 	q.closed = true
 	q.cond.Broadcast()
+	q.cond.Wait()
+	return nil
 }
 
 func (q *Queue) Push(ctx context.Context, eventer structs.Eventer) error {
@@ -121,5 +123,6 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 			q.cond.Wait()
 		}
 	}
+	q.cond.Broadcast()
 	return nil
 }

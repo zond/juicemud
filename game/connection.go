@@ -3,7 +3,6 @@ package game
 import (
 	"crypto/subtle"
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -319,7 +318,6 @@ func (c *Connection) wizCommands() commands {
 					if err != nil {
 						return juicemud.WithStack(err)
 					}
-					log.Printf("moving %q to %q", target.GetId(), dest.GetId())
 					if err := c.game.moveObject(c.sess.Context(), obj, dest.GetId()); err != nil {
 						return juicemud.WithStack(err)
 					}
