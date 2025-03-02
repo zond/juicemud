@@ -152,6 +152,22 @@ func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *st
 	return nil
 }
 
+func (g *Game) removeObject(ctx context.Context, obj *structs.Object) error {
+	loc := obj.GetLocation()
+	if err := g.storage.RemoveObject(ctx, obj); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return juicemud.WithStack(g.emitMovement(ctx, obj, &loc, nil))
+}
+
+func (g *Game) accessObject(ctx context.Context, id string) (*structs.Object, error) {
+	res, err := g.storage.AccessObject(ctx, id, g.runSource)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return res, nil
+}
+
 func (g *Game) createObject(ctx context.Context, obj *structs.Object) error {
 	dest := obj.GetLocation()
 	if err := g.storage.CreateObject(ctx, obj); err != nil {

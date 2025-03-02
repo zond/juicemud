@@ -183,7 +183,7 @@ func (c *Challenge) Check(challenger *Object, targetID string) bool {
 		challenge: float64(c.Level),
 		at:        time.Now(),
 		target:    targetID,
-	}.check()
+	}.check(challenger.GetLearning())
 
 	challenger.Unsafe.Skills[c.Skill] = skill
 
@@ -689,18 +689,23 @@ type skillUse struct {
 	at        time.Time
 }
 
-func (s skillUse) check() bool {
+func (s skillUse) check(improve bool) bool {
 	stamp := Stamp(s.at)
 
-	effective := s.skill.Effective(stamp)
-	s.skill.Practical = float32(effective)
+	effective := float64(s.skill.Practical)
+	if improve {
+		effective = s.skill.Effective(stamp)
+		s.skill.Practical = float32(effective)
+	}
 
 	rechargeCoeff := s.skill.rechargeCoeff(stamp)
 	successChance := rechargeCoeff / (1.0 + math.Pow(10, (s.challenge-effective)*0.1))
 
-	s.skill.Practical += float32(s.skill.improvement(stamp, s.challenge, effective))
-	if s.skill.Practical > s.skill.Theoretical {
-		s.skill.Theoretical = s.skill.Practical
+	if improve {
+		s.skill.Practical += float32(s.skill.improvement(stamp, s.challenge, effective))
+		if s.skill.Practical > s.skill.Theoretical {
+			s.skill.Theoretical = s.skill.Practical
+		}
 	}
 
 	s.skill.LastBase = float32(rechargeCoeff)

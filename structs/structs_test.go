@@ -33,7 +33,7 @@ func TestLevel(t *testing.T) {
 			u.skill.Theoretical = 10
 			u.skill.LastBase = 1
 			u.skill.LastUsedAt = 0
-			if u.check() {
+			if u.check(false) {
 				success++
 			}
 		}
@@ -66,7 +66,7 @@ func TestRechargeWithoutReuse(t *testing.T) {
 			u.skill.LastUsedAt = Stamp(time.Unix(0, rand.Int64())).Uint64()
 			u.at = Timestamp(u.skill.LastUsedAt).Time().Add(time.Duration(float64(recharge) * multiple))
 			u.challenge = u.skill.Effective(Stamp(u.at))
-			if u.check() {
+			if u.check(false) {
 				success++
 			}
 		}
@@ -101,7 +101,7 @@ func TestForget(t *testing.T) {
 		target:    "b",
 		at:        now.Add(forget),
 		challenge: 10,
-	}.check()
+	}.check(true)
 	assertClose(t, s.Effective(Stamp(now.Add(forget))), 15, 0.04)
 	assertClose(t, s.Practical, 15, 0.04)
 }
@@ -138,8 +138,7 @@ func TestLearn(t *testing.T) {
 				target:    "b",
 				at:        at,
 				challenge: s.Effective(Stamp(at)),
-			}.check()
-			//			log.Printf("%v: %v %v", dur, s.Effective(Stamp(at)), s.Effective(Stamp(at))-before)
+			}.check(true)
 		}
 		return dur
 	}
@@ -192,10 +191,10 @@ func TestRechargeWithReuse(t *testing.T) {
 			u.skill.LastUsedAt = 0
 			u.at = time.Unix(0, rand.Int64())
 			u.challenge = 0
-			u.check()
+			u.check(false)
 			u.at = u.at.Add(time.Duration(float64(recharge) * multiple))
 			u.challenge = u.skill.Effective(Stamp(u.at))
-			if u.check() {
+			if u.check(false) {
 				success++
 			}
 		}

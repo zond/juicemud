@@ -226,7 +226,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 			return juicemud.WithStack(err)
 		}
 		if len(parts) == 1 {
-			obj, err := c.game.storage.AccessObject(c.sess.Context(), c.user.Object, c.game.runSource)
+			obj, err := c.game.accessObject(c.sess.Context(), c.user.Object)
 			if err != nil {
 				return juicemud.WithStack(err)
 			}
@@ -237,7 +237,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 			case defaultSelf:
 				return f(c, obj, obj)
 			case defaultLoc:
-				loc, err := c.game.storage.AccessObject(c.sess.Context(), obj.GetLocation(), c.game.runSource)
+				loc, err := c.game.accessObject(c.sess.Context(), obj.GetLocation())
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
@@ -296,11 +296,11 @@ func (c *Connection) wizCommands() commands {
 					if self.GetLocation() == "" {
 						return errors.New("Can't move things outside the known universe.")
 					}
-					obj, err := c.game.storage.AccessObject(c.sess.Context(), targets[0].GetId(), c.game.runSource)
+					obj, err := c.game.accessObject(c.sess.Context(), targets[0].GetId())
 					if err != nil {
 						return juicemud.WithStack(err)
 					}
-					loc, err := c.game.storage.AccessObject(c.sess.Context(), self.GetLocation(), c.game.runSource)
+					loc, err := c.game.accessObject(c.sess.Context(), self.GetLocation())
 					if err != nil {
 						return juicemud.WithStack(err)
 					}
@@ -314,11 +314,32 @@ func (c *Connection) wizCommands() commands {
 					if target.GetId() == self.GetLocation() {
 						return errors.New("Can't move current location.")
 					}
-					obj, err := c.game.storage.AccessObject(c.sess.Context(), target.GetId(), c.game.runSource)
+					obj, err := c.game.accessObject(c.sess.Context(), target.GetId())
 					if err != nil {
 						return juicemud.WithStack(err)
 					}
 					if err := c.game.moveObject(c.sess.Context(), obj, dest.GetId()); err != nil {
+						return juicemud.WithStack(err)
+					}
+				}
+				return nil
+			}),
+		},
+		{
+			names: m("/remove"),
+			f: c.identifyingCommand(defaultNone, func(c *Connection, self *structs.Object, targets ...*structs.Object) error {
+				for _, target := range targets {
+					if target.GetId() == self.GetLocation() {
+						return errors.New("Can't remove current location.")
+					}
+					if target.GetId() == self.GetId() {
+						return errors.New("Can't remove yourself.")
+					}
+					var err error
+					if target, err = c.game.accessObject(c.sess.Context(), target.GetId()); err != nil {
+						return juicemud.WithStack(err)
+					}
+					if err := c.game.removeObject(c.sess.Context(), target); err != nil {
 						return juicemud.WithStack(err)
 					}
 				}
@@ -344,7 +365,7 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintf(c.term, "%q doesn't exist", parts[1])
 					return nil
 				}
-				self, err := c.game.storage.AccessObject(c.sess.Context(), c.user.Object, c.game.runSource)
+				self, err := c.game.accessObject(c.sess.Context(), c.user.Object)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
@@ -426,7 +447,7 @@ func (c *Connection) wizCommands() commands {
 		{
 			names: m("/exit"),
 			f: func(c *Connection, s string) error {
-				obj, err := c.game.storage.AccessObject(c.sess.Context(), c.user.Object, c.game.runSource)
+				obj, err := c.game.accessObject(c.sess.Context(), c.user.Object)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
@@ -434,7 +455,7 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "Unable to leave the universe.")
 					return nil
 				}
-				loc, err := c.game.storage.AccessObject(c.sess.Context(), obj.GetLocation(), c.game.runSource)
+				loc, err := c.game.accessObject(c.sess.Context(), obj.GetLocation())
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
@@ -578,7 +599,7 @@ type objectAttempter struct {
 }
 
 func (o objectAttempter) attempt(c *Connection, name string, line string) (found bool, err error) {
-	obj, err := c.game.storage.AccessObject(c.sess.Context(), o.id, c.game.runSource)
+	obj, err := c.game.accessObject(c.sess.Context(), o.id)
 	if err != nil {
 		return false, juicemud.WithStack(err)
 	}

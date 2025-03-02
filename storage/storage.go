@@ -152,6 +152,38 @@ func (s *Storage) maybeRefresh(ctx context.Context, obj *structs.Object, ref Ref
 	return nil
 }
 
+func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
+	if obj.PostUnlock == nil {
+		return errors.Errorf("can't remove object not known to storage: %v", obj)
+	}
+
+	id := obj.GetId()
+	locID := obj.GetLocation()
+
+	loc, err := s.objects.Get(locID)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	return juicemud.WithStack(structs.WithLock(func() error {
+		if obj.Unsafe.Location != locID {
+			return errors.Errorf("%q no longer located in %q", id, locID)
+		}
+		if _, found := loc.Unsafe.Content[id]; !found {
+			return errors.Errorf("%q doesn't contain %q", locID, id)
+		}
+		return juicemud.WithStack(s.objects.Proc([]dbm.LProc[structs.Object, *structs.Object]{
+			s.objects.LProc(id, func(_ string, _ *structs.Object) (*structs.Object, error) {
+				return nil, nil
+			}),
+			s.objects.LProc(locID, func(_ string, loc *structs.Object) (*structs.Object, error) {
+				delete(loc.Unsafe.Content, id)
+				return loc, nil
+			}),
+		}))
+	}, obj, loc))
+}
+
 func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 	if obj.PostUnlock != nil {
 		return errors.Errorf("can't create object already known to storage: %+v", obj)
