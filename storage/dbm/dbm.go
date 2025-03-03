@@ -17,7 +17,7 @@ import (
 
 type Hash struct {
 	dbm   *tkrzw.DBM
-	mutex *sync.RWMutex
+	mutex sync.RWMutex
 }
 
 func (h *Hash) Close() error {
@@ -521,7 +521,9 @@ func (t *Tree) SubDel(set string, key string) error {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 	completeKey := appendKey(nil, set, key)
-	if stat := t.Hash.dbm.Remove(completeKey); !stat.IsOK() {
+	if stat := t.Hash.dbm.Remove(completeKey); stat.GetCode() == tkrzw.StatusNotFoundError {
+		return juicemud.WithStack(os.ErrNotExist)
+	} else if !stat.IsOK() {
 		return juicemud.WithStack(stat)
 	}
 	return nil
@@ -540,6 +542,17 @@ func (t *Tree) SubGet(set string, key string) ([]byte, error) {
 	return b, nil
 }
 
+func (t *Tree) SubCount(set string) (int, error) {
+	c := 0
+	for _, err := range t.SubEach(set) {
+		if err != nil {
+			return 0, juicemud.WithStack(err)
+		}
+		c++
+	}
+	return c, nil
+}
+
 func (t *Tree) SubEach(set string) iter.Seq2[BEntry, error] {
 	keyPrefix := appendKey(nil, set)
 	t.mutex.RLock()
@@ -554,8 +567,8 @@ func (t *Tree) SubEach(set string) iter.Seq2[BEntry, error] {
 				break
 			} else if !status.IsOK() {
 				if !yield(BEntry{
-					K: string(key),
-					V: value,
+					K: "",
+					V: nil,
 				}, juicemud.WithStack(status)) {
 					break
 				}
@@ -611,7 +624,7 @@ func OpenHash(path string) (*Hash, error) {
 	if !stat.IsOK() {
 		return nil, juicemud.WithStack(stat)
 	}
-	return &Hash{dbm, &sync.RWMutex{}}, nil
+	return &Hash{dbm: dbm}, nil
 }
 
 func OpenTypeHash[T any, S structs.Serializable[T]](path string) (*TypeHash[T, S], error) {
@@ -638,14 +651,14 @@ func OpenLiveTypeHash[T any, S structs.Snapshottable[T]](path string) (*LiveType
 func OpenTree(path string) (*Tree, error) {
 	dbm := tkrzw.NewDBM()
 	stat := dbm.Open(fmt.Sprintf("%s.tkt", path), true, map[string]string{
-		"update_mode":      "UPDATE_APPENDING",
+		"page_update_mode": "PAGE_UPDATE_WRITE",
 		"record_comp_mode": "RECORD_COMP_NONE",
 		"key_comparator":   "LexicalKeyComparator",
 	})
 	if !stat.IsOK() {
 		return nil, juicemud.WithStack(stat)
 	}
-	return &Tree{&Hash{dbm, &sync.RWMutex{}}}, nil
+	return &Tree{&Hash{dbm: dbm}}, nil
 }
 
 func OpenTypeTree[T any, S structs.Serializable[T]](path string) (*TypeTree[T, S], error) {

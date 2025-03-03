@@ -101,15 +101,8 @@ func (h *Handler) handleOptions(w http.ResponseWriter, _ *http.Request) {
 // handleGet serves files or lists directory contents.
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) error {
 	info, err := h.fileSystem.Stat(r.Context(), r.URL.Path)
-	if errors.Is(err, os.ErrPermission) {
-		http.Error(w, "Unathorized", http.StatusForbidden)
-		return nil
-	} else if errors.Is(err, os.ErrNotExist) {
-		http.Error(w, "File not found", http.StatusNotFound)
-		return nil
-	} else if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return juicemud.WithStack(err)
+	if err != nil {
+		return handlePrettyError(w, err, "Failed to get file")
 	}
 
 	if info.IsDir {
@@ -196,32 +189,39 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) error {
-	err := h.fileSystem.Remove(r.Context(), r.URL.Path)
+type httpErrorable interface {
+	HTTPError() (int, string)
+}
+
+func handlePrettyError(w http.ResponseWriter, err error, def string) error {
+	var herr httpErrorable
 	if errors.Is(err, os.ErrPermission) {
 		http.Error(w, "Unathorized", http.StatusForbidden)
 		return nil
 	} else if errors.Is(err, os.ErrNotExist) {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return nil
+	} else if errors.As(err, &herr) {
+		code, message := herr.HTTPError()
+		http.Error(w, message, code)
+		return nil
 	} else if err != nil {
-		http.Error(w, "Failed to delete file", http.StatusInternalServerError)
+		http.Error(w, def, http.StatusInternalServerError)
 		return juicemud.WithStack(err)
 	}
 	return nil
 }
 
+func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) error {
+	if err := h.fileSystem.Remove(r.Context(), r.URL.Path); err != nil {
+		return handlePrettyError(w, err, "Failed to delete file")
+	}
+	return nil
+}
+
 func (h *Handler) handleMkcol(w http.ResponseWriter, r *http.Request) error {
-	err := h.fileSystem.Mkdir(r.Context(), r.URL.Path)
-	if errors.Is(err, os.ErrPermission) {
-		http.Error(w, "Unathorized", http.StatusForbidden)
-		return nil
-	} else if errors.Is(err, os.ErrNotExist) {
-		http.Error(w, "Parent not found", http.StatusNotFound)
-		return nil
-	} else if err != nil {
-		http.Error(w, "Failed to create directory", http.StatusInternalServerError)
-		return juicemud.WithStack(err)
+	if err := h.fileSystem.Mkdir(r.Context(), r.URL.Path); err != nil {
+		return handlePrettyError(w, err, "Failed to create directory")
 	}
 	return nil
 }
@@ -239,16 +239,8 @@ func (h *Handler) handleMove(w http.ResponseWriter, r *http.Request) error {
 		return juicemud.WithStack(err)
 	}
 
-	err = h.fileSystem.Rename(r.Context(), r.URL.Path, destURL)
-	if errors.Is(err, os.ErrPermission) {
-		http.Error(w, "Unathorized", http.StatusForbidden)
-		return nil
-	} else if errors.Is(err, os.ErrNotExist) {
-		http.Error(w, "File or destination directory not found", http.StatusNotFound)
-		return nil
-	} else if err != nil {
-		http.Error(w, "Failed to move file", http.StatusInternalServerError)
-		return juicemud.WithStack(err)
+	if err = h.fileSystem.Rename(r.Context(), r.URL.Path, destURL); err != nil {
+		return handlePrettyError(w, err, "Failed to move file")
 	}
 
 	return nil
@@ -289,15 +281,8 @@ func (h *Handler) handlePropfind(w http.ResponseWriter, r *http.Request) error {
 
 	ctx := r.Context()
 	info, err := h.fileSystem.Stat(ctx, r.URL.Path)
-	if errors.Is(err, os.ErrPermission) {
-		http.Error(w, "Unathorized", http.StatusForbidden)
-		return nil
-	} else if errors.Is(err, os.ErrNotExist) {
-		http.Error(w, "Not found", http.StatusNotFound)
-		return nil
-	} else if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return juicemud.WithStack(err)
+	if err != nil {
+		return handlePrettyError(w, err, "Failed to stat file")
 	}
 
 	var responses []davResponse

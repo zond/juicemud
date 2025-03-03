@@ -54,6 +54,7 @@ type Connection struct {
 	sess ssh.Session
 	term *term.Terminal
 	user *storage.User
+	wiz  bool
 }
 
 // func (c *Connection) Linebreak(s string) string {
@@ -258,12 +259,21 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 		}
 		targets := []*structs.Object{}
 		for _, pattern := range parts[1:] {
-			target, err := loc.Identify(pattern)
-			if err != nil {
-				fmt.Fprintln(c.term, err.Error())
-				return nil
+			if c.wiz && strings.HasPrefix(pattern, "#") {
+				target, err := c.game.accessObject(c.sess.Context(), pattern[1:])
+				if err != nil {
+					fmt.Fprintln(c.term, err.Error())
+					return nil
+				}
+				targets = append(targets, target)
+			} else {
+				target, err := loc.Identify(pattern)
+				if err != nil {
+					fmt.Fprintln(c.term, err.Error())
+					return nil
+				}
+				targets = append(targets, target)
 			}
-			targets = append(targets, target)
 		}
 		return f(c, obj, targets...)
 	}
@@ -290,36 +300,33 @@ func (c *Connection) wizCommands() commands {
 			names: m("/move"),
 			f: c.identifyingCommand(defaultNone, func(c *Connection, self *structs.Object, targets ...*structs.Object) error {
 				if len(targets) == 1 {
-					if targets[0].GetId() == self.GetLocation() {
-						return errors.New("Can't move current location.")
-					}
-					if self.GetLocation() == "" {
-						return errors.New("Can't move things outside the known universe.")
-					}
 					obj, err := c.game.accessObject(c.sess.Context(), targets[0].GetId())
 					if err != nil {
 						return juicemud.WithStack(err)
 					}
-					loc, err := c.game.accessObject(c.sess.Context(), self.GetLocation())
-					if err != nil {
-						return juicemud.WithStack(err)
+					if obj.GetLocation() == self.GetLocation() {
+						if self.GetLocation() == "" {
+							return errors.New("Can't move things outside the known universe.")
+						}
+						loc, err := c.game.accessObject(c.sess.Context(), self.GetLocation())
+						if err != nil {
+							return juicemud.WithStack(err)
+						}
+						return juicemud.WithStack(c.game.moveObject(c.sess.Context(), obj, loc.GetLocation()))
+					} else {
+						return juicemud.WithStack(c.game.moveObject(c.sess.Context(), obj, self.GetLocation()))
 					}
-					return juicemud.WithStack(c.game.moveObject(c.sess.Context(), obj, loc.GetLocation()))
 				}
 				dest := targets[len(targets)-1]
-				if dest.GetId() == self.GetLocation() {
-					return errors.New("Skipping moving things to where they already are.")
-				}
 				for _, target := range targets[:len(targets)-1] {
-					if target.GetId() == self.GetLocation() {
-						return errors.New("Can't move current location.")
-					}
-					obj, err := c.game.accessObject(c.sess.Context(), target.GetId())
-					if err != nil {
-						return juicemud.WithStack(err)
-					}
-					if err := c.game.moveObject(c.sess.Context(), obj, dest.GetId()); err != nil {
-						return juicemud.WithStack(err)
+					if dest.GetId() != target.GetLocation() {
+						obj, err := c.game.accessObject(c.sess.Context(), target.GetId())
+						if err != nil {
+							return juicemud.WithStack(err)
+						}
+						if err := c.game.moveObject(c.sess.Context(), obj, dest.GetId()); err != nil {
+							return juicemud.WithStack(err)
+						}
 					}
 				}
 				return nil
@@ -548,6 +555,21 @@ func (c *Connection) wizCommands() commands {
 					}
 				}
 				t.Print()
+				if len(parts) == 1 {
+					objectIDs := []string{}
+					for id, err := range c.game.storage.SourceObjects(c.sess.Context(), parts[0]) {
+						if err != nil {
+							return juicemud.WithStack(err)
+						}
+						objectIDs = append(objectIDs, id)
+					}
+					if len(objectIDs) > 0 {
+						fmt.Fprint(c.term, "\nUsed by:\n")
+						for _, id := range objectIDs {
+							fmt.Fprintf(c.term, "  %q\n", id)
+						}
+					}
+				}
 				return nil
 			},
 		},
@@ -658,13 +680,17 @@ func (c *Connection) Process() error {
 	if c.user == nil {
 		return errors.New("can't process without user")
 	}
+	if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
+		return juicemud.WithStack(err)
+	} else if has {
+		c.wiz = true
+	}
+
 	connectionByObjectID.Set(string(c.user.Object), c)
 	defer connectionByObjectID.Del(string(c.user.Object))
 
 	commandSets := []attempter{objectAttempter{c.user.Object}, c.basicCommands()}
-	if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
-		return juicemud.WithStack(err)
-	} else if has {
+	if c.wiz {
 		commandSets = append([]attempter{c.wizCommands()}, commandSets...)
 	}
 

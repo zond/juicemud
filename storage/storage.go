@@ -5,6 +5,7 @@ package storage
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"iter"
 	"os"
 	"path/filepath"
@@ -43,12 +44,17 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
+	sourceObjects, err := dbm.OpenTree(filepath.Join(dir, "sourceObjects"))
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	s := &Storage{
-		sql:      sql,
-		sources:  sources,
-		modTimes: modTimes,
-		objects:  objects,
-		queue:    queue.New(ctx, queueTree),
+		sql:           sql,
+		sources:       sources,
+		sourceObjects: sourceObjects,
+		modTimes:      modTimes,
+		objects:       objects,
+		queue:         queue.New(ctx, queueTree),
 	}
 	for _, prototype := range []any{File{}, FileSync{}, Group{}, User{}, GroupMember{}} {
 		if err := sql.CreateTableIfNotExists(ctx, prototype); err != nil {
@@ -59,11 +65,12 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 }
 
 type Storage struct {
-	queue    *queue.Queue
-	sql      *sqly.DB
-	sources  *dbm.Hash
-	modTimes *dbm.Hash
-	objects  *dbm.LiveTypeHash[structs.Object, *structs.Object]
+	queue         *queue.Queue
+	sql           *sqly.DB
+	sources       *dbm.Hash
+	sourceObjects *dbm.Tree
+	modTimes      *dbm.Hash
+	objects       *dbm.LiveTypeHash[structs.Object, *structs.Object]
 }
 
 func (s *Storage) Close() error {
@@ -74,6 +81,9 @@ func (s *Storage) Close() error {
 		return juicemud.WithStack(err)
 	}
 	if err := s.sources.Close(); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := s.sourceObjects.Close(); err != nil {
 		return juicemud.WithStack(err)
 	}
 	if err := s.modTimes.Close(); err != nil {
@@ -153,6 +163,7 @@ func (s *Storage) maybeRefresh(ctx context.Context, obj *structs.Object, ref Ref
 }
 
 func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
+	TODO: Make sure the object is empty!
 	if obj.PostUnlock == nil {
 		return errors.Errorf("can't remove object not known to storage: %v", obj)
 	}
@@ -172,7 +183,7 @@ func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
 		if _, found := loc.Unsafe.Content[id]; !found {
 			return errors.Errorf("%q doesn't contain %q", locID, id)
 		}
-		return juicemud.WithStack(s.objects.Proc([]dbm.LProc[structs.Object, *structs.Object]{
+		if err := s.objects.Proc([]dbm.LProc[structs.Object, *structs.Object]{
 			s.objects.LProc(id, func(_ string, _ *structs.Object) (*structs.Object, error) {
 				return nil, nil
 			}),
@@ -180,7 +191,10 @@ func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
 				delete(loc.Unsafe.Content, id)
 				return loc, nil
 			}),
-		}))
+		}); err != nil {
+			return juicemud.WithStack(err)
+		}
+		return juicemud.WithStack(s.sourceObjects.SubDel(obj.Unsafe.SourcePath, id))
 	}, obj, loc))
 }
 
@@ -197,12 +211,15 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 		return juicemud.WithStack(err)
 	}
 
-	return juicemud.WithStack(structs.WithLock(func() error {
+	if err := structs.WithLock(func() error {
 		if obj.Unsafe.Location != locID {
 			return errors.Errorf("%q no longer located in %q", id, locID)
 		}
 		if _, found := loc.Unsafe.Content[id]; found {
 			return errors.Errorf("%q already contains %q", locID, id)
+		}
+		if err := s.sourceObjects.SubSet(obj.Unsafe.SourcePath, obj.Unsafe.Id, nil); err != nil {
+			return juicemud.WithStack(err)
 		}
 		return juicemud.WithStack(s.objects.Proc([]dbm.LProc[structs.Object, *structs.Object]{
 			s.objects.LProc(id, func(_ string, _ *structs.Object) (*structs.Object, error) {
@@ -213,7 +230,52 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 				return loc, nil
 			}),
 		}))
-	}, obj, loc))
+	}, obj, loc); err != nil {
+		if delerr := s.sourceObjects.SubDel(obj.Unsafe.SourcePath, obj.Unsafe.Id); !errors.Is(delerr, os.ErrNotExist) && delerr != nil {
+			return fmt.Errorf("trying to remove source user when handling %w: %w", err, delerr)
+		}
+		return juicemud.WithStack(err)
+	}
+	return nil
+}
+
+func (s *Storage) SourceObjects(ctx context.Context, path string) iter.Seq2[string, error] {
+	return func(yield func(string, error) bool) {
+		for entry, err := range s.sourceObjects.SubEach(path) {
+			if err != nil {
+				if !yield("", juicemud.WithStack(err)) {
+					break
+				}
+			} else {
+				if !yield(string(entry.K), nil) {
+					break
+				}
+			}
+		}
+	}
+}
+
+func (s *Storage) ChangeSource(ctx context.Context, obj *structs.Object, newSourcePath string) error {
+	if obj.PostUnlock == nil {
+		return errors.Errorf("can't set source of an object unknown to storage: %+v", obj)
+	}
+
+	obj.Lock()
+	defer obj.Unlock()
+
+	oldSourcePath := obj.Unsafe.SourcePath
+	if oldSourcePath == "" {
+		return errors.Errorf("can't change the source of an object that doesn't have a source: %+v", obj)
+	}
+
+	if err := s.sourceObjects.SubSet(newSourcePath, obj.Unsafe.Id, nil); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	obj.Unsafe.SourcePath = newSourcePath
+	obj.Unsafe.SourceModTime = 0
+
+	return juicemud.WithStack(s.sourceObjects.SubDel(oldSourcePath, obj.Unsafe.Id))
 }
 
 func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID string) error {
@@ -299,6 +361,9 @@ type Movement struct {
 }
 
 func (s *Storage) UNSAFEEnsureObject(ctx context.Context, obj *structs.Object) error {
+	if err := s.sourceObjects.SubSet(obj.GetSourcePath(), obj.GetId(), nil); err != nil {
+		return juicemud.WithStack(err)
+	}
 	return juicemud.WithStack(s.objects.SetIfMissing(obj))
 }
 
@@ -562,6 +627,19 @@ func (s *Storage) FileGroups(ctx context.Context, file *File) (*Group, *Group, e
 	return reader, writer, nil
 }
 
+type httpError struct {
+	err  error
+	code int
+}
+
+func (h httpError) HTTPError() (int, string) {
+	return h.code, h.err.Error()
+}
+
+func (h httpError) Error() string {
+	return h.err.Error()
+}
+
 func (s *Storage) delFileIfExists(ctx context.Context, db sqlx.ExtContext, path string, recursive bool) error {
 	file, err := s.loadFile(ctx, db, path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -584,6 +662,11 @@ func (s *Storage) delFileIfExists(ctx context.Context, db sqlx.ExtContext, path 
 		if len(children) > 0 {
 			return errors.Errorf("%q is not empty", path)
 		}
+	}
+	if count, err := s.sourceObjects.SubCount(path); err != nil {
+		return juicemud.WithStack(err)
+	} else if count > 0 {
+		return httpError{code: 422, err: errors.Errorf("%q is used by %v objects", path, count)}
 	}
 	if _, err := db.ExecContext(ctx, "DELETE FROM File WHERE Id = ?", file.Id); err != nil {
 		return juicemud.WithStack(err)

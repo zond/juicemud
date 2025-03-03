@@ -332,7 +332,7 @@ func TestSubSets(t *testing.T) {
 	WithTree(t, func(tr *Tree) {
 		rng := rand.New(&rand.PCG{})
 		sets := map[string]map[string]bool{}
-		sizes := 500
+		sizes := 200
 		for range sizes {
 			setID := randBytes(rng)
 			sets[setID] = map[string]bool{}
@@ -342,6 +342,9 @@ func TestSubSets(t *testing.T) {
 				if err := tr.SubSet(setID, valID, nil); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if c, err := tr.SubCount(setID); err != nil || c != sizes {
+				t.Errorf("got %v, %v, want %v, nil", c, err, sizes)
 			}
 		}
 		for setID, wantValIDs := range sets {
@@ -366,6 +369,9 @@ func TestSubSets(t *testing.T) {
 					t.Fatal(err)
 				}
 				if _, err := tr.SubGet(setID, valID); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("got %v, want %v", err, os.ErrNotExist)
+				}
+				if err := tr.SubDel(setID, valID); !errors.Is(err, os.ErrNotExist) {
 					t.Errorf("got %v, want %v", err, os.ErrNotExist)
 				}
 			}

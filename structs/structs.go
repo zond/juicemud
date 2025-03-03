@@ -29,7 +29,7 @@ import (
 var (
 	lastEventCounter  uint64 = 0
 	lastObjectCounter uint64 = 0
-	encoding                 = base64.StdEncoding.WithPadding(base64.NoPadding)
+	Encoding                 = base64.StdEncoding.WithPadding(base64.NoPadding)
 )
 
 const (
@@ -62,7 +62,7 @@ func NextObjectID() (string, error) {
 	if _, err := rand.Read(result[timeSize:]); err != nil {
 		return "", juicemud.WithStack(err)
 	}
-	return encoding.EncodeToString(result), nil
+	return Encoding.EncodeToString(result), nil
 }
 
 type Serializable[T any] interface {
