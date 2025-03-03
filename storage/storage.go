@@ -311,11 +311,8 @@ type FileSync struct {
 }
 
 func logSync(ctx context.Context, db sqlx.ExtContext, fileSync *FileSync) error {
-	if fileSync.Remove == "" && fileSync.Set == "" {
+	if (fileSync.Remove == "") == (fileSync.Set == "") {
 		return errors.Errorf("invalid FileSync %+v: Remove == \"\" and Set == \"\"", fileSync)
-	}
-	if fileSync.Remove != "" && fileSync.Set != "" {
-		return errors.Errorf("invalid FileSync %+v: Remove != \"\" and Set != \"\"", fileSync)
 	}
 	if fileSync.Set != "" && fileSync.ModTime == 0 {
 		return errors.Errorf("invalid FileSync %+v: Set != \"\" and ModTime == 0", fileSync)

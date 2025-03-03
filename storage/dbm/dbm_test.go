@@ -316,3 +316,66 @@ func TestFirst(t *testing.T) {
 		}
 	})
 }
+
+func randBytes(rng *rand.Rand) string {
+	res := []byte{}
+	for range 8 {
+		ui32 := uint32(rng.Int64())
+		b := make([]byte, binary.Size(ui32))
+		binary.BigEndian.PutUint32(b, ui32)
+		res = append(res, b...)
+	}
+	return string(res)
+}
+
+func TestSubSets(t *testing.T) {
+	WithTree(t, func(tr *Tree) {
+		rng := rand.New(&rand.PCG{})
+		sets := map[string]map[string]bool{}
+		sizes := 500
+		for range sizes {
+			setID := randBytes(rng)
+			sets[setID] = map[string]bool{}
+			for range sizes {
+				valID := randBytes(rng)
+				sets[setID][valID] = true
+				if err := tr.SubSet(setID, valID, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		for setID, wantValIDs := range sets {
+			for valID := range wantValIDs {
+				if got, err := tr.SubGet(setID, valID); err != nil || len(got) != 0 {
+					t.Errorf("want nil, nil, got %v, %v", got, err)
+				}
+			}
+			toDelete := map[string]bool{}
+			for entry, err := range tr.SubEach(setID) {
+				if err != nil || len(entry.V) != 0 {
+					t.Errorf("want nil, nil, got %v, %v", entry.V, err)
+				}
+				delete(wantValIDs, entry.K)
+				toDelete[entry.K] = true
+			}
+			if len(wantValIDs) > 0 {
+				t.Errorf("didn't find %+v in %q", wantValIDs, setID)
+			}
+			for valID := range toDelete {
+				if err := tr.SubDel(setID, valID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := tr.SubGet(setID, valID); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("got %v, want %v", err, os.ErrNotExist)
+				}
+			}
+			found := 0
+			for range tr.SubEach(setID) {
+				found++
+			}
+			if found > 0 {
+				t.Errorf("found %v post delete", found)
+			}
+		}
+	})
+}

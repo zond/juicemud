@@ -2,6 +2,7 @@ package dbm
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"iter"
@@ -124,7 +125,6 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 		if !found {
 			continue
 		}
-		//		log.Printf("Flush storing on disk:\n%v", S(obj).Describe())
 		if err := l.hash.Set(key, obj, true); err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -493,6 +493,87 @@ func (h *Hash) Proc(pairs []Proc, write bool) error {
 
 type Tree struct {
 	*Hash
+}
+
+func appendKey(b []byte, parts ...string) []byte {
+	for _, part := range parts {
+		partBytes := []byte(part)
+		partBytesLen := uint32(len(partBytes))
+		sizeBytes := make([]byte, binary.Size(partBytesLen))
+		binary.BigEndian.PutUint32(sizeBytes, partBytesLen)
+		b = append(b, sizeBytes...)
+		b = append(b, partBytes...)
+	}
+	return b
+}
+
+func (t *Tree) SubSet(set string, key string, b []byte) error {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	completeKey := appendKey(nil, set, key)
+	if stat := t.Hash.dbm.Set(completeKey, b, true); !stat.IsOK() {
+		return juicemud.WithStack(stat)
+	}
+	return nil
+}
+
+func (t *Tree) SubDel(set string, key string) error {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	completeKey := appendKey(nil, set, key)
+	if stat := t.Hash.dbm.Remove(completeKey); !stat.IsOK() {
+		return juicemud.WithStack(stat)
+	}
+	return nil
+}
+
+func (t *Tree) SubGet(set string, key string) ([]byte, error) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	completeKey := appendKey(nil, set, key)
+	b, stat := t.Hash.dbm.Get(completeKey)
+	if stat.GetCode() == tkrzw.StatusNotFoundError {
+		return nil, juicemud.WithStack(os.ErrNotExist)
+	} else if !stat.IsOK() {
+		return nil, juicemud.WithStack(stat)
+	}
+	return b, nil
+}
+
+func (t *Tree) SubEach(set string) iter.Seq2[BEntry, error] {
+	keyPrefix := appendKey(nil, set)
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	return func(yield func(BEntry, error) bool) {
+		iter := t.dbm.MakeIterator()
+		defer iter.Destruct()
+		iter.Jump(keyPrefix)
+		for {
+			key, value, status := iter.Get()
+			if status.GetCode() == tkrzw.StatusNotFoundError {
+				break
+			} else if !status.IsOK() {
+				if !yield(BEntry{
+					K: string(key),
+					V: value,
+				}, juicemud.WithStack(status)) {
+					break
+				}
+			} else {
+				if bytes.HasPrefix(key, keyPrefix) {
+					if !yield(BEntry{
+						K: string(key[len(keyPrefix)+binary.Size(uint32(0)):]),
+						V: value,
+					}, nil) {
+						break
+					}
+				} else {
+					break
+				}
+			}
+			iter.Next()
+		}
+	}
 }
 
 type TypeTree[T any, S structs.Serializable[T]] struct {
