@@ -163,7 +163,6 @@ func (s *Storage) maybeRefresh(ctx context.Context, obj *structs.Object, ref Ref
 }
 
 func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
-	TODO: Make sure the object is empty!
 	if obj.PostUnlock == nil {
 		return errors.Errorf("can't remove object not known to storage: %v", obj)
 	}
@@ -176,12 +175,15 @@ func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
 		return juicemud.WithStack(err)
 	}
 
-	return juicemud.WithStack(structs.WithLock(func() error {
+	if err := structs.WithLock(func() error {
 		if obj.Unsafe.Location != locID {
 			return errors.Errorf("%q no longer located in %q", id, locID)
 		}
 		if _, found := loc.Unsafe.Content[id]; !found {
 			return errors.Errorf("%q doesn't contain %q", locID, id)
+		}
+		if len(obj.Unsafe.Content) > 0 {
+			return errors.Errorf("%q isn't empty", id)
 		}
 		if err := s.objects.Proc([]dbm.LProc[structs.Object, *structs.Object]{
 			s.objects.LProc(id, func(_ string, _ *structs.Object) (*structs.Object, error) {
@@ -194,8 +196,12 @@ func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
 		}); err != nil {
 			return juicemud.WithStack(err)
 		}
-		return juicemud.WithStack(s.sourceObjects.SubDel(obj.Unsafe.SourcePath, id))
-	}, obj, loc))
+		return nil
+	}, obj, loc); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	return juicemud.WithStack(s.sourceObjects.SubDel(obj.Unsafe.SourcePath, id))
 }
 
 func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
@@ -211,15 +217,16 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 		return juicemud.WithStack(err)
 	}
 
+	if err := s.sourceObjects.SubSet(obj.Unsafe.SourcePath, obj.Unsafe.Id, nil); err != nil {
+		return juicemud.WithStack(err)
+	}
+
 	if err := structs.WithLock(func() error {
 		if obj.Unsafe.Location != locID {
 			return errors.Errorf("%q no longer located in %q", id, locID)
 		}
 		if _, found := loc.Unsafe.Content[id]; found {
 			return errors.Errorf("%q already contains %q", locID, id)
-		}
-		if err := s.sourceObjects.SubSet(obj.Unsafe.SourcePath, obj.Unsafe.Id, nil); err != nil {
-			return juicemud.WithStack(err)
 		}
 		return juicemud.WithStack(s.objects.Proc([]dbm.LProc[structs.Object, *structs.Object]{
 			s.objects.LProc(id, func(_ string, _ *structs.Object) (*structs.Object, error) {
@@ -239,16 +246,44 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 	return nil
 }
 
-func (s *Storage) SourceObjects(ctx context.Context, path string) iter.Seq2[string, error] {
+type withError[T any] struct {
+	T T
+	E error
+}
+
+func (s *Storage) CountSourceObjects(ctx context.Context, path string) (int, error) {
+	c := 0
+	for _, err := range s.EachSourceObject(ctx, path) {
+		if err != nil {
+			return 0, err
+		}
+		c++
+	}
+	return c, nil
+}
+
+func (s *Storage) EachSourceObject(ctx context.Context, path string) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
+		entries := []withError[dbm.BEntry]{}
 		for entry, err := range s.sourceObjects.SubEach(path) {
-			if err != nil {
-				if !yield("", juicemud.WithStack(err)) {
+			entries = append(entries, withError[dbm.BEntry]{T: entry, E: err})
+		}
+		for _, entry := range entries {
+			if entry.E != nil {
+				if !yield("", juicemud.WithStack(entry.E)) {
 					break
 				}
 			} else {
-				if !yield(string(entry.K), nil) {
-					break
+				if s.objects.Has(entry.T.K) {
+					if !yield(entry.T.K, nil) {
+						break
+					}
+				} else {
+					if err := s.sourceObjects.SubDel(path, entry.T.K); err != nil {
+						if !yield("", juicemud.WithStack(err)) {
+							break
+						}
+					}
 				}
 			}
 		}

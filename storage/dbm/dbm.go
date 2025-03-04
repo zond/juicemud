@@ -63,6 +63,12 @@ func (h *Hash) Each() iter.Seq2[BEntry, error] {
 	}
 }
 
+func (h *Hash) Has(k string) bool {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+	return h.dbm.Check(k)
+}
+
 func (h *Hash) Get(k string) ([]byte, error) {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
@@ -285,6 +291,17 @@ func (l *LiveTypeHash[T, S]) getNOLOCK(k string) (*T, error) {
 	l.stage[k] = res
 
 	return res, nil
+}
+
+func (l *LiveTypeHash[T, S]) Has(k string) bool {
+	l.stageMutex.RLock()
+	_, found := l.stage[k]
+	l.stageMutex.RUnlock()
+	if found {
+		return true
+	}
+
+	return l.hash.Has(k)
 }
 
 func (l *LiveTypeHash[T, S]) Get(k string) (*T, error) {

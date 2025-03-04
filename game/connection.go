@@ -557,7 +557,7 @@ func (c *Connection) wizCommands() commands {
 				t.Print()
 				if len(parts) == 1 {
 					objectIDs := []string{}
-					for id, err := range c.game.storage.SourceObjects(c.sess.Context(), parts[0]) {
+					for id, err := range c.game.storage.EachSourceObject(c.sess.Context(), parts[0]) {
 						if err != nil {
 							return juicemud.WithStack(err)
 						}
