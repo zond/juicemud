@@ -295,20 +295,21 @@ func (s *Storage) ChangeSource(ctx context.Context, obj *structs.Object, newSour
 		return errors.Errorf("can't set source of an object unknown to storage: %+v", obj)
 	}
 
-	obj.Lock()
-	defer obj.Unlock()
-
-	oldSourcePath := obj.Unsafe.SourcePath
-	if oldSourcePath == "" {
-		return errors.Errorf("can't change the source of an object that doesn't have a source: %+v", obj)
-	}
-
 	if err := s.sourceObjects.SubSet(newSourcePath, obj.Unsafe.Id, nil); err != nil {
 		return juicemud.WithStack(err)
 	}
 
-	obj.Unsafe.SourcePath = newSourcePath
-	obj.Unsafe.SourceModTime = 0
+	oldSourcePath := obj.GetSourcePath()
+	if oldSourcePath == "" {
+		return errors.Errorf("can't change the source of an object that doesn't have a source: %+v", obj)
+	}
+
+	obj.SetSourcePath(newSourcePath)
+	obj.SetSourceModTime(0)
+
+	if err := s.objects.Flush(); err != nil {
+		return juicemud.WithStack(err)
+	}
 
 	return juicemud.WithStack(s.sourceObjects.SubDel(oldSourcePath, obj.Unsafe.Id))
 }
