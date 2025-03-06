@@ -526,6 +526,7 @@ func (c *Connection) wizCommands() commands {
 				}
 				parts = parts[1:]
 				t := table.New("Path", "Read", "Write").WithWriter(c.term)
+				lastWasFile := false
 				for _, part := range parts {
 					f, err := c.game.storage.LoadFile(c.sess.Context(), part)
 					if errors.Is(err, os.ErrNotExist) {
@@ -534,6 +535,7 @@ func (c *Connection) wizCommands() commands {
 					} else if err != nil {
 						return juicemud.WithStack(err)
 					}
+					lastWasFile = !f.Dir
 					r, w, err := c.game.storage.FileGroups(c.sess.Context(), f)
 					if err != nil {
 						return juicemud.WithStack(err)
@@ -555,7 +557,7 @@ func (c *Connection) wizCommands() commands {
 					}
 				}
 				t.Print()
-				if len(parts) == 1 {
+				if len(parts) == 1 && lastWasFile {
 					objectIDs := []string{}
 					for id, err := range c.game.storage.EachSourceObject(c.sess.Context(), parts[0]) {
 						if err != nil {
