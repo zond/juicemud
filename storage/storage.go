@@ -1,7 +1,5 @@
 package storage
 
-// TODO(zond): Implement read/write group access restrictions.
-
 import (
 	"context"
 	"encoding/binary"
