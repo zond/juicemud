@@ -7,15 +7,15 @@ Security and correctness issues identified during code review.
 - [x] Fix infinite recursion in `sizeBody.Close()` - `server/server.go:60-62`
 - [x] Fix binary slice underread in `SourceModTime()` - `storage/storage.go:432`
 - [x] Fix WebDAV lock race conditions (TOCTOU) - `dav/dav.go:159-161` - **Won't fix**: Analysis showed the races only occur with adversarial clients. With sane clients, the lock protocol (LOCK → PUT → UNLOCK) prevents races. Lock validity is checked at request start, and no other client can obtain a conflicting lock while one is held.
+- [x] Fix WebDAV LOCK semantic bug - should reject if lock held by another client, not refresh - `dav/dav.go:429-439`
+- [x] Review MD5 password storage limitations - `digest/digest.go:17-18` - **Won't fix**: MD5 is mandated by HTTP Digest Auth (RFC 2617) and required for macOS WebDAV client compatibility. Security relies on HTTPS transport. Added documentation comment.
 
 ## In Progress
 
-- [ ] Fix WebDAV LOCK semantic bug - should reject if lock held by another client, not refresh - `dav/dav.go:429-439`
+- [ ] Implement read/write group access restrictions - `storage/storage.go:3`
 
 ## Pending
 
-- [ ] Review MD5 password storage limitations - `digest/digest.go:17-18`
-- [ ] Implement read/write group access restrictions - `storage/storage.go:3`
 - [ ] Add rate limiting on login attempts - `game/connection.go:756-768`
 - [ ] Add upload size limits to WebDAV PUT - `dav/dav.go:182`
 - [ ] Fix JavaScript timeout race condition - `js/js.go:254`
