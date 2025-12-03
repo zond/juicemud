@@ -184,11 +184,12 @@ Overall success if `result > 0`.
 
 **Why summing works mathematically:**
 
-Each individual result is `10 * log10(successChance / random)`. When you sum these:
-- You're effectively multiplying the underlying ratios (log of product = sum of logs)
-- The expected value of each term is 0 when `successChance = 0.5`
+The piecewise formula ensures each check's result is symmetrically distributed around 0 when `successChance = 0.5`. When you sum these:
+- Each term has expected value 0 at 50% success chance
 - Variance increases with more checks, making outcomes more extreme
-- A positive sum means the product of ratios > 1, i.e., "overall, you beat the odds"
+- A positive sum means overall success; negative means overall failure
+- Two 50% checks summed still yield 50% overall success
+- One 90% check + one 10% check balance out to ~50% overall
 
 **Why summing works for gameplay:**
 
