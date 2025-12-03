@@ -5,7 +5,7 @@ import (
 	"context"
 	"io"
 	"net/url"
-	"strings"
+	"path/filepath"
 	"time"
 
 	"github.com/zond/juicemud"
@@ -18,10 +18,11 @@ type Fs struct {
 }
 
 func pathify(s *string) {
-	if strings.HasSuffix(*s, "/") {
+	*s = filepath.Clean(*s)
+	if *s != "/" && (*s)[len(*s)-1] == '/' {
 		*s = (*s)[:len(*s)-1]
 	}
-	if !strings.HasPrefix(*s, "/") {
+	if (*s)[0] != '/' {
 		*s = "/" + *s
 	}
 }
