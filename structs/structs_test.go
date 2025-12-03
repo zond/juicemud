@@ -15,24 +15,25 @@ func assertClose[T float64 | float32 | int | time.Duration](t *testing.T, f1, f2
 }
 
 func TestMulti(t *testing.T) {
-	skill1 := Skill{
-		Name:      "TestMulti1",
-		Practical: 10,
-	}
-	skill2 := Skill{
-		Name:      "TestMulti1",
-		Practical: 10,
-	}
-	ch := Challenges{
-		Challenge{
-			Skill: skill1,
-			Level: 0,
-		},
-		Challenge{
-			Skill: skill2,
-			Level: 10,
-		},
-	}
+	// TODO: Make this test challenges with multiple skills to ensure they behave sensibly.
+	// skill1 := Skill{
+	// 	Name:      "TestMulti1",
+	// 	Practical: 10,
+	// }
+	// skill2 := Skill{
+	// 	Name:      "TestMulti1",
+	// 	Practical: 10,
+	// }
+	// ch := Challenges{
+	// 	Challenge{
+	// 		Skill: skill1.Name,
+	// 		Level: 0,
+	// 	},
+	// 	Challenge{
+	// 		Skill: skill2.Name,
+	// 		Level: 10,
+	// 	},
+	// }
 }
 
 func TestLevel(t *testing.T) {

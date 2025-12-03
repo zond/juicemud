@@ -426,8 +426,14 @@ func logSync(ctx context.Context, db sqlx.ExtContext, fileSync *FileSync) error 
 
 func (s *Storage) SourceModTime(_ context.Context, path string) (int64, error) {
 	b, err := s.modTimes.Get(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
 		return 0, juicemud.WithStack(err)
+	}
+	if len(b) < 8 {
+		return 0, errors.New("corrupted modtime data")
 	}
 	return int64(binary.BigEndian.Uint64(b)), nil
 }
