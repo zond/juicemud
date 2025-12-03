@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/zond/juicemud"
@@ -187,7 +188,7 @@ func (rc *RunContext) addCallback(
 	)
 }
 
-func (rc *RunContext) prepareV8Context(timeout *time.Duration) error {
+func (rc *RunContext) prepareV8Context(timeoutNanos *int64) error {
 	for name, fun := range rc.t.Callbacks {
 		if err := rc.addCallback(
 			name,
@@ -225,7 +226,7 @@ func (rc *RunContext) prepareV8Context(timeout *time.Duration) error {
 	}
 	startTime := time.Now()
 	stateValue, err := v8go.JSONParse(rc.m.vctx, stateJSON)
-	*timeout -= time.Since(startTime)
+	atomic.AddInt64(timeoutNanos, -int64(time.Since(startTime)))
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -245,20 +246,20 @@ type result struct {
 	err   error
 }
 
-func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, error), timeout *time.Duration) (*v8go.Value, error) {
+func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, error), timeoutNanos *int64) (*v8go.Value, error) {
 	results := make(chan result, 1)
-	thisTimeout := *timeout
+	thisTimeout := atomic.LoadInt64(timeoutNanos)
 	go func() {
 		t := time.Now()
 		val, err := f()
-		*timeout -= time.Since(t)
+		atomic.AddInt64(timeoutNanos, -int64(time.Since(t)))
 		results <- result{value: val, err: err}
 	}()
 
 	select {
 	case res := <-results:
 		return res.value, juicemud.WithStack(res.err)
-	case <-time.After(thisTimeout):
+	case <-time.After(time.Duration(thisTimeout)):
 		rc.m.iso.TerminateExecution()
 		return nil, juicemud.WithStack(ErrTimeout)
 	}
@@ -277,13 +278,15 @@ func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Dur
 		callbacks: map[string]*v8go.Function{},
 	}
 
-	if err := rc.prepareV8Context(&timeout); err != nil {
+	timeoutNanos := int64(timeout)
+
+	if err := rc.prepareV8Context(&timeoutNanos); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 
 	if _, err := rc.withTimeout(ctx, func() (*v8go.Value, error) {
 		return rc.m.vctx.RunScript(t.Source, t.Origin)
-	}, &timeout); err != nil {
+	}, &timeoutNanos); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 
@@ -318,7 +321,7 @@ func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Dur
 		if val, err = v8go.JSONParse(rc.m.vctx, call.Message); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
-		timeout -= time.Since(start)
+		atomic.AddInt64(&timeoutNanos, -int64(time.Since(start)))
 	}
 
 	if val, err := rc.withTimeout(ctx, func() (*v8go.Value, error) {
@@ -327,7 +330,7 @@ func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Dur
 		} else {
 			return jsCB.Call(rc.m.vctx.Global())
 		}
-	}, &timeout); err != nil {
+	}, &timeoutNanos); err != nil {
 		return nil, juicemud.WithStack(err)
 	} else {
 		return rc.collectResult(val)

@@ -155,7 +155,15 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+const maxUploadSize = 5 * 1024 * 1024 // 5 MB
+
 func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) error {
+	// Check Content-Length header for early rejection
+	if r.ContentLength > maxUploadSize {
+		http.Error(w, "File too large", http.StatusRequestEntityTooLarge)
+		return nil
+	}
+
 	h.lockMutex.Lock()
 	lock := h.locks[r.URL.Path]
 	h.lockMutex.Unlock()
@@ -179,10 +187,16 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) error {
 	}
 	defer file.Close()
 
-	_, err = io.Copy(file, r.Body)
+	// Use LimitReader as safety net in case Content-Length is missing or wrong
+	limited := io.LimitReader(r.Body, maxUploadSize+1)
+	n, err := io.Copy(file, limited)
 	if err != nil {
 		http.Error(w, "Failed to write file", http.StatusInternalServerError)
 		return juicemud.WithStack(err)
+	}
+	if n > maxUploadSize {
+		http.Error(w, "File too large", http.StatusRequestEntityTooLarge)
+		return nil
 	}
 
 	w.WriteHeader(http.StatusCreated)
