@@ -58,7 +58,7 @@ func (s *sizeBody) Read(b []byte) (int, error) {
 }
 
 func (s *sizeBody) Close() error {
-	return s.Close()
+	return s.backend.Close()
 }
 
 func (r *responseWriter) WriteHeader(status int) {
