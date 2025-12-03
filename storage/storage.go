@@ -633,8 +633,7 @@ func (s *Storage) LoadChildren(ctx context.Context, parent int64) ([]File, error
 func (s *Storage) FileExists(ctx context.Context, path string) (bool, error) {
 	row := s.sql.QueryRowContext(ctx, "SELECT COUNT(*) FROM File WHERE PATH = ?", path)
 	count := 0
-	row.Scan(&count)
-	if err := row.Err(); err != nil {
+	if err := row.Scan(&count); err != nil {
 		return false, juicemud.WithStack(err)
 	}
 	return count > 0, nil
