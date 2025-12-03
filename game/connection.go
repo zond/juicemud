@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/buildkite/shellwords"
 	"github.com/gliderlabs/ssh"
@@ -29,6 +31,13 @@ var (
 var (
 	connectionByObjectID = juicemud.NewSyncMap[string, *Connection]()
 	consoleByObjectID    = juicemud.NewSyncMap[string, *Fanout]()
+)
+
+const loginAttemptInterval = 10 * time.Second
+
+var (
+	lastLoginAttempt   = map[string]time.Time{}
+	lastLoginAttemptMu sync.Mutex
 )
 
 func addConsole(id string, term *term.Terminal) {
@@ -754,6 +763,19 @@ func (c *Connection) loginUser() error {
 		}
 	}
 	for c.user == nil {
+		// Rate limit login attempts per user
+		lastLoginAttemptMu.Lock()
+		if last, ok := lastLoginAttempt[user.Name]; ok {
+			if wait := loginAttemptInterval - time.Since(last); wait > 0 {
+				lastLoginAttemptMu.Unlock()
+				fmt.Fprintf(c.term, "Please wait %v before trying again.\n", wait.Round(time.Second))
+				time.Sleep(wait)
+				lastLoginAttemptMu.Lock()
+			}
+		}
+		lastLoginAttempt[user.Name] = time.Now()
+		lastLoginAttemptMu.Unlock()
+
 		fmt.Fprint(c.term, "Enter password or [abort]:\n")
 		password, err := c.term.ReadPassword("> ")
 		if err != nil {
