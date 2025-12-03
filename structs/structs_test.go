@@ -14,6 +14,27 @@ func assertClose[T float64 | float32 | int | time.Duration](t *testing.T, f1, f2
 	}
 }
 
+func TestMulti(t *testing.T) {
+	skill1 := Skill{
+		Name:      "TestMulti1",
+		Practical: 10,
+	}
+	skill2 := Skill{
+		Name:      "TestMulti1",
+		Practical: 10,
+	}
+	ch := Challenges{
+		Challenge{
+			Skill: skill1,
+			Level: 0,
+		},
+		Challenge{
+			Skill: skill2,
+			Level: 10,
+		},
+	}
+}
+
 func TestLevel(t *testing.T) {
 	u := skillUse{
 		user: "a",
@@ -33,7 +54,7 @@ func TestLevel(t *testing.T) {
 			u.skill.Theoretical = 10
 			u.skill.LastBase = 1
 			u.skill.LastUsedAt = 0
-			if u.check(false) {
+			if u.check(false) > 0 {
 				success++
 			}
 		}
@@ -66,7 +87,7 @@ func TestRechargeWithoutReuse(t *testing.T) {
 			u.skill.LastUsedAt = Stamp(time.Unix(0, rand.Int64())).Uint64()
 			u.at = Timestamp(u.skill.LastUsedAt).Time().Add(time.Duration(float64(recharge) * multiple))
 			u.challenge = u.skill.Effective(Stamp(u.at))
-			if u.check(false) {
+			if u.check(false) > 0 {
 				success++
 			}
 		}
@@ -194,7 +215,7 @@ func TestRechargeWithReuse(t *testing.T) {
 			u.check(false)
 			u.at = u.at.Add(time.Duration(float64(recharge) * multiple))
 			u.challenge = u.skill.Effective(Stamp(u.at))
-			if u.check(false) {
+			if u.check(false) > 0 {
 				success++
 			}
 		}

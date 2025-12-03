@@ -661,7 +661,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 
 	for _, exit := range loc.GetExits() {
 		if exit.Name() == name {
-			if structs.Challenges(exit.UseChallenges).Check(obj, loc.GetId()) {
+			if structs.Challenges(exit.UseChallenges).Check(obj, loc.GetId()) > 0 {
 				return true, juicemud.WithStack(c.game.moveObject(c.sess.Context(), obj, exit.Destination))
 			}
 		}

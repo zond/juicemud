@@ -170,7 +170,7 @@ func (e *Event) CreateKey() {
 	e.Key = string(k)
 }
 
-func (c *Challenge) Check(challenger *Object, targetID string) bool {
+func (c *Challenge) Check(challenger *Object, targetID string) float64 {
 	challenger.Lock()
 	defer challenger.Unlock()
 
@@ -213,13 +213,12 @@ func (c Challenges) Map() map[string]Challenge {
 	return result
 }
 
-func (c Challenges) Check(challenger *Object, targetID string) bool {
+func (c Challenges) Check(challenger *Object, targetID string) float64 {
+	result := 0.0
 	for _, challenge := range c {
-		if !challenge.Check(challenger, targetID) {
-			return false
-		}
+		result += challenge.Check(challenger, targetID)
 	}
-	return true
+	return result
 }
 
 type Descriptions []Description
@@ -236,7 +235,7 @@ func (d Descriptions) Matches(pattern string) bool {
 // TODO: Rename to "FirstDetected"
 func (d Descriptions) Detect(viewer *Object, targetID string) *Description {
 	for _, desc := range d {
-		if Challenges(desc.Challenges).Check(viewer, targetID) {
+		if Challenges(desc.Challenges).Check(viewer, targetID) > 0 {
 			return &desc
 		}
 	}
@@ -689,7 +688,7 @@ type skillUse struct {
 	at        time.Time
 }
 
-func (s skillUse) check(improve bool) bool {
+func (s skillUse) check(improve bool) float64 {
 	stamp := Stamp(s.at)
 
 	effective := float64(s.skill.Practical)
@@ -711,7 +710,7 @@ func (s skillUse) check(improve bool) bool {
 	s.skill.LastBase = float32(rechargeCoeff)
 	s.skill.LastUsedAt = stamp.Uint64()
 
-	return s.rng().Float64() < successChance
+	return 10 * math.Log10(successChance/s.rng().Float64())
 }
 
 func (s skillUse) rng() *rnd.Rand {
