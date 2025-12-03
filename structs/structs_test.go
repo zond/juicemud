@@ -15,25 +15,83 @@ func assertClose[T float64 | float32 | int | time.Duration](t *testing.T, f1, f2
 }
 
 func TestMulti(t *testing.T) {
-	// TODO: Make this test challenges with multiple skills to ensure they behave sensibly.
-	// skill1 := Skill{
-	// 	Name:      "TestMulti1",
-	// 	Practical: 10,
-	// }
-	// skill2 := Skill{
-	// 	Name:      "TestMulti1",
-	// 	Practical: 10,
-	// }
-	// ch := Challenges{
-	// 	Challenge{
-	// 		Skill: skill1.Name,
-	// 		Level: 0,
-	// 	},
-	// 	Challenge{
-	// 		Skill: skill2.Name,
-	// 		Level: 10,
-	// 	},
-	// }
+	// Test a challenge requiring multiple skills.
+	// Uses the same structure as Challenges.Check(): sum individual results, success if > 0.
+
+	skills := map[string]*Skill{
+		"TestMultiA": {Name: "TestMultiA", Practical: 10},
+		"TestMultiB": {Name: "TestMultiB", Practical: 10},
+	}
+
+	// Reset all skills to fresh state
+	resetSkills := func() {
+		for _, skill := range skills {
+			skill.Practical = 10
+			skill.Theoretical = 10
+			skill.LastBase = 1
+			skill.LastUsedAt = 0
+		}
+	}
+
+	// Test combined success rate for a multi-skill challenge.
+	// challenges: slice of (skillName, level) pairs
+	testMulti := func(challenges []struct{ skill string; level float64 }) float64 {
+		success := 0
+		count := 10000
+		for range count {
+			resetSkills()
+			at := time.Unix(0, rand.Int64())
+
+			// Sum results from all challenges (mirrors Challenges.Check behavior)
+			total := 0.0
+			for i, ch := range challenges {
+				total += skillUse{
+					user:      "tester",
+					skill:     skills[ch.skill],
+					target:    string(rune('a' + i)), // Different target per challenge for independent RNG
+					at:        at,
+					challenge: ch.level,
+				}.check(false)
+			}
+
+			if total > 0 {
+				success++
+			}
+		}
+		return float64(success) / float64(count)
+	}
+
+	// Single skill at even odds: 50% success (baseline sanity check)
+	assertClose(t, testMulti([]struct{ skill string; level float64 }{
+		{"TestMultiA", 10},
+	}), 0.5, 0.03)
+
+	// Two skills, both at even odds
+	assertClose(t, testMulti([]struct{ skill string; level float64 }{
+		{"TestMultiA", 10},
+		{"TestMultiB", 10},
+	}), 0.5, 0.03)
+
+	// Two skills: one easy (level 0 vs skill 10), one hard (level 20 vs skill 10)
+	// Should balance out
+	assertClose(t, testMulti([]struct{ skill string; level float64 }{
+		{"TestMultiA", 0},
+		{"TestMultiB", 20},
+	}), 0.5, 0.03)
+
+	// Two skills, both easy (level 0 vs skill 10 = 90% each)
+	// With symmetric formula, ~91% combined success
+	assertClose(t, testMulti([]struct{ skill string; level float64 }{
+		{"TestMultiA", 0},
+		{"TestMultiB", 0},
+	}), 0.91, 0.02)
+
+	// Two skills, both hard (level 20 vs skill 10 = 10% each)
+	// Symmetric to above: ~9% combined success
+	assertClose(t, testMulti([]struct{ skill string; level float64 }{
+		{"TestMultiA", 20},
+		{"TestMultiB", 20},
+	}), 0.09, 0.02)
 }
 
 func TestLevel(t *testing.T) {

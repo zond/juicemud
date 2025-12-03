@@ -710,7 +710,13 @@ func (s skillUse) check(improve bool) float64 {
 	s.skill.LastBase = float32(rechargeCoeff)
 	s.skill.LastUsedAt = stamp.Uint64()
 
-	return 10 * math.Log10(successChance/s.rng().Float64())
+	random := s.rng().Float64()
+	if random < successChance {
+		// Success: how far into the success region? (0 to +∞)
+		return -10 * math.Log10(random/successChance)
+	}
+	// Failure: how far into the failure region? (0 to -∞)
+	return 10 * math.Log10((1-random)/(1-successChance))
 }
 
 func (s skillUse) rng() *rnd.Rand {

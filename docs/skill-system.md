@@ -138,19 +138,22 @@ The RNG is seeded deterministically based on:
 ### Step 5: Compute Final Result
 
 ```
-result = 10 * log10(successChance / random)
+if random < successChance:
+    result = -10 * log10(random / successChance)      // Success: 0 to +∞
+else:
+    result = 10 * log10((1-random) / (1-successChance))  // Failure: 0 to -∞
 ```
 
 **Formula analysis:**
 - **Range**: Theoretically (-∞, +∞), practically around [-30, +30] for typical values
-- **Shape**: Logarithmic transformation of a ratio
-- **At successChance = random**: `result = 0` (marginal)
-- **At successChance = 10 * random**: `result = +10` (solid success)
-- **At successChance = 0.1 * random**: `result = -10` (solid failure)
-- **Success probability**: Equals `successChance` (if `random < successChance`, then `result > 0`)
-- **Why logarithm?** Converts multiplicative relationships to additive ones. This is crucial for multi-skill challenges: summing log-odds is statistically meaningful, while summing raw probabilities is not.
-- **Why factor of 10?** Scales the output to human-friendly numbers. A "10" means you succeeded with an order of magnitude margin; a "-10" means you failed by an order of magnitude.
-- **Why ratio?** The ratio `successChance / random` represents "how much room did you have vs. what you rolled." High success chance with a low roll = crushing success. Low success chance with a high roll = crushing failure.
+- **Shape**: Piecewise logarithmic, symmetric around 0 for a 50% check
+- **Success case** (`random < successChance`): Measures how deep into the success region the roll landed. Rolling near 0 when you only needed to beat 0.5 = exceptional success.
+- **Failure case** (`random >= successChance`): Measures how deep into the failure region. Rolling near 1 when you only needed to beat 0.5 = catastrophic failure.
+- **At the boundary** (`random = successChance`): `result = 0` (marginal success/failure)
+- **Success probability**: Exactly equals `successChance`
+- **Why piecewise?** Ensures symmetric distribution. A 50% check produces equal probability of any positive or negative magnitude. This is crucial for multi-skill challenges: two 50% checks summed still yield 50% overall success.
+- **Why logarithm?** Converts multiplicative relationships to additive ones, and produces unbounded but increasingly rare extreme values.
+- **Why factor of 10?** Scales to human-friendly numbers. A "10" means you rolled an order of magnitude better than needed.
 
 ### Step 6: Update Skill State
 
