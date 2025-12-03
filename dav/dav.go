@@ -427,16 +427,18 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) error {
 	lockTk := "opaquelocktoken:" + generateToken()
 
 	lock := h.locks[path]
-	if lock == nil {
-		lock = &Lock{
-			Token:     lockTk,
-			Owner:     "anonymous",
-			ExpiresAt: time.Now().Add(duration),
-		}
-		h.locks[path] = lock
-	} else {
-		lock.ExpiresAt = time.Now().Add(duration)
+	if lock != nil && lock.ExpiresAt.After(time.Now()) {
+		// Lock is held by another client and hasn't expired
+		http.Error(w, "Resource is already locked", http.StatusLocked)
+		return nil
 	}
+	// No lock or lock expired - create new lock
+	lock = &Lock{
+		Token:     lockTk,
+		Owner:     "anonymous",
+		ExpiresAt: time.Now().Add(duration),
+	}
+	h.locks[path] = lock
 
 	lockResponse := lockDiscovery{
 		LockActive: activeLock{

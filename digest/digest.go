@@ -14,6 +14,9 @@ import (
 	"github.com/zond/juicemud/storage"
 )
 
+// ComputeHA1 computes the HA1 hash for HTTP Digest Authentication (RFC 2617).
+// MD5 is mandated by the protocol and required for macOS WebDAV client compatibility.
+// Security relies on using HTTPS for transport encryption.
 func ComputeHA1(username, realm, password string) string {
 	return md5Hash(fmt.Sprintf("%s:%s:%s", username, realm, password))
 }
