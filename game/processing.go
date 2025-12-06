@@ -27,6 +27,7 @@ type RWMutex interface {
 	RUnlock()
 }
 
+// addGetSetPair registers JavaScript getter/setter functions for an object property.
 func addGetSetPair(name string, source any, mutex RWMutex, callbacks js.Callbacks) {
 	callbacks[fmt.Sprintf("get%s", name)] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		mutex.RLock()
@@ -69,6 +70,8 @@ type movement struct {
 	Destination *string
 }
 
+// emitMovement notifies all objects that can perceive the moving object about the movement.
+// Handles observers in both source and destination locations, including through exits.
 func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *string, destination *string) error {
 	mov := &movement{
 		Object:      obj,
@@ -385,11 +388,13 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	}
 }
 
-/*
-Some events we should send to objects:
-- received: Object got new Content.
-- transmitted: Object lost Content.
-*/
+// run executes an object's JavaScript source with the given caller event.
+// Loads source, sets up callbacks, runs in V8, and saves resulting state.
+// Returns true if a callback was executed, false if skipped (no matching callback).
+//
+// TODO: Consider adding events for container objects when content changes:
+// - "received": notify container when it gains content
+// - "transmitted": notify container when it loses content
 func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller) (bool, error) {
 	id := object.GetId()
 

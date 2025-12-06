@@ -12,6 +12,9 @@ import (
 	"github.com/zond/juicemud/structs"
 )
 
+// Queue is a persistent priority queue for scheduled events, backed by a B-tree.
+// Events are processed in timestamp order. The offset field handles time jumps
+// on restart by adjusting all timestamps relative to the earliest queued event.
 type Queue struct {
 	tree      *dbm.TypeTree[structs.Event, *structs.Event]
 	cond      *sync.Cond
@@ -91,6 +94,8 @@ func (q *Queue) Push(ctx context.Context, eventer structs.Eventer) error {
 
 type EventHandler func(context.Context, *structs.Event)
 
+// Start runs the event loop, calling handler for each event when its time arrives.
+// Blocks until the queue is closed.
 func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 	var err error
 	if q.nextEvent, err = q.peekFirst(ctx); err != nil {

@@ -99,6 +99,8 @@ func (h *Hash) Del(k string) error {
 	return nil
 }
 
+// LiveTypeHash is an in-memory cache over a TypeHash that automatically flushes
+// dirty entries to disk every second. Objects are tracked for changes via PostUnlock.
 type LiveTypeHash[T any, S structs.Snapshottable[T]] struct {
 	closed       chan bool
 	hash         *TypeHash[T, S]
@@ -247,6 +249,8 @@ func (l *LiveTypeHash[T, S]) LProc(key string, fun func(string, *T) (*T, error))
 	}
 }
 
+// Proc atomically applies multiple operations. Each LProc's function receives
+// the current value and returns the new value (or nil to delete).
 func (l *LiveTypeHash[T, S]) Proc(procs []LProc[T, S]) error {
 	l.stageMutex.Lock()
 	defer l.stageMutex.Unlock()
@@ -462,6 +466,8 @@ func (j *SProc[T, S]) Proc(k string, v []byte) ([]byte, error) {
 	return v, nil
 }
 
+// Proc atomically reads values, applies transformations, then writes results.
+// Uses tkrzw's ProcessMulti for transactional semantics.
 func (h *Hash) Proc(pairs []Proc, write bool) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -508,6 +514,8 @@ func (h *Hash) Proc(pairs []Proc, write bool) error {
 	return juicemud.WithStack(abort)
 }
 
+// Tree wraps a tkrzw B-tree for ordered key-value storage.
+// Supports hierarchical keys via Sub* methods using length-prefixed encoding.
 type Tree struct {
 	*Hash
 }

@@ -144,6 +144,7 @@ func (s *Storage) StoreSource(ctx context.Context, path string, content []byte) 
 
 type Refresh func(ctx context.Context, object *structs.Object) error
 
+// maybeRefresh runs the Refresh callback if the object's source file has been modified.
 func (s *Storage) maybeRefresh(ctx context.Context, obj *structs.Object, ref Refresh) error {
 	if ref != nil {
 		t, err := s.SourceModTime(ctx, obj.GetSourcePath())
@@ -394,6 +395,8 @@ type Movement struct {
 	Destination string
 }
 
+// UNSAFEEnsureObject creates an object if it doesn't exist, bypassing normal validation.
+// Used only during initialization to bootstrap the world.
 func (s *Storage) UNSAFEEnsureObject(ctx context.Context, obj *structs.Object) error {
 	if err := s.sourceObjects.SubSet(obj.GetSourcePath(), obj.GetId(), nil); err != nil {
 		return juicemud.WithStack(err)
@@ -458,6 +461,7 @@ func (s *Storage) runSync(_ context.Context, fileSync *FileSync) error {
 	return nil
 }
 
+// sync processes pending file operations from the FileSync table to the actual storage.
 func (s *Storage) sync(ctx context.Context) error {
 	getOldestSync := func() (*FileSync, error) {
 		result := &FileSync{}
@@ -846,6 +850,7 @@ var (
 	authenticatedUser contextKey = 0
 )
 
+// AuthenticatedUser retrieves the user from context if authenticated via WebDAV.
 func AuthenticatedUser(ctx context.Context) (*User, bool) {
 	val := ctx.Value(authenticatedUser)
 	if val == nil {
@@ -861,6 +866,7 @@ type settableContext interface {
 	SetValue(any, any)
 }
 
+// AuthenticateUser stores the user in the context for access control checks.
 func AuthenticateUser(ctx context.Context, u *User) context.Context {
 	if sctx, ok := ctx.(settableContext); ok {
 		sctx.SetValue(authenticatedUser, u)
@@ -922,6 +928,8 @@ func (s *Storage) CheckCallerAccessToGroupID(ctx context.Context, groupID int64)
 	return nil
 }
 
+// CallerAccessToGroupID checks if the context's authenticated user belongs to the group.
+// Returns true for the main context (server startup) which bypasses access control.
 func (s *Storage) CallerAccessToGroupID(ctx context.Context, groupID int64) (bool, error) {
 	if juicemud.IsMainContext(ctx) {
 		return true, nil

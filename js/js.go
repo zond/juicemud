@@ -57,12 +57,13 @@ func newMachine() (*machine, error) {
 
 type Callbacks map[string]func(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value
 
+// Target holds all inputs needed to run JavaScript for an object.
 type Target struct {
-	Source    string
-	Origin    string
-	State     string
-	Callbacks Callbacks
-	Console   io.Writer
+	Source    string    // JavaScript source code
+	Origin    string    // Source file path for stack traces
+	State     string    // JSON state persisted between runs
+	Callbacks Callbacks // Go functions exposed to JavaScript
+	Console   io.Writer // Where console.log output goes
 }
 
 type Result struct {
@@ -265,6 +266,8 @@ func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, erro
 	}
 }
 
+// Run executes the JavaScript source, optionally invoking a callback if caller is provided.
+// Uses a pool of V8 isolates and enforces the given timeout.
 func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Duration) (*Result, error) {
 	m := <-machines
 	defer func() { machines <- m }()

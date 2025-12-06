@@ -54,6 +54,8 @@ func Stamp(t time.Time) Timestamp {
 	return Timestamp(t.UnixNano())
 }
 
+// NextObjectID generates a unique object ID using a monotonic timestamp prefix
+// followed by random bytes, then base64-encodes the result.
 func NextObjectID() (string, error) {
 	objectCounter := juicemud.Increment(&lastObjectCounter)
 	timeSize := binary.Size(objectCounter)
@@ -116,6 +118,8 @@ func (o *Object) Unique() bool {
 	return false
 }
 
+// Indef returns the object's name with an indefinite article ("a"/"an"),
+// unless the object is unique (proper noun), in which case just the name.
 func (o *Object) Indef() string {
 	name := o.Name()
 	if o.Unique() {
@@ -134,6 +138,7 @@ func (o *Object) HasCallback(name string, tag string) bool {
 	return found
 }
 
+// DressObject initializes nil map fields on an object to empty maps.
 func DressObject(obj *Object) *Object {
 	obj.Lock()
 	defer obj.Unlock()
@@ -161,6 +166,7 @@ func MakeObject(ctx context.Context) (*Object, error) {
 	}), nil
 }
 
+// CreateKey generates a unique, sortable key combining timestamp and counter.
 func (e *Event) CreateKey() {
 	eventCounter := juicemud.Increment(&lastEventCounter)
 	atSize := binary.Size(e.At)
@@ -170,6 +176,8 @@ func (e *Event) CreateKey() {
 	e.Key = string(k)
 }
 
+// Check tests the challenger's skill against this challenge's difficulty.
+// Returns positive for success, negative for failure. Updates skill state.
 func (c *Challenge) Check(challenger *Object, targetID string) float64 {
 	challenger.Lock()
 	defer challenger.Unlock()
@@ -192,6 +200,7 @@ func (c *Challenge) Check(challenger *Object, targetID string) float64 {
 
 type Challenges []Challenge
 
+// Merge adds levels from mergeChallenges to challenges with matching skills.
 func (c Challenges) Merge(mergeChallenges map[string]Challenge) Challenges {
 	newChallenges := Challenges{}
 	for _, challenge := range c {
@@ -211,9 +220,9 @@ func (c Challenges) Map() map[string]Challenge {
 	return result
 }
 
+// Check sums results of all challenges. Positive = success, negative = failure.
+// Empty challenges return 1.0 (auto-success).
 func (c Challenges) Check(challenger *Object, targetID string) float64 {
-	// If there are no challenges, the check automatically succeeds.
-	// This allows descriptions without challenges to be visible to everyone.
 	if len(c) == 0 {
 		return 1.0
 	}
@@ -235,7 +244,7 @@ func (d Descriptions) Matches(pattern string) bool {
 	return false
 }
 
-// TODO: Rename to "FirstDetected"
+// Detect returns the first description the viewer can perceive, or nil.
 func (d Descriptions) Detect(viewer *Object, targetID string) *Description {
 	for _, desc := range d {
 		if Challenges(desc.Challenges).Check(viewer, targetID) > 0 {
@@ -245,6 +254,7 @@ func (d Descriptions) Detect(viewer *Object, targetID string) *Description {
 	return nil
 }
 
+// AddDescriptionChallenges returns a copy with added difficulty on all descriptions.
 func (o *Object) AddDescriptionChallenges(addedChallenges Challenges) (*Object, error) {
 	cpy, err := Clone(o)
 	if err != nil {
@@ -259,6 +269,7 @@ func (o *Object) AddDescriptionChallenges(addedChallenges Challenges) (*Object, 
 	return cpy, nil
 }
 
+// Filter returns a copy with only descriptions and exits the viewer can perceive.
 func (o *Object) Filter(viewer *Object) (*Object, error) {
 	cpy, err := Clone(o)
 	if err != nil {
@@ -399,6 +410,7 @@ func (l *Location) All() iter.Seq[*Object] {
 
 var indexRegexp = regexp.MustCompile(`^((\d+)\.)?(.*)$`)
 
+// Identify finds an object by pattern match. Supports "N.pattern" to select Nth match.
 func (l *Location) Identify(s string) (*Object, error) {
 	match := indexRegexp.FindStringSubmatch(s)
 	indexString, pattern := match[2], match[3]
@@ -435,6 +447,7 @@ type Detection struct {
 	Object  *Object
 }
 
+// Detections yields each object that can perceive the target and how it appears to them.
 func (l *Location) Detections(target *Object, addedChallenges Challenges) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
 		for viewer := range l.All() {
@@ -457,6 +470,7 @@ func (l *Location) Detections(target *Object, addedChallenges Challenges) iter.S
 	}
 }
 
+// Detections yields all objects that can perceive the target, including via exits.
 func (n *DeepNeighbourhood) Detections(target *Object) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
 		for det, err := range n.Location.Detections(target, nil) {
@@ -488,6 +502,7 @@ func (n *Neighbourhood) Describe() string {
 	return string(b)
 }
 
+// FindLocation returns the exit to locID if reachable, or (nil, true) if it's current location.
 func (n *Neighbourhood) FindLocation(locID string) (*Exit, bool) {
 	if n.Location.GetId() == locID {
 		return nil, true
@@ -510,6 +525,7 @@ func (n *DeepNeighbourhood) Describe() string {
 	return string(b)
 }
 
+// Filter returns a copy with only what the viewer can perceive.
 func (n *DeepNeighbourhood) Filter(viewer *Object) (*DeepNeighbourhood, error) {
 	result := &DeepNeighbourhood{
 		Neighbours: map[string]*Location{},
@@ -635,12 +651,14 @@ type SkillConfig struct {
 	Forget SkillDuration
 }
 
+// specificRecharge computes the base recharge coefficient (0-1) using a sigmoid curve.
 func (s *Skill) specificRecharge(at Timestamp, recharge SkillDuration) float64 {
 	nanosSinceLastUse := at.Nanoseconds() - Timestamp(s.LastUsedAt).Nanoseconds()
 	rechargeFraction := float64(nanosSinceLastUse) / float64(recharge.Nanoseconds())
 	return math.Min(1, math.Pow(0.5, -(8*rechargeFraction-8))-math.Pow(0.5, 8))
 }
 
+// improvement calculates skill XP gain based on recharge, skill level, and challenge difficulty.
 func (s *Skill) improvement(at Timestamp, challenge float64, effective float64) float64 {
 	recharge := 6 * time.Minute
 	if sk, found := SkillConfigs.GetHas(s.Name); found && sk.Recharge.Duration() > recharge {
@@ -691,6 +709,8 @@ type skillUse struct {
 	at        time.Time
 }
 
+// check performs the skill check and returns positive for success, negative for failure.
+// If improve is true, also applies forgetting and learning to the skill.
 func (s skillUse) check(improve bool) float64 {
 	stamp := Stamp(s.at)
 
@@ -722,8 +742,9 @@ func (s skillUse) check(improve bool) float64 {
 	return 10 * math.Log10((1-random)/(1-successChance))
 }
 
+// rng returns a deterministic RNG seeded by user, skill, target, and time window.
+// This ensures consistent results for repeated checks within the skill's Duration.
 func (s skillUse) rng() *rnd.Rand {
-	// Seed a hash with who does what to whom.
 	h := fnv.New64()
 	h.Write([]byte(s.user))
 	h.Write([]byte(s.skill.Name))
@@ -768,6 +789,7 @@ func (o Objects) Swap(i, j int) {
 	o[i], o[j] = o[j], o[i]
 }
 
+// Lock sorts objects by ID then locks them in order to prevent deadlocks.
 func (o Objects) Lock() {
 	sort.Sort(o)
 	for _, obj := range o {
@@ -781,6 +803,7 @@ func (o Objects) Unlock() {
 	}
 }
 
+// WithLock locks the given objects in consistent order, runs f, then unlocks.
 func WithLock(f func() error, objs ...*Object) error {
 	toLock := make(Objects, 0, len(objs))
 	seen := map[*Object]bool{}
