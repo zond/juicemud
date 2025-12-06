@@ -33,9 +33,9 @@ type BEntry struct {
 }
 
 func (h *Hash) Each() iter.Seq2[BEntry, error] {
-	h.mutex.RLock()
-	defer h.mutex.RUnlock()
 	return func(yield func(BEntry, error) bool) {
+		h.mutex.RLock()
+		defer h.mutex.RUnlock()
 		iter := h.dbm.MakeIterator()
 		defer iter.Destruct()
 		iter.First()
@@ -580,9 +580,9 @@ func (t *Tree) SubCount(set string) (int, error) {
 
 func (t *Tree) SubEach(set string) iter.Seq2[BEntry, error] {
 	keyPrefix := appendKey(nil, set)
-	t.mutex.RLock()
-	defer t.mutex.RUnlock()
 	return func(yield func(BEntry, error) bool) {
+		t.mutex.RLock()
+		defer t.mutex.RUnlock()
 		iter := t.dbm.MakeIterator()
 		defer iter.Destruct()
 		iter.Jump(keyPrefix)

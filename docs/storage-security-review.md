@@ -231,13 +231,23 @@ When there's an error (`!status.IsOK()`), the code still tries to use `key` and 
 
 | Issue | Severity | Location | Status |
 |-------|----------|----------|--------|
-| Iterator lock released early | High | `dbm.go:35-64`, `dbm.go:581-615` | Open |
-| Error condition inverted in sync() | High | `storage.go:480-481` | Open |
-| CreateDir missing Parent field | High | `storage.go:760-768` | Open |
-| ChreadFile missing group access check | Medium | `storage.go:534` | Open |
-| LiveTypeHash unbounded memory | Medium | `dbm.go:107` | Open |
-| Queue Close potential deadlock | Medium | `queue/queue.go:59-66` | Open |
-| Hash.Each yields error with invalid data | Low | `dbm.go:46-52` | Open |
+| Iterator lock released early | High | `dbm.go:35-64`, `dbm.go:581-615` | Fixed |
+| Error condition inverted in sync() | High | `storage.go:480-481` | Fixed |
+| CreateDir missing Parent field | High | `storage.go:760-768` | Fixed |
+| ChreadFile missing group access check | Medium | `storage.go:534` | Fixed |
+| LiveTypeHash unbounded memory | Medium | `dbm.go:107` | Open (design consideration) |
+| Queue Close potential deadlock | Medium | `queue/queue.go:59-66` | Not a bug (see note) |
+| Hash.Each yields error with invalid data | Low | `dbm.go:46-52` | Not a bug (see note) |
+
+### Notes on Non-Issues
+
+**Queue Close potential deadlock**: After review, the Close/Start synchronization is correct:
+- `Close()` sets `closed=true` and broadcasts to wake `Start()`
+- `Start()` loop condition `for !q.closed || q.nextEvent != nil` drains remaining events
+- `Start()` calls `Broadcast()` at line 131 before returning, waking `Close()`
+- This is intentional graceful shutdown behavior, not a deadlock
+
+**Hash.Each yields error with invalid data**: The key/value are still meaningful on error - the error may be partial or recoverable, and providing context about which key caused the error is valuable for debugging.
 
 ---
 
@@ -253,7 +263,7 @@ The existing tests cover basic functionality but don't test:
 
 ## Recommendations
 
-1. **Immediate**: Fix the three HIGH severity bugs (iterator locking, sync error handling, CreateDir parent)
-2. **Short-term**: Add the missing access check in ChreadFile
+1. ~~**Immediate**: Fix the three HIGH severity bugs (iterator locking, sync error handling, CreateDir parent)~~ Done
+2. ~~**Short-term**: Add the missing access check in ChreadFile~~ Done
 3. **Medium-term**: Implement memory management for LiveTypeHash
 4. **Long-term**: Add concurrent access tests with race detector enabled

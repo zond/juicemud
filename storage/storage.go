@@ -477,7 +477,7 @@ func (s *Storage) sync(ctx context.Context) error {
 		if err := s.runSync(ctx, oldestSync); err != nil {
 			return juicemud.WithStack(err)
 		}
-		if _, err := s.sql.ExecContext(ctx, "DELETE FROM FileSync WHERE Id = ?", oldestSync.Id); err != nil && errors.Is(err, os.ErrNotExist) {
+		if _, err := s.sql.ExecContext(ctx, "DELETE FROM FileSync WHERE Id = ?", oldestSync.Id); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return juicemud.WithStack(err)
 		}
 	}
@@ -529,6 +529,9 @@ func (s *Storage) ChreadFile(ctx context.Context, path string, reader string) er
 		}
 		rg, err := s.loadGroupByName(ctx, tx, reader)
 		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		if err := s.CheckCallerAccessToGroupID(ctx, rg.Id); err != nil {
 			return juicemud.WithStack(err)
 		}
 		file.ReadGroup = rg.Id
@@ -758,6 +761,7 @@ func (s *Storage) CreateDir(ctx context.Context, path string) error {
 			return juicemud.WithStack(err)
 		}
 		file := &File{
+			Parent:     parent.Id,
 			Path:       path,
 			Name:       filepath.Base(path),
 			Dir:        true,
