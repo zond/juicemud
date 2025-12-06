@@ -4,7 +4,7 @@ Instructions for Claude Code when working with this repository.
 
 ## TODO
 
-- Add doc comments to functions where complexity and naming makes it relevant. Think hard about each comment to make sure it's correct and clear.
+- Benchmark JS engines with Go bindings to find the one that fits our usecase the best.
 - Add tests for functions or flows that are important and difficult to reason about.
 
 ## Rules

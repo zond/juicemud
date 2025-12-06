@@ -41,14 +41,16 @@ type machine struct {
 	unableToGenerateString *v8go.Value
 }
 
+const (
+	maxStateSize = 1024 * 1024 // 1 MB
+)
+
 func newMachine() (*machine, error) {
 	m := &machine{
 		iso: v8go.NewIsolate(),
 	}
+	m.vctx = v8go.NewContext(m.iso)
 	var err error
-	if m.vctx = v8go.NewContext(m.iso); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
 	if m.unableToGenerateString, err = v8go.NewValue(m.iso, "unable to generate exception"); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
