@@ -197,10 +197,8 @@ func (c Challenges) Merge(mergeChallenges map[string]Challenge) Challenges {
 	for _, challenge := range c {
 		if mergeChallenge, found := mergeChallenges[challenge.Skill]; found {
 			challenge.Level += mergeChallenge.Level
-			newChallenges = append(newChallenges, challenge)
-		} else {
-			newChallenges = append(newChallenges, mergeChallenge)
 		}
+		newChallenges = append(newChallenges, challenge)
 	}
 	return newChallenges
 }
@@ -763,7 +761,7 @@ func (o Objects) Len() int {
 }
 
 func (o Objects) Less(i, j int) bool {
-	return strings.Compare(o[i].GetId(), o[i].GetId()) < 0
+	return strings.Compare(o[i].GetId(), o[j].GetId()) < 0
 }
 
 func (o Objects) Swap(i, j int) {

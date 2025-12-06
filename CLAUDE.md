@@ -13,3 +13,4 @@ Instructions for Claude Code when working with this repository.
 - README.md should contain project overview, architecture, and usage instructions.
 - docs/ should contain detailed documentation for specific subsystems that need extra insight.
 - Always update CLAUDE.md, README.md, and docs/ when they become out of date.
+- Always make sure functions have doc comments, if they are too complex for their name to fully describe what they do.
