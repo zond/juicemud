@@ -188,14 +188,15 @@ A new `log.Logger` is created for every `log()` call from JavaScript. This is in
 
 ## Recommendations Summary
 
-| Priority | Issue | Recommendation |
-|----------|-------|----------------|
-| High | Context reuse without cleanup | Create fresh context per execution or clear globals |
-| High | Unused context cancellation | Respect Go context.Context for cancellation |
-| Medium | No V8 memory limits | Add `WithMaxHeapSize` to isolate creation |
-| Medium | Unbounded state size | Add maximum state size validation |
-| Low | Test error message | Fix misleading error message in TestBasics |
-| Low | Missing test coverage | Add timeout and error handling tests |
+| Priority | Issue | Recommendation | Status |
+|----------|-------|----------------|--------|
+| High | Context reuse without cleanup | Create fresh context per execution or clear globals | Accepted risk (semi-trusted admins) |
+| High | Unused context cancellation | Respect Go context.Context for cancellation | **Fixed** |
+| Medium | No V8 memory limits | Add `WithMaxHeapSize` to isolate creation | Deferred (v8go 0.9.0 doesn't support it) |
+| Medium | Unbounded state size | Add maximum state size validation | **Fixed** (1MB limit) |
+| Low | Test error message | Fix misleading error message in TestBasics | **Fixed** |
+| Low | Missing test coverage | Add timeout and error handling tests | Pending |
+| Low | Unused error check in newMachine | Remove no-op error check | **Fixed** |
 
 ## Files Reviewed
 

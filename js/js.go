@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"runtime"
-	"sync/atomic"
 	"time"
 
 	"github.com/zond/juicemud"
@@ -57,6 +56,7 @@ func newMachine() (*machine, error) {
 	return m, nil
 }
 
+// Callbacks maps function names to Go functions that can be called from JavaScript.
 type Callbacks map[string]func(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value
 
 // Target holds all inputs needed to run JavaScript for an object.
@@ -68,19 +68,24 @@ type Target struct {
 	Console   io.Writer // Where console.log output goes
 }
 
+// Result contains the outputs from a JavaScript execution.
 type Result struct {
-	State     string
-	Callbacks map[string]map[string]bool
-	Value     string
+	State     string                     // JSON state to persist for next run
+	Callbacks map[string]map[string]bool // event type -> set of tags the script wants to handle
+	Value     string                     // JSON return value from callback invocation
 }
 
+// RunContext provides the execution environment for a single JavaScript run.
+// It is passed to Go callbacks so they can interact with the V8 context.
 type RunContext struct {
 	m         *machine
 	r         *Result
 	t         *Target
-	callbacks map[string]*v8go.Function
+	callbacks map[string]*v8go.Function // JS callbacks registered via addCallback()
+	remaining time.Duration             // remaining JS execution budget
 }
 
+// JSFromGo converts a Go value to a V8 value by JSON marshaling and parsing.
 func (rc *RunContext) JSFromGo(x any) (*v8go.Value, error) {
 	b, err := goccy.Marshal(x)
 	if err != nil {
@@ -93,6 +98,7 @@ func (rc *RunContext) JSFromGo(x any) (*v8go.Value, error) {
 	return res, nil
 }
 
+// Copy converts a V8 value to a Go value by JSON stringifying and unmarshaling into dst.
 func (rc *RunContext) Copy(dst any, src *v8go.Value) error {
 	s, err := v8go.JSONStringify(rc.Context(), src)
 	if err != nil {
@@ -104,10 +110,12 @@ func (rc *RunContext) Copy(dst any, src *v8go.Value) error {
 	return nil
 }
 
+// Context returns the V8 context for this run.
 func (rc *RunContext) Context() *v8go.Context {
 	return rc.m.vctx
 }
 
+// String creates a V8 string value from a Go string.
 func (rc *RunContext) String(s string) *v8go.Value {
 	if res, err := v8go.NewValue(rc.m.iso, s); err == nil {
 		return res
@@ -115,10 +123,13 @@ func (rc *RunContext) String(s string) *v8go.Value {
 	return rc.m.unableToGenerateString
 }
 
+// Throw throws a JavaScript exception with the given formatted message.
 func (rc *RunContext) Throw(format string, args ...any) *v8go.Value {
 	return rc.Context().Isolate().ThrowException(rc.String(fmt.Sprintf(format, args...)))
 }
 
+// addJSCallback is the Go implementation of the JavaScript addCallback(eventType, tags, fn) function.
+// It registers a JS function to be called when an event with matching type and tag occurs.
 func addJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 	args := info.Args()
 	if len(args) == 3 && args[0].IsString() && args[1].IsArray() && args[2].IsFunction() {
@@ -145,6 +156,7 @@ func addJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value 
 	return rc.Throw("addCallback takes [string, []string, function] arguments")
 }
 
+// removeJSCallback is the Go implementation of the JavaScript removeCallback(eventType) function.
 func removeJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 	args := info.Args()
 	if len(args) == 1 && args[0].IsString() {
@@ -156,6 +168,8 @@ func removeJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Val
 	return rc.Throw("removeCallback takes [string] arguments")
 }
 
+// logFunc returns a callback that implements the JavaScript log() function.
+// Objects are JSON-stringified for readability.
 func logFunc(w io.Writer) func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value {
 	return func(ctx *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		anyArgs := []any{}
@@ -174,6 +188,7 @@ func logFunc(w io.Writer) func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Va
 	}
 }
 
+// addCallback registers a Go function as a global JavaScript function.
 func (rc *RunContext) addCallback(
 	name string,
 	f func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value,
@@ -191,7 +206,8 @@ func (rc *RunContext) addCallback(
 	)
 }
 
-func (rc *RunContext) prepareV8Context(timeoutNanos *int64) error {
+// prepareV8Context sets up the V8 context with all callbacks and initial state.
+func (rc *RunContext) prepareV8Context() error {
 	for name, fun := range rc.t.Callbacks {
 		if err := rc.addCallback(
 			name,
@@ -227,9 +243,7 @@ func (rc *RunContext) prepareV8Context(timeoutNanos *int64) error {
 	if stateJSON == "" {
 		stateJSON = "{}"
 	}
-	startTime := time.Now()
 	stateValue, err := v8go.JSONParse(rc.m.vctx, stateJSON)
-	atomic.AddInt64(timeoutNanos, -int64(time.Since(startTime)))
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -244,32 +258,40 @@ var (
 	ErrTimeout = fmt.Errorf("Timeout")
 )
 
-type result struct {
-	value *v8go.Value
-	err   error
+type timedResult struct {
+	value   *v8go.Value
+	err     error
+	elapsed time.Duration
 }
 
-func (rc *RunContext) withTimeout(_ context.Context, f func() (*v8go.Value, error), timeoutNanos *int64) (*v8go.Value, error) {
-	results := make(chan result, 1)
-	thisTimeout := atomic.LoadInt64(timeoutNanos)
+// withTimeout runs f with the remaining JS execution budget, respecting context cancellation.
+func (rc *RunContext) withTimeout(ctx context.Context, f func() (*v8go.Value, error)) (*v8go.Value, error) {
+	if rc.remaining <= 0 {
+		return nil, juicemud.WithStack(ErrTimeout)
+	}
+
+	results := make(chan timedResult, 1)
 	go func() {
-		t := time.Now()
+		start := time.Now()
 		val, err := f()
-		atomic.AddInt64(timeoutNanos, -int64(time.Since(t)))
-		results <- result{value: val, err: err}
+		results <- timedResult{value: val, err: err, elapsed: time.Since(start)}
 	}()
 
 	select {
 	case res := <-results:
+		rc.remaining -= res.elapsed
 		return res.value, juicemud.WithStack(res.err)
-	case <-time.After(time.Duration(thisTimeout)):
+	case <-ctx.Done():
+		rc.m.iso.TerminateExecution()
+		return nil, juicemud.WithStack(ctx.Err())
+	case <-time.After(rc.remaining):
 		rc.m.iso.TerminateExecution()
 		return nil, juicemud.WithStack(ErrTimeout)
 	}
 }
 
 // Run executes the JavaScript source, optionally invoking a callback if caller is provided.
-// Uses a pool of V8 isolates and enforces the given timeout.
+// Uses a pool of V8 isolates and enforces the given timeout for JS execution time only.
 func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Duration) (*Result, error) {
 	m := <-machines
 	defer func() { machines <- m }()
@@ -281,17 +303,16 @@ func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Dur
 		},
 		t:         &t,
 		callbacks: map[string]*v8go.Function{},
+		remaining: timeout,
 	}
 
-	timeoutNanos := int64(timeout)
-
-	if err := rc.prepareV8Context(&timeoutNanos); err != nil {
+	if err := rc.prepareV8Context(); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 
 	if _, err := rc.withTimeout(ctx, func() (*v8go.Value, error) {
 		return rc.m.vctx.RunScript(t.Source, t.Origin)
-	}, &timeoutNanos); err != nil {
+	}); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 
@@ -321,12 +342,9 @@ func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Dur
 
 	var val *v8go.Value
 	if call.Message != "" {
-		var err error
-		start := time.Now()
 		if val, err = v8go.JSONParse(rc.m.vctx, call.Message); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
-		atomic.AddInt64(&timeoutNanos, -int64(time.Since(start)))
 	}
 
 	if val, err := rc.withTimeout(ctx, func() (*v8go.Value, error) {
@@ -335,13 +353,18 @@ func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Dur
 		} else {
 			return jsCB.Call(rc.m.vctx.Global())
 		}
-	}, &timeoutNanos); err != nil {
+	}); err != nil {
 		return nil, juicemud.WithStack(err)
 	} else {
 		return rc.collectResult(val)
 	}
 }
 
+var (
+	ErrStateTooLarge = fmt.Errorf("state exceeds maximum size of %d bytes", maxStateSize)
+)
+
+// collectResult extracts the final state and return value from the V8 context.
 func (rc *RunContext) collectResult(value *v8go.Value) (*Result, error) {
 	rc.r.Value = "{}"
 	if value != nil && !value.IsNull() {
@@ -356,6 +379,9 @@ func (rc *RunContext) collectResult(value *v8go.Value) (*Result, error) {
 	}
 	if rc.r.State, err = v8go.JSONStringify(rc.m.vctx, stateValue); err != nil {
 		return nil, juicemud.WithStack(err)
+	}
+	if len(rc.r.State) > maxStateSize {
+		return nil, juicemud.WithStack(ErrStateTooLarge)
 	}
 	return rc.r, nil
 }

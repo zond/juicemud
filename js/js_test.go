@@ -109,7 +109,7 @@ addCallback("test2", ["x"], (arg) => {
 		t.Fatal(err)
 	}
 	if result != "20" {
-		t.Errorf("got %q, want 45", result)
+		t.Errorf("got %q, want 20 (callback should not have been invoked without matching tag)", result)
 	}
 	if res.State != wantState {
 		t.Errorf("got %q, want %q", res.State, wantState)
