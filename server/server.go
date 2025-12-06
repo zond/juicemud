@@ -1,14 +1,13 @@
-package main
+package server
 
 import (
 	"context"
-	"flag"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/gliderlabs/ssh"
@@ -44,6 +43,11 @@ func (r *responseWriter) Write(b []byte) (int, error) {
 	return written, err
 }
 
+func (r *responseWriter) WriteHeader(status int) {
+	r.status = status
+	r.backend.WriteHeader(status)
+}
+
 type sizeBody struct {
 	backend io.ReadCloser
 	size    int
@@ -61,116 +65,244 @@ func (s *sizeBody) Close() error {
 	return s.backend.Close()
 }
 
-func (r *responseWriter) WriteHeader(status int) {
-	r.status = status
-	r.backend.WriteHeader(status)
+// Config holds the server configuration.
+type Config struct {
+	SSHAddr   string // Address for SSH connections (e.g., "127.0.0.1:15000")
+	HTTPSAddr string // Address for HTTPS WebDAV (e.g., "127.0.0.1:8081")
+	HTTPAddr  string // Address for HTTP WebDAV (e.g., "127.0.0.1:8080")
+	Hostname  string // Hostname for HTTPS certificate
+	Dir       string // Directory for database and settings
 }
 
-func main() {
-	sshIface := flag.String("ssh", "127.0.0.1:15000", "Where to listen to SSH connections.")
-	httpsIface := flag.String("https", "127.0.0.1:8081", "Where to listen to HTTPS connections for WebDAV.")
-	httpIface := flag.String("http", "127.0.0.1:8080", "Where to listen to HTTP connections for WebDAV.")
-	hostname := flag.String("hostname", "", "Hostname for HTTPS certificate signatures, will use -https value if empty.")
-	dir := flag.String("dir", filepath.Join(os.Getenv("HOME"), ".juicemud"), "Where to save database and settings.")
+// DefaultConfig returns the default server configuration.
+func DefaultConfig() Config {
+	return Config{
+		SSHAddr:   "127.0.0.1:15000",
+		HTTPSAddr: "127.0.0.1:8081",
+		HTTPAddr:  "127.0.0.1:8080",
+		Hostname:  "",
+		Dir:       filepath.Join(os.Getenv("HOME"), ".juicemud"),
+	}
+}
 
-	flag.Parse()
+// Server represents a running JuiceMUD server instance.
+type Server struct {
+	config      Config
+	storage     *storage.Storage
+	game        *game.Game
+	sshServer   *ssh.Server
+	httpsServer *http.Server
+	httpServer  *http.Server
+	sshListener net.Listener
+	httpListener net.Listener
+	httpsListener net.Listener
+	crypto      crypto.Crypto
+}
 
-	if *hostname == "" {
-		*hostname = *httpsIface
+// New creates a new server with the given configuration.
+// It initializes storage, game, and all listeners but does not start serving.
+func New(ctx context.Context, config Config) (*Server, error) {
+	if config.Hostname == "" {
+		config.Hostname = config.HTTPSAddr
 	}
 
-	dirFile, err := os.Open(*dir)
-	if os.IsNotExist(err) {
-		if err := os.MkdirAll(*dir, 0700); err != nil {
-			log.Fatal(err)
+	// Ensure directory exists
+	if _, err := os.Stat(config.Dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(config.Dir, 0700); err != nil {
+			return nil, err
 		}
-	} else if err != nil {
-		log.Fatal(err)
-	} else {
-		dirFile.Close()
 	}
 
-	crypto := crypto.Crypto{
-		Hostname:      *hostname,
-		PrivKeyPath:   filepath.Join(*dir, "privKey"),
-		SSHPubKeyPath: filepath.Join(*dir, "sshPubKey"),
-		HTTPSCertPath: filepath.Join(*dir, "httpsCert"),
+	// Setup crypto
+	cr := crypto.Crypto{
+		Hostname:      config.Hostname,
+		PrivKeyPath:   filepath.Join(config.Dir, "privKey"),
+		SSHPubKeyPath: filepath.Join(config.Dir, "sshPubKey"),
+		HTTPSCertPath: filepath.Join(config.Dir, "httpsCert"),
 	}
-	if _, err = os.Stat(crypto.PrivKeyPath); os.IsNotExist(err) {
-		if err := crypto.Generate(); err != nil {
-			log.Fatal(err)
+	if _, err := os.Stat(cr.PrivKeyPath); os.IsNotExist(err) {
+		if err := cr.Generate(); err != nil {
+			return nil, err
 		}
-		log.Printf("Generated crypto keys in %+v", crypto)
-	} else if err != nil {
-		log.Fatal(err)
+		log.Printf("Generated crypto keys in %+v", cr)
 	}
 
-	pemBytes, err := os.ReadFile(crypto.PrivKeyPath)
+	pemBytes, err := os.ReadFile(cr.PrivKeyPath)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	signer, err := gossh.ParsePrivateKey(pemBytes)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	fingerprint := gossh.FingerprintSHA256(signer.PublicKey())
 
-	ctx := context.Background()
-	store, err := storage.New(ctx, *dir)
+	// Initialize storage and game
+	store, err := storage.New(ctx, config.Dir)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
+
 	g, err := game.New(ctx, store)
 	if err != nil {
-		log.Fatal(err)
+		store.Close()
+		return nil, err
 	}
 
+	// Create SSH server
 	sshServer := &ssh.Server{
-		Addr:    *sshIface,
+		Addr:    config.SSHAddr,
 		Handler: g.HandleSession,
 	}
 	sshServer.AddHostKey(signer)
-	log.Printf("Serving SSH on %q with public key %q", *sshIface, fingerprint)
 
-	fs := &fs.Fs{
-		Storage: store,
-	}
-	dav := dav.New(fs)
-	auth := digest.NewDigestAuth(juicemud.DAVAuthRealm, store).Wrap(dav)
+	// Create WebDAV handler with auth
+	fsys := &fs.Fs{Storage: store}
+	davHandler := dav.New(fsys)
+	auth := digest.NewDigestAuth(juicemud.DAVAuthRealm, store).Wrap(davHandler)
+
 	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t := time.Now()
 		ww := &responseWriter{backend: w, status: http.StatusOK}
 		sb := &sizeBody{backend: r.Body}
 		r.Body = sb
 		auth.ServeHTTP(ww, r)
-		lapsed := time.Since(t)
-		log.Printf("%s\t%s\t%s\t%v\t%vb in\t%vb out\t%s", r.RemoteAddr, r.Method, r.URL, ww.status, sb.size, ww.size, lapsed)
+		elapsed := time.Since(t)
+		log.Printf("%s\t%s\t%s\t%v\t%vb in\t%vb out\t%s", r.RemoteAddr, r.Method, r.URL, ww.status, sb.size, ww.size, elapsed)
 	})
 
 	httpsServer := &http.Server{
-		Addr:    *httpsIface,
+		Addr:    config.HTTPSAddr,
 		Handler: logger,
 	}
-	log.Printf("Serving HTTPS on %q with public key %q", *httpsIface, fingerprint)
 
 	httpServer := &http.Server{
-		Addr:    *httpIface,
+		Addr:    config.HTTPAddr,
 		Handler: logger,
 	}
-	log.Printf("Serving HTTP on %q", *httpIface)
 
-	wg := sync.WaitGroup{}
-	wg.Add(2)
+	return &Server{
+		config:      config,
+		storage:     store,
+		game:        g,
+		sshServer:   sshServer,
+		httpsServer: httpsServer,
+		httpServer:  httpServer,
+		crypto:      cr,
+	}, nil
+}
+
+// Start begins serving on all configured addresses.
+// This function blocks until the server is shut down.
+func (s *Server) Start() error {
+	fingerprint := ""
+	if pemBytes, err := os.ReadFile(s.crypto.PrivKeyPath); err == nil {
+		if signer, err := gossh.ParsePrivateKey(pemBytes); err == nil {
+			fingerprint = gossh.FingerprintSHA256(signer.PublicKey())
+		}
+	}
+
+	log.Printf("Serving SSH on %q with public key %q", s.config.SSHAddr, fingerprint)
+	log.Printf("Serving HTTPS on %q with public key %q", s.config.HTTPSAddr, fingerprint)
+	log.Printf("Serving HTTP on %q", s.config.HTTPAddr)
+
+	errCh := make(chan error, 3)
+
 	go func() {
-		defer wg.Done()
-		log.Fatal(httpsServer.ListenAndServeTLS(crypto.HTTPSCertPath, crypto.PrivKeyPath))
-	}()
-	go func() {
-		defer wg.Done()
-		log.Fatal(httpServer.ListenAndServe())
+		errCh <- s.httpsServer.ListenAndServeTLS(s.crypto.HTTPSCertPath, s.crypto.PrivKeyPath)
 	}()
 
-	log.Fatal(sshServer.ListenAndServe())
-	wg.Wait()
+	go func() {
+		errCh <- s.httpServer.ListenAndServe()
+	}()
+
+	go func() {
+		errCh <- s.sshServer.ListenAndServe()
+	}()
+
+	return <-errCh
+}
+
+// StartWithListeners starts the server using the provided listeners.
+// This is useful for testing where you want to use random ports.
+func (s *Server) StartWithListeners(sshLn, httpLn, httpsLn net.Listener) error {
+	s.sshListener = sshLn
+	s.httpListener = httpLn
+	s.httpsListener = httpsLn
+
+	errCh := make(chan error, 3)
+
+	go func() {
+		errCh <- s.httpsServer.ServeTLS(httpsLn, s.crypto.HTTPSCertPath, s.crypto.PrivKeyPath)
+	}()
+
+	go func() {
+		errCh <- s.httpServer.Serve(httpLn)
+	}()
+
+	go func() {
+		errCh <- s.sshServer.Serve(sshLn)
+	}()
+
+	return <-errCh
+}
+
+// Close shuts down all servers and closes storage.
+func (s *Server) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var errs []error
+
+	if err := s.sshServer.Shutdown(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.httpsServer.Shutdown(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.httpServer.Shutdown(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.storage.Close(); err != nil {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
+}
+
+// SSHAddr returns the actual SSH address (useful when using port 0).
+func (s *Server) SSHAddr() string {
+	if s.sshListener != nil {
+		return s.sshListener.Addr().String()
+	}
+	return s.config.SSHAddr
+}
+
+// HTTPAddr returns the actual HTTP address (useful when using port 0).
+func (s *Server) HTTPAddr() string {
+	if s.httpListener != nil {
+		return s.httpListener.Addr().String()
+	}
+	return s.config.HTTPAddr
+}
+
+// HTTPSAddr returns the actual HTTPS address (useful when using port 0).
+func (s *Server) HTTPSAddr() string {
+	if s.httpsListener != nil {
+		return s.httpsListener.Addr().String()
+	}
+	return s.config.HTTPSAddr
+}
+
+// Storage returns the server's storage instance.
+func (s *Server) Storage() *storage.Storage {
+	return s.storage
+}
+
+// Game returns the server's game instance.
+func (s *Server) Game() *game.Game {
+	return s.game
 }

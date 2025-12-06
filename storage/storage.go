@@ -985,3 +985,18 @@ type GroupMember struct {
 	User  int64 `sqly:"index"`
 	Group int64 `sqly:"uniqueWith(User)"`
 }
+
+// AddUserToGroup adds a user to a group by name.
+func (s *Storage) AddUserToGroup(ctx context.Context, user *User, groupName string) error {
+	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+		group, err := s.loadGroupByName(ctx, tx, groupName)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		member := &GroupMember{
+			User:  user.Id,
+			Group: group.Id,
+		}
+		return tx.Upsert(ctx, member, false)
+	})
+}

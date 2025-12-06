@@ -763,7 +763,7 @@ func (c *Connection) loginUser() error {
 		}
 	}
 	for c.user == nil {
-		// Rate limit login attempts per user
+		// Rate limit login attempts per user (only after failed attempts)
 		lastLoginAttemptMu.Lock()
 		if last, ok := lastLoginAttempt[user.Name]; ok {
 			if wait := loginAttemptInterval - time.Since(last); wait > 0 {
@@ -773,7 +773,6 @@ func (c *Connection) loginUser() error {
 				lastLoginAttemptMu.Lock()
 			}
 		}
-		lastLoginAttempt[user.Name] = time.Now()
 		lastLoginAttemptMu.Unlock()
 
 		fmt.Fprint(c.term, "Enter password or [abort]:\n")
@@ -783,8 +782,16 @@ func (c *Connection) loginUser() error {
 		}
 		ha1 := digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
 		if subtle.ConstantTimeCompare([]byte(ha1), []byte(user.PasswordHash)) != 1 {
+			// Record failed attempt for rate limiting
+			lastLoginAttemptMu.Lock()
+			lastLoginAttempt[user.Name] = time.Now()
+			lastLoginAttemptMu.Unlock()
 			fmt.Fprintln(c.term, "Incorrect password!")
 		} else {
+			// Successful login - clear any rate limit for this user
+			lastLoginAttemptMu.Lock()
+			delete(lastLoginAttempt, user.Name)
+			lastLoginAttemptMu.Unlock()
 			c.user = user
 		}
 	}

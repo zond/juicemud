@@ -79,3 +79,8 @@ go generate ./structs
 - `tkrzw-go`: Requires tkrzw C++ library installed
 - `v8go`: Requires V8 headers/libraries
 - `bencgen`: Code generator for binary serialization (install separately for schema changes)
+
+# TODO
+
+- Add doc comments to functions where complexity and naming makes it relevant. Think hard about each comment to make sure it's correct and clear.
+- Add tests for functions or flows that are important and difficult to reason about.

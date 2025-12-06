@@ -80,7 +80,15 @@ setDescriptions([
 `,
 		emptySource: "// This code runs the top level container of all content.",
 	}
-	initialObjects = map[string]*structs.ObjectDO{
+	initialGroups = []storage.Group{
+		{
+			Name: wizardsGroup,
+		},
+	}
+)
+
+func initialObjects() map[string]*structs.ObjectDO {
+	return map[string]*structs.ObjectDO{
 		genesisID: {
 			Id:         genesisID,
 			Location:   emptyID,
@@ -93,12 +101,7 @@ setDescriptions([
 			SourcePath: emptySource,
 		},
 	}
-	initialGroups = []storage.Group{
-		{
-			Name: wizardsGroup,
-		},
-	}
-)
+}
 
 type Game struct {
 	storage *storage.Storage
@@ -120,7 +123,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			}
 		}
 	}
-	for _, obj := range initialObjects {
+	for _, obj := range initialObjects() {
 		if err := s.UNSAFEEnsureObject(ctx, structs.DressObject(&structs.Object{Unsafe: obj})); err != nil {
 			return nil, juicemud.WithStack(err)
 		}

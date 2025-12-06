@@ -214,6 +214,11 @@ func (c Challenges) Map() map[string]Challenge {
 }
 
 func (c Challenges) Check(challenger *Object, targetID string) float64 {
+	// If there are no challenges, the check automatically succeeds.
+	// This allows descriptions without challenges to be visible to everyone.
+	if len(c) == 0 {
+		return 1.0
+	}
 	result := 0.0
 	for _, challenge := range c {
 		result += challenge.Check(challenger, targetID)
