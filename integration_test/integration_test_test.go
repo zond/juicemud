@@ -1,11 +1,9 @@
-package integration_test_test
+package integration_test
 
 import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/zond/juicemud/integration_test"
 )
 
 func TestIntegration(t *testing.T) {
@@ -19,13 +17,13 @@ func TestIntegration(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		ts, err := integration_test.NewTestServer()
+		ts, err := NewTestServer()
 		if err != nil {
 			done <- err
 			return
 		}
 		defer ts.Close()
-		done <- integration_test.RunAll(ts)
+		done <- RunAll(ts)
 	}()
 
 	select {

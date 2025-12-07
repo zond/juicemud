@@ -181,7 +181,8 @@ func (l *LiveTypeHash[T, S]) Start() error {
 func (l *LiveTypeHash[T, S]) updated(t *T) {
 	l.updatesMutex.Lock()
 	defer l.updatesMutex.Unlock()
-	l.updates[S(t).GetId()] = true
+	id := S(t).GetId()
+	l.updates[id] = true
 }
 
 func (l *LiveTypeHash[T, S]) SetIfMissing(t *T) error {
