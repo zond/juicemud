@@ -262,20 +262,20 @@ if _, err := rand.Read(bytes); err != nil {
 
 ## Summary of Issues
 
-| Issue | Severity | Location | Type |
-|-------|----------|----------|------|
-| Lock token substring match | Medium | `dav.go:174` | Security |
-| In-memory lock memory exhaustion | Medium | `dav.go:49` | Security |
-| XSS in directory listing | Medium | `dav.go:117-119` | Security |
-| Missing DELETE/MOVE lock checks | Medium | `dav.go:229,243` | Correctness |
-| Locks not persistent | Low | `dav.go:49` | Correctness |
-| Owner always "anonymous" | Low | `dav.go:452` | Correctness |
-| No nonce replay protection | Low | `digest.go` | Security |
-| Typo "Unathorized" | Low | `dav.go:213` | Correctness |
-| Non-standard depth handling | Low | `dav.go:305` | Correctness |
-| Error after headers written | Low | `dav.go:331-333` | Correctness |
-| Stat loads full file content | Low | `fs.go:87-88` | Performance |
-| generateToken ignores error | Low | `dav.go:417` | Correctness |
+| Issue | Severity | Location | Type | Status |
+|-------|----------|----------|------|--------|
+| Lock token substring match | Medium | `dav.go:174` | Security | ✅ Fixed |
+| In-memory lock memory exhaustion | Medium | `dav.go:49` | Security | ✅ Fixed |
+| XSS in directory listing | Medium | `dav.go:117-119` | Security | ✅ Fixed |
+| Missing DELETE/MOVE lock checks | Medium | `dav.go:229,243` | Correctness | ✅ Fixed |
+| Locks not persistent | Low | `dav.go:49` | Correctness | Open |
+| Owner always "anonymous" | Low | `dav.go:452` | Correctness | Open |
+| No nonce replay protection | Low | `digest.go` | Security | Open |
+| Typo "Unathorized" | Low | `dav.go:213` | Correctness | ✅ Fixed |
+| Non-standard depth handling | Low | `dav.go:305` | Correctness | Open |
+| Error after headers written | Low | `dav.go:331-333` | Correctness | ✅ Fixed |
+| Stat loads full file content | Low | `fs.go:87-88` | Performance | Open |
+| generateToken ignores error | Low | `dav.go:417` | Correctness | ✅ Fixed |
 
 ---
 
@@ -293,17 +293,17 @@ if _, err := rand.Read(bytes); err != nil {
 
 ## Recommendations
 
-### Immediate (Security)
-1. Fix XSS vulnerability in directory listing HTML generation
-2. Add lock validation to DELETE and MOVE handlers
-3. Improve lock token verification to use exact matching
+### Immediate (Security) - ✅ All Fixed
+1. ~~Fix XSS vulnerability in directory listing HTML generation~~ ✅
+2. ~~Add lock validation to DELETE and MOVE handlers~~ ✅
+3. ~~Improve lock token verification to use exact matching~~ ✅
 
-### Short-term (Correctness)
-1. Fix "Unathorized" typo
-2. Add expired lock cleanup goroutine
-3. Buffer XML responses before writing headers
+### Short-term (Correctness) - ✅ All Fixed
+1. ~~Fix "Unathorized" typo~~ ✅
+2. ~~Add expired lock cleanup goroutine~~ ✅
+3. ~~Buffer XML responses before writing headers~~ ✅
 
-### Medium-term (Robustness)
+### Medium-term (Robustness) - Open
 1. Consider persisting locks for production use
 2. Add nonce expiration/replay protection to digest auth
 3. Record authenticated user as lock owner

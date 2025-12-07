@@ -465,7 +465,9 @@ type Lock struct {
 
 func generateToken() string {
 	bytes := make([]byte, 16)
-	_, _ = rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
 	return hex.EncodeToString(bytes)
 }
 
