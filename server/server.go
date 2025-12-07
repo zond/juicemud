@@ -87,16 +87,17 @@ func DefaultConfig() Config {
 
 // Server represents a running JuiceMUD server instance.
 type Server struct {
-	config      Config
-	storage     *storage.Storage
-	game        *game.Game
-	sshServer   *ssh.Server
-	httpsServer *http.Server
-	httpServer  *http.Server
-	sshListener net.Listener
-	httpListener net.Listener
+	config        Config
+	storage       *storage.Storage
+	game          *game.Game
+	sshServer     *ssh.Server
+	httpsServer   *http.Server
+	httpServer    *http.Server
+	sshListener   net.Listener
+	httpListener  net.Listener
 	httpsListener net.Listener
-	crypto      crypto.Crypto
+	crypto        crypto.Crypto
+	davHandler    *dav.Handler
 }
 
 // New creates a new server with the given configuration.
@@ -189,6 +190,7 @@ func New(ctx context.Context, config Config) (*Server, error) {
 		httpsServer: httpsServer,
 		httpServer:  httpServer,
 		crypto:      cr,
+		davHandler:  davHandler,
 	}, nil
 }
 
@@ -263,6 +265,7 @@ func (s *Server) Close() error {
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		errs = append(errs, err)
 	}
+	s.davHandler.Close()
 	if err := s.storage.Close(); err != nil {
 		errs = append(errs, err)
 	}

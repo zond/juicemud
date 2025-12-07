@@ -2,12 +2,14 @@ package dav
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"mime"
@@ -48,12 +50,42 @@ type Handler struct {
 	fileSystem FileSystem
 	locks      map[string]*Lock
 	lockMutex  sync.Mutex
+	closeCh    chan struct{}
 }
 
 func New(fs FileSystem) *Handler {
-	return &Handler{
+	h := &Handler{
 		fileSystem: fs,
 		locks:      map[string]*Lock{},
+		closeCh:    make(chan struct{}),
+	}
+	go h.cleanupExpiredLocks()
+	return h
+}
+
+// Close shuts down the handler's background goroutines.
+func (h *Handler) Close() {
+	close(h.closeCh)
+}
+
+// cleanupExpiredLocks periodically removes expired locks to prevent memory exhaustion.
+func (h *Handler) cleanupExpiredLocks() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.closeCh:
+			return
+		case <-ticker.C:
+			h.lockMutex.Lock()
+			now := time.Now()
+			for path, lock := range h.locks {
+				if lock.ExpiresAt.Before(now) {
+					delete(h.locks, path)
+				}
+			}
+			h.lockMutex.Unlock()
+		}
 	}
 }
 
@@ -114,9 +146,9 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) error {
 
 		w.Header().Set("Content-Type", "text/html")
 		writer := bufio.NewWriter(w)
-		writer.WriteString(fmt.Sprintf("<html><head><title>%s</title></head><body>", r.URL.Path))
+		writer.WriteString(fmt.Sprintf("<html><head><title>%s</title></head><body>", html.EscapeString(r.URL.Path)))
 		for _, f := range files {
-			writer.WriteString(fmt.Sprintf("<a href=\"%s\">%s</a></br>", f.Name, f.Name))
+			writer.WriteString(fmt.Sprintf("<a href=\"%s\">%s</a></br>", html.EscapeString(f.Name), html.EscapeString(f.Name)))
 		}
 		writer.WriteString("</body></html>")
 		writer.Flush()
@@ -157,6 +189,24 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) error {
 
 const maxUploadSize = 5 * 1024 * 1024 // 5 MB
 
+// checkLock verifies the resource is not locked, or that a valid lock token is provided.
+// Returns nil if the operation can proceed, or an error if the resource is locked.
+func (h *Handler) checkLock(w http.ResponseWriter, r *http.Request) error {
+	h.lockMutex.Lock()
+	lock := h.locks[r.URL.Path]
+	h.lockMutex.Unlock()
+
+	if lock != nil && lock.ExpiresAt.After(time.Now()) {
+		token := r.Header.Get("If")
+		// Use exact token matching with angle brackets per RFC 4918 Section 10.4
+		if token == "" || !strings.Contains(token, "<"+lock.Token+">") {
+			http.Error(w, "Resource is locked", http.StatusLocked)
+			return errors.New("resource is locked")
+		}
+	}
+	return nil
+}
+
 func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) error {
 	// Check Content-Length header for early rejection
 	if r.ContentLength > maxUploadSize {
@@ -164,17 +214,8 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	h.lockMutex.Lock()
-	lock := h.locks[r.URL.Path]
-	h.lockMutex.Unlock()
-
-	// Check if the file is locked
-	if lock != nil && lock.ExpiresAt.After(time.Now()) {
-		token := r.Header.Get("If")
-		if token == "" || !strings.Contains(token, lock.Token) {
-			http.Error(w, "Resource is locked", http.StatusLocked)
-			return errors.New("resource is locked")
-		}
+	if err := h.checkLock(w, r); err != nil {
+		return err
 	}
 
 	file, err := h.fileSystem.Write(r.Context(), r.URL.Path)
@@ -210,7 +251,7 @@ type httpErrorable interface {
 func handlePrettyError(w http.ResponseWriter, err error, def string) error {
 	var herr httpErrorable
 	if errors.Is(err, os.ErrPermission) {
-		http.Error(w, "Unathorized", http.StatusForbidden)
+		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return nil
 	} else if errors.Is(err, os.ErrNotExist) {
 		http.Error(w, "File not found", http.StatusNotFound)
@@ -227,6 +268,9 @@ func handlePrettyError(w http.ResponseWriter, err error, def string) error {
 }
 
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) error {
+	if err := h.checkLock(w, r); err != nil {
+		return err
+	}
 	if err := h.fileSystem.Remove(r.Context(), r.URL.Path); err != nil {
 		return handlePrettyError(w, err, "Failed to delete file")
 	}
@@ -241,6 +285,10 @@ func (h *Handler) handleMkcol(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) handleMove(w http.ResponseWriter, r *http.Request) error {
+	if err := h.checkLock(w, r); err != nil {
+		return err
+	}
+
 	destination := r.Header.Get("Destination")
 	if destination == "" {
 		http.Error(w, "Destination header missing", http.StatusBadRequest)
@@ -318,20 +366,23 @@ func (h *Handler) handlePropfind(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	w.WriteHeader(http.StatusMultiStatus)
-
 	multiStatus := multistatus{
 		Xmlns:     "DAV:",
 		Responses: responses,
 	}
 
-	encoder := xml.NewEncoder(w)
+	// Buffer the XML response before writing headers to handle encoding errors properly
+	var buf bytes.Buffer
+	encoder := xml.NewEncoder(&buf)
 	encoder.Indent("", "  ")
 	if err := encoder.Encode(multiStatus); err != nil {
 		http.Error(w, "Failed to encode XML", http.StatusInternalServerError)
 		return juicemud.WithStack(err)
 	}
+
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.WriteHeader(http.StatusMultiStatus)
+	buf.WriteTo(w)
 
 	return nil
 }
