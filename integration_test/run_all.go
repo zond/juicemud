@@ -39,24 +39,27 @@ func RunAll(ts *TestServer) error {
 	// === Test 1: User creation and login ===
 	fmt.Println("Testing user creation and login...")
 
-	// Create user
-	tc, err := createUser(ts.SSHAddr(), "testuser", "testpass123")
-	if err != nil {
-		return fmt.Errorf("createUser: %w", err)
+	// Create user and verify initial state
+	if err := func() error {
+		tc, err := createUser(ts.SSHAddr(), "testuser", "testpass123")
+		if err != nil {
+			return fmt.Errorf("createUser: %w", err)
+		}
+		defer tc.Close()
+
+		if err := tc.sendLine("look"); err != nil {
+			return fmt.Errorf("look command: %w", err)
+		}
+		// Verify "look" command produces output containing the genesis room description
+		if output, ok := tc.waitForPrompt(2*time.Second); !ok {
+			return fmt.Errorf("look command did not complete: %q", output)
+		} else if !strings.Contains(output, "Black cosmos") {
+			return fmt.Errorf("look command did not show genesis room: %q", output)
+		}
+		return nil
+	}(); err != nil {
+		return err
 	}
-	if err := tc.sendLine("look"); err != nil {
-		tc.Close()
-		return fmt.Errorf("look command: %w", err)
-	}
-	// Verify "look" command produces output containing the genesis room description
-	if output, ok := tc.waitFor("\n> ", 2*time.Second); !ok {
-		tc.Close()
-		return fmt.Errorf("look command did not complete: %q", output)
-	} else if !strings.Contains(output, "Black cosmos") {
-		tc.Close()
-		return fmt.Errorf("look command did not show genesis room: %q", output)
-	}
-	tc.Close()
 
 	// Verify user was persisted
 	user, err := ts.Storage().LoadUser(ctx, "testuser")
@@ -76,31 +79,34 @@ func RunAll(ts *TestServer) error {
 		return fmt.Errorf("user object not in genesis: got %q", obj.GetLocation())
 	}
 
-	// Test reconnection
-	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
-	if err != nil {
-		return fmt.Errorf("loginUser: %w", err)
-	}
-	if err := tc.sendLine("look"); err != nil {
-		tc.Close()
-		return fmt.Errorf("look command on reconnect: %w", err)
-	}
-	if output, ok := tc.waitFor("\n> ", 2*time.Second); !ok {
-		tc.Close()
-		return fmt.Errorf("look command on reconnect did not complete: %q", output)
-	} else if !strings.Contains(output, "Black cosmos") {
-		tc.Close()
-		return fmt.Errorf("look command on reconnect did not show genesis room: %q", output)
-	}
-	tc.Close()
+	// Test reconnection - this specifically tests that login works after disconnect
+	if err := func() error {
+		tc, err := loginUser(ts.SSHAddr(), "testuser", "testpass123")
+		if err != nil {
+			return fmt.Errorf("loginUser: %w", err)
+		}
+		defer tc.Close()
 
-	// Verify same object
-	user2, err := ts.Storage().LoadUser(ctx, "testuser")
-	if err != nil {
-		return fmt.Errorf("user not found on reconnect: %w", err)
-	}
-	if user2.Object != user.Object {
-		return fmt.Errorf("user object changed: %s -> %s", user.Object, user2.Object)
+		if err := tc.sendLine("look"); err != nil {
+			return fmt.Errorf("look command on reconnect: %w", err)
+		}
+		if output, ok := tc.waitForPrompt(2*time.Second); !ok {
+			return fmt.Errorf("look command on reconnect did not complete: %q", output)
+		} else if !strings.Contains(output, "Black cosmos") {
+			return fmt.Errorf("look command on reconnect did not show genesis room: %q", output)
+		}
+
+		// Verify same object
+		user2, err := ts.Storage().LoadUser(ctx, "testuser")
+		if err != nil {
+			return fmt.Errorf("user not found on reconnect: %w", err)
+		}
+		if user2.Object != user.Object {
+			return fmt.Errorf("user object changed: %s -> %s", user.Object, user2.Object)
+		}
+		return nil
+	}(); err != nil {
+		return err
 	}
 
 	fmt.Println("  User creation and login: OK")
@@ -108,11 +114,21 @@ func RunAll(ts *TestServer) error {
 	// === Test 2: WebDAV file operations ===
 	fmt.Println("Testing WebDAV file operations...")
 
-	// Make testuser an owner for file system access
+	// Make testuser an owner and wizard for subsequent tests
 	user.Owner = true
 	if err := ts.Storage().StoreUser(ctx, user, true); err != nil {
 		return fmt.Errorf("failed to make testuser owner: %w", err)
 	}
+	if err := makeUserWizard(ts, "testuser"); err != nil {
+		return err
+	}
+
+	// Reconnect as wizard - wizard status is checked at login time
+	tc, err := loginUser(ts.SSHAddr(), "testuser", "testpass123")
+	if err != nil {
+		return fmt.Errorf("loginUser as wizard: %w", err)
+	}
+	defer tc.Close()
 
 	// Test WebDAV operations
 	dav := newWebDAVClient(ts.HTTPAddr(), "testuser", "testpass123")
@@ -152,11 +168,6 @@ setDescriptions([{
 	// === Test 3: Wizard commands ===
 	fmt.Println("Testing wizard commands...")
 
-	// Make testuser a wizard
-	if err := makeUserWizard(ts, "testuser"); err != nil {
-		return err
-	}
-
 	// Create a source file for objects
 	boxSource := `// A simple box
 setDescriptions([{
@@ -168,38 +179,34 @@ setDescriptions([{
 		return fmt.Errorf("failed to create /box.js: %w", err)
 	}
 
-	// Login as wizard to test wizard commands
-	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
-	if err != nil {
-		return fmt.Errorf("loginUser as wizard: %w", err)
-	}
-
-	// Create an object
+	// Create an object (user is already connected and is now a wizard)
 	if err := tc.sendLine("/create /box.js"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/create command: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create command did not complete")
+	}
 
 	// Poll for object creation
 	if _, found := ts.waitForSourceObject(ctx, "/box.js", 2*time.Second); !found {
-		tc.Close()
 		return fmt.Errorf("box object was not created")
 	}
 
 	// Test /inspect
 	if err := tc.sendLine("/inspect"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/inspect command: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/inspect command did not complete")
+	}
 
 	// Test /ls
 	if err := tc.sendLine("/ls /"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/ls command: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/ls command did not complete")
+	}
 
 	fmt.Println("  Wizard commands: OK")
 
@@ -222,95 +229,81 @@ setDescriptions([{
 }]);
 `
 	if err := dav.Put("/room1.js", room1Source); err != nil {
-		tc.Close()
 		return fmt.Errorf("failed to create /room1.js: %w", err)
 	}
 	if err := dav.Put("/room2.js", room2Source); err != nil {
-		tc.Close()
 		return fmt.Errorf("failed to create /room2.js: %w", err)
 	}
 
 	// Create rooms
 	if err := tc.sendLine("/create /room1.js"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/create room1: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create room1 did not complete")
+	}
 	if err := tc.sendLine("/create /room2.js"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/create room2: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create room2 did not complete")
+	}
 
 	// Poll for room creation
 	room1ID, found := ts.waitForSourceObject(ctx, "/room1.js", 2*time.Second)
 	if !found {
-		tc.Close()
 		return fmt.Errorf("room1 was not created")
 	}
 	if _, found := ts.waitForSourceObject(ctx, "/room2.js", 2*time.Second); !found {
-		tc.Close()
 		return fmt.Errorf("room2 was not created")
 	}
 
 	// Move into room1 using /enter
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", room1ID)); err != nil {
-		tc.Close()
 		return fmt.Errorf("/enter command: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter command did not complete")
+	}
 
 	// Poll for user to be in room1
 	if !ts.waitForObjectLocation(ctx, user.Object, room1ID, 2*time.Second) {
-		tc.Close()
 		return fmt.Errorf("user did not move to room1")
 	}
 
 	// Exit back out
 	if err := tc.sendLine("/exit"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/exit command: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/exit command did not complete")
+	}
 
 	// Poll for user to be back in genesis
 	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
-		tc.Close()
 		return fmt.Errorf("user did not return to genesis")
 	}
-
-	tc.Close()
 
 	fmt.Println("  Movement: OK")
 
 	// === Test 5: Look command ===
 	fmt.Println("Testing look command...")
 
-	// First verify look works with genesis (which already has proper descriptions)
-	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
-	if err != nil {
-		return fmt.Errorf("loginUser for look test: %w", err)
-	}
-
 	// Look at genesis - should show "Black cosmos" and the long description
 	if err := tc.sendLine("look"); err != nil {
-		tc.Close()
 		return fmt.Errorf("look in genesis: %w", err)
 	}
 
-	output, ok := tc.waitFor("\n> ", 2*time.Second)
+	output, ok := tc.waitForPrompt(2*time.Second)
 	if !ok {
-		tc.Close()
 		return fmt.Errorf("look in genesis did not complete: %q", output)
 	}
 	if !strings.Contains(output, "Black cosmos") {
-		tc.Close()
 		return fmt.Errorf("look did not show genesis room name: %q", output)
 	}
 
 	// Verify genesis long description is shown
 	if !strings.Contains(output, "darkness") {
-		tc.Close()
 		return fmt.Errorf("look did not show genesis long description: %q", output)
 	}
 
@@ -327,7 +320,6 @@ setExits([{
 }]);
 `
 	if err := dav.Put("/lookroom.js", lookRoomSource); err != nil {
-		tc.Close()
 		return fmt.Errorf("failed to create /lookroom.js: %w", err)
 	}
 
@@ -340,108 +332,113 @@ setDescriptions([{
 }]);
 `
 	if err := dav.Put("/book.js", bookSource); err != nil {
-		tc.Close()
 		return fmt.Errorf("failed to create /book.js: %w", err)
 	}
 
 	if err := tc.sendLine("/create /lookroom.js"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/create lookroom: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create lookroom did not complete")
+	}
 
 	lookRoomID, found := ts.waitForSourceObject(ctx, "/lookroom.js", 2*time.Second)
 	if !found {
-		tc.Close()
 		return fmt.Errorf("lookroom was not created")
 	}
 
 	if err := tc.sendLine("/create /book.js"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/create book: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create book did not complete")
+	}
 
 	bookID, found := ts.waitForSourceObject(ctx, "/book.js", 2*time.Second)
 	if !found {
-		tc.Close()
 		return fmt.Errorf("book was not created")
 	}
 
 	// Move the book into the look room
 	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", bookID, lookRoomID)); err != nil {
-		tc.Close()
 		return fmt.Errorf("/move book to lookroom: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/move book to lookroom did not complete")
+	}
 
 	// Enter the room using wizard command
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", lookRoomID)); err != nil {
-		tc.Close()
 		return fmt.Errorf("/enter lookroom: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter lookroom did not complete")
+	}
 
 	// Verify user is in the room
 	if !ts.waitForObjectLocation(ctx, user.Object, lookRoomID, 2*time.Second) {
-		tc.Close()
 		return fmt.Errorf("user did not move to lookroom")
 	}
 
 	// Now test the look command
 	if err := tc.sendLine("look"); err != nil {
-		tc.Close()
 		return fmt.Errorf("look command: %w", err)
 	}
 
 	// Verify look shows the room description
-	output, ok = tc.waitFor("\n> ", 2*time.Second)
+	output, ok = tc.waitForPrompt(2*time.Second)
 	if !ok {
-		tc.Close()
 		return fmt.Errorf("look in lookroom did not complete: %q", output)
 	}
 	if !strings.Contains(output, "Cozy Library") {
-		tc.Close()
 		return fmt.Errorf("look did not show room name: %q", output)
 	}
 
 	// Verify look shows the long description
 	if !strings.Contains(output, "ancient tomes") {
-		tc.Close()
 		return fmt.Errorf("look did not show long description: %q", output)
 	}
 
 	// Verify look shows the book in the room
 	if !strings.Contains(output, "dusty book") {
-		tc.Close()
 		return fmt.Errorf("look did not show book in room: %q", output)
 	}
 
 	// Verify look shows the exit
 	if !strings.Contains(output, "north") {
-		tc.Close()
 		return fmt.Errorf("look did not show exit 'north': %q", output)
 	}
 
 	// Test non-wizard movement: use the north exit to go back to genesis
 	if err := tc.sendLine("north"); err != nil {
-		tc.Close()
 		return fmt.Errorf("north command: %w", err)
 	}
-	tc.drain()
+	// Wait for prompt to confirm command completed
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("north command did not complete")
+	}
 
 	// Verify player moved back to genesis
 	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
-		tc.Close()
 		return fmt.Errorf("user did not move to genesis via 'north' command")
 	}
-
-	tc.Close()
 
 	fmt.Println("  Look command: OK")
 
 	// === Test 6: Bidirectional non-wizard movement ===
 	fmt.Println("Testing bidirectional movement...")
+
+	// Debug: verify look works before updating genesis.js
+	if err := tc.sendLine("look"); err != nil {
+		return fmt.Errorf("look before genesis update: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("look before genesis update did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Black cosmos") {
+		return fmt.Errorf("look before genesis update failed - not in genesis: %q", output)
+	}
 
 	// Update genesis to have an exit south to the lookroom
 	genesisSource := fmt.Sprintf(`// Genesis room - the starting location
@@ -459,112 +456,85 @@ setExits([{
 		return fmt.Errorf("failed to update /genesis.js: %w", err)
 	}
 
-	// Login and test bidirectional movement
-	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
-	if err != nil {
-		return fmt.Errorf("loginUser for bidirectional test: %w", err)
-	}
-
-	// Verify we're in genesis
+	// Verify we're in genesis (user is already connected, no need to reconnect)
 	if err := tc.sendLine("look"); err != nil {
-		tc.Close()
 		return fmt.Errorf("look in genesis: %w", err)
 	}
-	output, ok = tc.waitFor("\n> ", 2*time.Second)
+	output, ok = tc.waitForPrompt(2*time.Second)
 	if !ok {
-		tc.Close()
 		return fmt.Errorf("look in genesis did not complete: %q", output)
 	}
 	if !strings.Contains(output, "Black cosmos") {
-		tc.Close()
 		return fmt.Errorf("not in genesis: %q", output)
 	}
 
 	// Move south to lookroom using non-wizard movement
 	if err := tc.sendLine("south"); err != nil {
-		tc.Close()
 		return fmt.Errorf("south command: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("south command did not complete")
+	}
 
 	// Verify player moved to lookroom
 	if !ts.waitForObjectLocation(ctx, user.Object, lookRoomID, 2*time.Second) {
-		tc.Close()
 		return fmt.Errorf("user did not move to lookroom via 'south' command")
 	}
 
 	// Look to verify we're in lookroom
 	if err := tc.sendLine("look"); err != nil {
-		tc.Close()
 		return fmt.Errorf("look in lookroom: %w", err)
 	}
-	output, ok = tc.waitFor("\n> ", 2*time.Second)
+	output, ok = tc.waitForPrompt(2*time.Second)
 	if !ok {
-		tc.Close()
 		return fmt.Errorf("look in lookroom did not complete: %q", output)
 	}
 	if !strings.Contains(output, "Cozy Library") {
-		tc.Close()
 		return fmt.Errorf("not in Cozy Library after south: %q", output)
 	}
 
 	// Move north back to genesis
 	if err := tc.sendLine("north"); err != nil {
-		tc.Close()
 		return fmt.Errorf("north command back to genesis: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("north command back to genesis did not complete")
+	}
 
 	// Verify player moved back to genesis
 	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
-		tc.Close()
 		return fmt.Errorf("user did not move back to genesis via 'north' command")
 	}
-
-	tc.Close()
 
 	fmt.Println("  Bidirectional movement: OK")
 
 	// === Test 7: Scan command ===
 	fmt.Println("Testing scan command...")
 
-	// Login and test scan
-	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
-	if err != nil {
-		return fmt.Errorf("loginUser for scan test: %w", err)
-	}
-
 	// From genesis, scan should show genesis and the lookroom (via south exit)
 	if err := tc.sendLine("scan"); err != nil {
-		tc.Close()
 		return fmt.Errorf("scan command: %w", err)
 	}
 
-	output, ok = tc.waitFor("\n> ", 2*time.Second)
+	output, ok = tc.waitForPrompt(2*time.Second)
 	if !ok {
-		tc.Close()
 		return fmt.Errorf("scan command did not complete: %q", output)
 	}
 
 	// Verify scan shows current location (genesis)
 	if !strings.Contains(output, "Black cosmos") {
-		tc.Close()
 		return fmt.Errorf("scan did not show current location: %q", output)
 	}
 
 	// Verify scan shows neighboring room through exit
 	if !strings.Contains(output, "Via exit south") {
-		tc.Close()
 		return fmt.Errorf("scan did not show 'Via exit south': %q", output)
 	}
 
 	// Verify scan shows the neighboring room's name
 	if !strings.Contains(output, "Cozy Library") {
-		tc.Close()
 		return fmt.Errorf("scan did not show neighboring room 'Cozy Library': %q", output)
 	}
-
-	tc.Close()
 
 	fmt.Println("  Scan command: OK")
 
@@ -606,52 +576,43 @@ setDescriptions([{
 		return fmt.Errorf("failed to create /hidden_gem.js: %w", err)
 	}
 
-	// Login as wizard and create the test objects
-	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
-	if err != nil {
-		return fmt.Errorf("loginUser for challenge test: %w", err)
-	}
-
 	// Create the challenge room
 	if err := tc.sendLine("/create /challenge_room.js"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/create challenge_room: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create challenge_room did not complete")
+	}
 
 	challengeRoomID, found := ts.waitForSourceObject(ctx, "/challenge_room.js", 2*time.Second)
 	if !found {
-		tc.Close()
 		return fmt.Errorf("challenge_room was not created")
 	}
 
 	// Create the hidden gem
 	if err := tc.sendLine("/create /hidden_gem.js"); err != nil {
-		tc.Close()
 		return fmt.Errorf("/create hidden_gem: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create hidden_gem did not complete")
+	}
 
 	hiddenGemID, found := ts.waitForSourceObject(ctx, "/hidden_gem.js", 2*time.Second)
 	if !found {
-		tc.Close()
 		return fmt.Errorf("hidden_gem was not created")
 	}
 
 	// Move the gem into the challenge room
 	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", hiddenGemID, challengeRoomID)); err != nil {
-		tc.Close()
 		return fmt.Errorf("/move gem to challenge_room: %w", err)
 	}
 	// Wait for prompt to confirm command was processed
-	if _, ok := tc.waitFor("> ", 2*time.Second); !ok {
-		tc.Close()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
 		return fmt.Errorf("/move command did not complete")
 	}
 
 	// Wait for gem to be moved before entering room
 	if !ts.waitForObjectLocation(ctx, hiddenGemID, challengeRoomID, 3*time.Second) {
-		tc.Close()
 		// Debug: check where the gem actually is
 		gemObj, _ := ts.Storage().AccessObject(ctx, hiddenGemID, nil)
 		if gemObj != nil {
@@ -662,79 +623,134 @@ setDescriptions([{
 
 	// Enter the challenge room
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", challengeRoomID)); err != nil {
-		tc.Close()
 		return fmt.Errorf("/enter challenge_room: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter challenge_room did not complete")
+	}
 
 	// Verify user is in the challenge room
 	if !ts.waitForObjectLocation(ctx, user.Object, challengeRoomID, 3*time.Second) {
-		tc.Close()
 		return fmt.Errorf("user did not move to challenge_room")
 	}
 
 	// Test 1: Look should NOT show the hidden gem (user has no perception skill)
 	if err := tc.sendLine("look"); err != nil {
-		tc.Close()
 		return fmt.Errorf("look in challenge_room: %w", err)
 	}
 
-	output, ok = tc.waitFor("\n> ", 2*time.Second)
+	output, ok = tc.waitForPrompt(2*time.Second)
 	if !ok {
-		tc.Close()
 		return fmt.Errorf("look in challenge_room did not complete: %q", output)
 	}
 	if !strings.Contains(output, "Challenge Room") {
-		tc.Close()
 		return fmt.Errorf("look did not show challenge room: %q", output)
 	}
 	if strings.Contains(output, "hidden gem") {
-		tc.Close()
 		return fmt.Errorf("look should NOT show hidden gem without perception skill: %q", output)
 	}
 
 	// Test 2: Verify both exits are visible (no perception challenge on exit descriptions)
 	if !strings.Contains(output, "easy") {
-		tc.Close()
 		return fmt.Errorf("look did not show 'easy' exit: %q", output)
 	}
 	if !strings.Contains(output, "locked") {
-		tc.Close()
 		return fmt.Errorf("look did not show 'locked' exit: %q", output)
 	}
 
 	// Test 3: Try to use the locked exit (should fail - no strength skill)
 	if err := tc.sendLine("locked"); err != nil {
-		tc.Close()
 		return fmt.Errorf("locked exit command: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("locked exit command did not complete")
+	}
 
 	// Verify user is still in challenge room (movement failed)
 	obj, err = ts.Storage().AccessObject(ctx, user.Object, nil)
 	if err != nil {
-		tc.Close()
 		return fmt.Errorf("failed to access user object: %w", err)
 	}
 	if obj.GetLocation() != challengeRoomID {
-		tc.Close()
 		return fmt.Errorf("user should still be in challenge_room after failed exit, but is in %q", obj.GetLocation())
 	}
 
 	// Test 4: Use the easy exit (should succeed - no challenge)
 	if err := tc.sendLine("easy"); err != nil {
-		tc.Close()
 		return fmt.Errorf("easy exit command: %w", err)
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("easy exit command did not complete")
+	}
 
 	// Verify user moved to genesis
 	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
-		tc.Close()
 		return fmt.Errorf("user did not move to genesis via 'easy' exit")
 	}
 
-	tc.Close()
+	// Test 5: Give user skills via a "train" command and verify challenges now pass
+	// Update user.js to register a "train" command that grants skills
+	// The game will reload the source when the command is called since mod time changed
+	trainableUserSource := `// User object with trainable skills
+addCallback('connected', ['emit'], (msg) => {});
+addCallback('train', ['command'], (msg) => {
+	setSkills({
+		perception: {Practical: 200, Theoretical: 200},
+		strength: {Practical: 200, Theoretical: 200},
+	});
+});
+`
+	if err := dav.Put("/user.js", trainableUserSource); err != nil {
+		return fmt.Errorf("failed to update /user.js with train command: %w", err)
+	}
+
+	// Use the "train" command to gain skills (game reloads source automatically)
+	if err := tc.sendLine("train"); err != nil {
+		return fmt.Errorf("train command: %w", err)
+	}
+	// Wait for prompt to confirm command was processed
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("train command did not complete")
+	}
+
+	// Enter the challenge room again
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", challengeRoomID)); err != nil {
+		return fmt.Errorf("/enter challenge_room with skills: %w", err)
+	}
+	// Wait for prompt to confirm command was processed
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter challenge_room with skills did not complete")
+	}
+
+	if !ts.waitForObjectLocation(ctx, user.Object, challengeRoomID, 2*time.Second) {
+		return fmt.Errorf("user did not move to challenge_room for skilled test")
+	}
+
+	// Test 5a: Look should now show the hidden gem (user has perception skill)
+	if err := tc.sendLine("look"); err != nil {
+		return fmt.Errorf("look in challenge_room with skills: %w", err)
+	}
+
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("look in challenge_room with skills did not complete: %q", output)
+	}
+	if !strings.Contains(output, "hidden gem") {
+		return fmt.Errorf("look SHOULD show hidden gem with perception skill: %q", output)
+	}
+
+	// Test 5b: Use the locked exit (should succeed now - user has strength skill)
+	if err := tc.sendLine("locked"); err != nil {
+		return fmt.Errorf("locked exit command with skills: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("locked exit command with skills did not complete")
+	}
+
+	// Verify user moved to genesis via the locked exit
+	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
+		return fmt.Errorf("user should have moved to genesis via 'locked' exit with strength skill")
+	}
 
 	fmt.Println("  Challenge system: OK")
 

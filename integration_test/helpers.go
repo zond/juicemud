@@ -24,32 +24,50 @@ func createUser(sshAddr, username, password string) (*terminalClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(5*time.Second); !ok {
+		tc.Close()
+		return nil, fmt.Errorf("did not get initial prompt")
+	}
 	if err := tc.sendLine("create user"); err != nil {
 		tc.Close()
 		return nil, err
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		tc.Close()
+		return nil, fmt.Errorf("create user prompt did not appear")
+	}
 	if err := tc.sendLine(username); err != nil {
 		tc.Close()
 		return nil, err
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		tc.Close()
+		return nil, fmt.Errorf("username prompt did not appear")
+	}
 	if err := tc.sendLine(password); err != nil {
 		tc.Close()
 		return nil, err
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		tc.Close()
+		return nil, fmt.Errorf("password prompt did not appear")
+	}
 	if err := tc.sendLine(password); err != nil {
 		tc.Close()
 		return nil, err
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		tc.Close()
+		return nil, fmt.Errorf("confirm password prompt did not appear")
+	}
 	if err := tc.sendLine("y"); err != nil {
 		tc.Close()
 		return nil, err
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(5*time.Second); !ok {
+		tc.Close()
+		return nil, fmt.Errorf("final prompt after user creation did not appear")
+	}
 	return tc, nil
 }
 
@@ -76,23 +94,32 @@ func loginUser(sshAddr, username, password string) (*terminalClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(5*time.Second); !ok {
+		tc.Close()
+		return nil, fmt.Errorf("did not get initial prompt")
+	}
 	if err := tc.sendLine("login user"); err != nil {
 		tc.Close()
 		return nil, err
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		tc.Close()
+		return nil, fmt.Errorf("login user prompt did not appear")
+	}
 	if err := tc.sendLine(username); err != nil {
 		tc.Close()
 		return nil, err
 	}
-	tc.drain()
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		tc.Close()
+		return nil, fmt.Errorf("username prompt did not appear")
+	}
 	if err := tc.sendLine(password); err != nil {
 		tc.Close()
 		return nil, err
 	}
 	// Wait for the prompt to appear, indicating the server is ready for commands
-	if _, ok := tc.waitFor(">", 5*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(5*time.Second); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("login did not complete (no prompt)")
 	}

@@ -390,7 +390,16 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 
 // run executes an object's JavaScript source with the given caller event.
 // Loads source, sets up callbacks, runs in V8, and saves resulting state.
-// Returns true if a callback was executed, false if skipped (no matching callback).
+//
+// Returns true if a JavaScript callback was actually invoked for the event,
+// false otherwise. This includes cases where:
+//   - No caller was provided (source refresh only)
+//   - The caller's event type has no registered callback
+//   - The caller's tag doesn't match any registered tag for that event
+//
+// Note: Even if a callback returns null or undefined, the return value is true
+// because a callback was still executed. This distinction matters for command
+// handling where we need to know if the event was "handled" by JavaScript.
 //
 // TODO: Consider adding events for container objects when content changes:
 // - "received": notify container when it gains content
@@ -450,13 +459,14 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		}
 		return false, juicemud.WithStack(err)
 	}
+
 	object.Lock()
 	defer object.Unlock()
 
 	object.Unsafe.State = res.State
 	object.Unsafe.Callbacks = res.Callbacks
 	object.Unsafe.SourceModTime = modTime
-	return true, nil
+	return res.Value != nil, nil
 }
 
 func (g *Game) loadRun(ctx context.Context, id string, caller structs.Caller) (*structs.Object, bool, error) {

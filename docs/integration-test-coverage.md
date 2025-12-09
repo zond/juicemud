@@ -22,9 +22,10 @@ This document tracks what functionality is covered by the integration tests and 
 | `setExits()` | Used in lookroom.js |
 | `addCallback('connected')` | Implicitly via user.js |
 | `scan` | Verified in scan command test |
-| Challenge system | Hidden gem with perception challenge |
-| `setSkills()` / `getSkills()` | Used in challenge test |
+| Challenge system | Hidden gem with perception challenge, skill-gated exit |
+| `setSkills()` / `getSkills()` | Used in challenge test via "train" command |
 | `setLearning()` / `getLearning()` | Enabled in challenge test |
+| Custom command handlers | "train" command registered via `addCallback` |
 
 ## Not Tested
 
@@ -61,14 +62,12 @@ This document tracks what functionality is covered by the integration tests and 
 |-------|-------------|
 | `movement` | Notifies when objects move |
 | `created` | Fires on `/create` |
-| Custom commands | Objects can register command handlers |
 | Custom actions | Room/sibling action handlers |
 
 ### Skill/Challenge System
 
 | Feature | Description |
 |---------|-------------|
-| Exit use challenges | Locked/skill-gated exits |
 | Skill decay/forgetting | Skills decay over time |
 
 ### Edge Cases
@@ -86,7 +85,6 @@ This document tracks what functionality is covered by the integration tests and 
 
 1. **`emit()` / `setTimeout()`** - Core JS inter-object communication
 2. **`/remove` command** - Essential world management
-3. **Custom command handlers** - Fundamental to extensible gameplay
 
 ### Medium Priority (administrative/debugging)
 
@@ -96,7 +94,6 @@ This document tracks what functionality is covered by the integration tests and 
 
 ### Lower Priority (advanced features)
 
-7. **Exit use challenges** - Skill-gated exits
-8. **Skill decay** - Skills decay over time without use
-9. **`/inspect` output validation** - Nice to have
-10. **Edge case error handling** - Defensive tests
+7. **Skill decay** - Skills decay over time without use
+8. **`/inspect` output validation** - Nice to have
+9. **Edge case error handling** - Defensive tests

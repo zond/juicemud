@@ -72,7 +72,7 @@ type Target struct {
 type Result struct {
 	State     string                     // JSON state to persist for next run
 	Callbacks map[string]map[string]bool // event type -> set of tags the script wants to handle
-	Value     string                     // JSON return value from callback invocation
+	Value     *string                    // JSON return value from callback invocation, nil if no callback was invoked
 }
 
 // RunContext provides the execution environment for a single JavaScript run.
@@ -365,13 +365,15 @@ var (
 )
 
 // collectResult extracts the final state and return value from the V8 context.
+// A non-nil value parameter indicates a callback was actually invoked (as opposed
+// to just running the source code for initialization/refresh).
 func (rc *RunContext) collectResult(value *v8go.Value) (*Result, error) {
-	rc.r.Value = "{}"
-	if value != nil && !value.IsNull() {
-		var err error
-		if rc.r.Value, err = v8go.JSONStringify(rc.m.vctx, value); err != nil {
+	if value != nil {
+		str, err := v8go.JSONStringify(rc.m.vctx, value)
+		if err != nil {
 			return nil, juicemud.WithStack(err)
 		}
+		rc.r.Value = &str
 	}
 	stateValue, err := rc.m.vctx.Global().Get(stateName)
 	if err != nil {

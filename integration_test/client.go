@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	cryptossh "golang.org/x/crypto/ssh"
 )
+
+// debugSSH enables verbose SSH output when INTEGRATION_DEBUG_SSH=1
+var debugSSH = os.Getenv("INTEGRATION_DEBUG_SSH") == "1"
 
 // terminalClient wraps an SSH session for testing.
 type terminalClient struct {
@@ -87,6 +91,9 @@ func newTerminalClient(addr string) (*terminalClient, error) {
 }
 
 func (tc *terminalClient) sendLine(s string) error {
+	if debugSSH {
+		fmt.Printf("[SSH DEBUG] sending: %q\n", s)
+	}
 	if _, err := tc.stdin.Write([]byte(s + "\r")); err != nil {
 		return fmt.Errorf("write failed: %w", err)
 	}
@@ -129,22 +136,26 @@ func (tc *terminalClient) readUntil(timeout time.Duration, match func(string) bo
 		select {
 		case r := <-tc.readCh:
 			if r.err != nil {
+				if debugSSH {
+					fmt.Printf("[SSH DEBUG] read error: %v\n", r.err)
+				}
 				return result.String()
+			}
+			if debugSSH {
+				fmt.Printf("[SSH DEBUG] received: %q\n", string(r.data))
 			}
 			result.Write(r.data)
 			if match != nil && match(result.String()) {
 				return result.String()
 			}
 		case <-time.After(remaining):
+			if debugSSH {
+				fmt.Printf("[SSH DEBUG] timeout waiting, got so far: %q\n", result.String())
+			}
 			return result.String()
 		}
 	}
 	return result.String()
-}
-
-// drain reads and discards output for a short time.
-func (tc *terminalClient) drain() string {
-	return tc.readUntil(200*time.Millisecond, nil)
 }
 
 // waitFor reads until the expected string appears or timeout.
@@ -153,6 +164,12 @@ func (tc *terminalClient) waitFor(expected string, timeout time.Duration) (strin
 		return strings.Contains(s, expected)
 	})
 	return output, strings.Contains(output, expected)
+}
+
+// waitForPrompt waits for the command prompt to appear, indicating the server is ready for input.
+// Returns all output received up to and including the prompt.
+func (tc *terminalClient) waitForPrompt(timeout time.Duration) (string, bool) {
+	return tc.waitFor("\n> ", timeout)
 }
 
 func (tc *terminalClient) Close() {

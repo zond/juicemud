@@ -133,6 +133,77 @@ addCallback("test2", ["x"], (arg) => {
 	}
 }
 
+func TestCallbackInvoked(t *testing.T) {
+	ctx := context.Background()
+	target := Target{
+		Source: `
+addCallback("returnsValue", [], (arg) => {
+  return {result: "hello"};
+});
+addCallback("returnsNull", [], (arg) => {
+  return null;
+});
+addCallback("returnsUndefined", [], (arg) => {
+  // implicit undefined return
+});
+`,
+		Origin:    "TestCallbackInvoked",
+		State:     "{}",
+		Callbacks: map[string]func(*RunContext, *v8go.FunctionCallbackInfo) *v8go.Value{},
+	}
+
+	// Test 1: No caller - should not invoke any callback
+	res, err := target.Run(ctx, nil, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Value != nil {
+		t.Errorf("expected Value to be nil when no caller, got %q", *res.Value)
+	}
+
+	// Test 2: Caller with non-matching event - should not invoke any callback
+	res, err = target.Run(ctx, &structs.Call{Name: "nonexistent", Message: "{}"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Value != nil {
+		t.Errorf("expected Value to be nil for non-matching event, got %q", *res.Value)
+	}
+
+	// Test 3: Caller with matching event that returns a value
+	res, err = target.Run(ctx, &structs.Call{Name: "returnsValue", Message: "{}"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Value == nil {
+		t.Error("expected Value to be non-nil when callback returns a value")
+	} else if *res.Value != `{"result":"hello"}` {
+		t.Errorf("expected Value to be the returned object, got %q", *res.Value)
+	}
+
+	// Test 4: Caller with matching event that returns null
+	res, err = target.Run(ctx, &structs.Call{Name: "returnsNull", Message: "{}"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Value == nil {
+		t.Error("expected Value to be non-nil when callback returns null (callback was still invoked)")
+	} else if *res.Value != "null" {
+		t.Errorf("expected Value to be \"null\", got %q", *res.Value)
+	}
+
+	// Test 5: Caller with matching event that returns undefined
+	res, err = target.Run(ctx, &structs.Call{Name: "returnsUndefined", Message: "{}"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Value == nil {
+		t.Error("expected Value to be non-nil when callback returns undefined (callback was still invoked)")
+	} else if *res.Value != "undefined" {
+		t.Errorf("expected Value to be \"undefined\", got %q", *res.Value)
+	}
+}
+
 func BenchmarkV8(b *testing.B) {
 	b.StopTimer()
 	iso := v8go.NewIsolate()
