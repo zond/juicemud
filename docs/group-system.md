@@ -1,16 +1,23 @@
 # Group System
 
-> **Design Document**: This describes the proposed group permission system. The current
-> implementation only has basic group membership. The following features need to be added:
-> - `Supergroup` field on the Group struct
+> **Design Document**: This describes the group permission system. Implementation status:
+>
+> **Completed:**
+> - ✅ `Supergroup` field on the Group struct
+> - ✅ `OwnerGroup` index for efficient orphan checks
+> - ✅ Fix `loadGroupByName("")` to return error instead of zero-value Group
+> - ✅ Group name validation (`validGroupName`)
+> - ✅ Cycle prevention (`detectCycle`)
+> - ✅ OwnerGroup validation (`validateGroup`)
+> - ✅ Query helpers: `LoadGroup`, `ListGroups`, `GroupMembers`
+> - ✅ Comprehensive semantics tests
+>
+> **In Progress:**
+> - 🔄 `CreateGroup`, `DeleteGroup`, `EditGroup*`, `RemoveUserFromGroup` storage functions
+>
+> **Todo:**
 > - Commands: `/mkgroup`, `/rmgroup`, `/adduser`, `/rmuser`, `/editgroup`, `/listgroups`, `/members`, `/checkperm`
-> - `RemoveUserFromGroup` storage function
-> - OwnerGroup-based permission checks
-> - Orphan prevention (can't delete groups that are referenced)
-> - OwnerGroup validation (must reference existing group or be 0)
-> - Cycle prevention
-> - Group name validation
-> - Fix `loadGroupByName("")` to return error instead of zero-value Group
+> - Integration tests via SSH
 
 This document describes the group permission system used for access control in juicemud.
 
