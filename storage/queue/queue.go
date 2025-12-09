@@ -19,6 +19,7 @@ type Queue struct {
 	tree      *dbm.TypeTree[structs.Event, *structs.Event]
 	cond      *sync.Cond
 	closed    bool
+	started   bool
 	nextEvent *structs.Event
 	offset    structs.Timestamp
 }
@@ -61,7 +62,10 @@ func (q *Queue) Close() error {
 	defer q.cond.L.Unlock()
 	q.closed = true
 	q.cond.Broadcast()
-	q.cond.Wait()
+	// Only wait for Start() to exit if it was actually called
+	if q.started {
+		q.cond.Wait()
+	}
 	return nil
 }
 
@@ -106,6 +110,7 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 	}
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
+	q.started = true
 	for !q.closed || q.nextEvent != nil {
 		for q.nextEvent != nil && structs.Timestamp(q.nextEvent.At) <= q.Now() {
 			handler(ctx, q.nextEvent)
