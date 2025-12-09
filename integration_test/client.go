@@ -20,6 +20,7 @@ type terminalClient struct {
 	stdin   io.WriteCloser
 	stdout  io.Reader
 	readCh  chan readResult
+	done    chan struct{}
 }
 
 // readResult holds data from the background reader goroutine.
@@ -79,6 +80,7 @@ func newTerminalClient(addr string) (*terminalClient, error) {
 		session: session,
 		stdin:   stdin,
 		stdout:  stdout,
+		done:    make(chan struct{}),
 	}
 	tc.startReader()
 	return tc, nil
@@ -98,13 +100,14 @@ func (tc *terminalClient) startReader() {
 		buf := make([]byte, 1024)
 		for {
 			n, err := tc.stdout.Read(buf)
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf[:n])
-				tc.readCh <- readResult{data: data}
+			data := make([]byte, n)
+			copy(data, buf[:n])
+			select {
+			case tc.readCh <- readResult{data: data, err: err}:
+			case <-tc.done:
+				return
 			}
 			if err != nil {
-				tc.readCh <- readResult{err: err}
 				return
 			}
 		}
@@ -153,6 +156,7 @@ func (tc *terminalClient) waitFor(expected string, timeout time.Duration) (strin
 }
 
 func (tc *terminalClient) Close() {
+	close(tc.done)
 	tc.stdin.Close()
 	tc.session.Close()
 	tc.conn.Close()
