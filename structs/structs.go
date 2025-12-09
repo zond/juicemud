@@ -86,6 +86,7 @@ type Snapshottable[T any] interface {
 	UnsafeShallowCopy() *T
 }
 
+
 func Clone[T any, S Serializable[T]](t *T) (*T, error) {
 	s := S(t)
 	b := make([]byte, s.Size())
@@ -138,20 +139,18 @@ func (o *Object) HasCallback(name string, tag string) bool {
 	return found
 }
 
-// DressObject initializes nil map fields on an object to empty maps.
-func DressObject(obj *Object) *Object {
-	obj.Lock()
-	defer obj.Unlock()
-	if obj.Unsafe.Callbacks == nil {
-		obj.Unsafe.Callbacks = map[string]map[string]bool{}
+// PostUnmarshal initializes nil map fields on an ObjectDO to empty maps.
+// Called automatically by Object.Unmarshal via PostUnmarshaler interface.
+func (o *ObjectDO) PostUnmarshal() {
+	if o.Callbacks == nil {
+		o.Callbacks = map[string]map[string]bool{}
 	}
-	if obj.Unsafe.Content == nil {
-		obj.Unsafe.Content = map[string]bool{}
+	if o.Content == nil {
+		o.Content = map[string]bool{}
 	}
-	if obj.Unsafe.Skills == nil {
-		obj.Unsafe.Skills = map[string]Skill{}
+	if o.Skills == nil {
+		o.Skills = map[string]Skill{}
 	}
-	return obj
 }
 
 func MakeObject(ctx context.Context) (*Object, error) {
@@ -159,11 +158,13 @@ func MakeObject(ctx context.Context) (*Object, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	return DressObject(&Object{
+	obj := &Object{
 		Unsafe: &ObjectDO{
 			Id: newID,
 		},
-	}), nil
+	}
+	obj.Unsafe.PostUnmarshal()
+	return obj, nil
 }
 
 // CreateKey generates a unique, sortable key combining timestamp and counter.
@@ -185,13 +186,15 @@ func (c *Challenge) Check(challenger *Object, targetID string) float64 {
 	skill := challenger.Unsafe.Skills[c.Skill]
 	skill.Name = c.Skill
 
+	// Use Unsafe.Learning directly since we already hold the lock
+	// (calling GetLearning() would deadlock - RWMutex is not reentrant)
 	result := skillUse{
 		skill:     &skill,
 		user:      challenger.Unsafe.Id,
 		challenge: float64(c.Level),
 		at:        time.Now(),
 		target:    targetID,
-	}.check(challenger.GetLearning())
+	}.check(challenger.Unsafe.Learning)
 
 	challenger.Unsafe.Skills[c.Skill] = skill
 

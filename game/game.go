@@ -124,7 +124,9 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		}
 	}
 	for _, obj := range initialObjects() {
-		if err := s.UNSAFEEnsureObject(ctx, structs.DressObject(&structs.Object{Unsafe: obj})); err != nil {
+		o := &structs.Object{Unsafe: obj}
+		o.Unsafe.PostUnmarshal()
+		if err := s.UNSAFEEnsureObject(ctx, o); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}

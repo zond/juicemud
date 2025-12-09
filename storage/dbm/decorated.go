@@ -6,6 +6,9 @@ import (
 	"sync"
 )
 
+type PostUnmarshaler interface {
+	PostUnmarshal()
+}
 type PostUnlockLive func(*Live)
 
 func (f PostUnlockLive) call(v *Live) {
@@ -55,7 +58,13 @@ func (v *Live) Unmarshal(b []byte) error {
 	v.Lock()
 	defer v.Unlock()
 	v.Unsafe = new(LiveDO)
-	return v.Unsafe.Unmarshal(b)
+	if err := v.Unsafe.Unmarshal(b); err != nil {
+		return err
+	}
+	if pu, ok := any(v.Unsafe).(PostUnmarshaler); ok {
+		pu.PostUnmarshal()
+	}
+	return nil
 }
 func (v *Live) SetPostUnlock(p func(*Live)) {
 	v.PostUnlock = p

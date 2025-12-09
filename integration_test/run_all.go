@@ -525,5 +525,218 @@ setExits([{
 
 	fmt.Println("  Bidirectional movement: OK")
 
+	// === Test 7: Scan command ===
+	fmt.Println("Testing scan command...")
+
+	// Login and test scan
+	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
+	if err != nil {
+		return fmt.Errorf("loginUser for scan test: %w", err)
+	}
+
+	// From genesis, scan should show genesis and the lookroom (via south exit)
+	if err := tc.sendLine("scan"); err != nil {
+		tc.Close()
+		return fmt.Errorf("scan command: %w", err)
+	}
+
+	output, ok = tc.waitFor("\n> ", 2*time.Second)
+	if !ok {
+		tc.Close()
+		return fmt.Errorf("scan command did not complete: %q", output)
+	}
+
+	// Verify scan shows current location (genesis)
+	if !strings.Contains(output, "Black cosmos") {
+		tc.Close()
+		return fmt.Errorf("scan did not show current location: %q", output)
+	}
+
+	// Verify scan shows neighboring room through exit
+	if !strings.Contains(output, "Via exit south") {
+		tc.Close()
+		return fmt.Errorf("scan did not show 'Via exit south': %q", output)
+	}
+
+	// Verify scan shows the neighboring room's name
+	if !strings.Contains(output, "Cozy Library") {
+		tc.Close()
+		return fmt.Errorf("scan did not show neighboring room 'Cozy Library': %q", output)
+	}
+
+	tc.Close()
+
+	fmt.Println("  Scan command: OK")
+
+	// === Test 8: Challenge system ===
+	fmt.Println("Testing challenge system...")
+
+	// Create a room with a hidden object and a skill-gated exit
+	challengeRoomSource := `// Challenge test room
+setDescriptions([{
+	Short: 'Challenge Room',
+	Unique: true,
+	Long: 'A room for testing the challenge system.',
+}]);
+setExits([
+	{
+		Descriptions: [{Short: 'easy'}],
+		Destination: 'genesis',
+	},
+	{
+		Descriptions: [{Short: 'locked'}],
+		Destination: 'genesis',
+		UseChallenges: [{Skill: 'strength', Level: 100}],
+	},
+]);
+`
+	if err := dav.Put("/challenge_room.js", challengeRoomSource); err != nil {
+		return fmt.Errorf("failed to create /challenge_room.js: %w", err)
+	}
+
+	// Create a hidden gem that requires high perception to see
+	hiddenGemSource := `// A hidden gem
+setDescriptions([{
+	Short: 'hidden gem',
+	Long: 'A sparkling gem hidden in the shadows.',
+	Challenges: [{Skill: 'perception', Level: 100}],
+}]);
+`
+	if err := dav.Put("/hidden_gem.js", hiddenGemSource); err != nil {
+		return fmt.Errorf("failed to create /hidden_gem.js: %w", err)
+	}
+
+	// Login as wizard and create the test objects
+	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
+	if err != nil {
+		return fmt.Errorf("loginUser for challenge test: %w", err)
+	}
+
+	// Create the challenge room
+	if err := tc.sendLine("/create /challenge_room.js"); err != nil {
+		tc.Close()
+		return fmt.Errorf("/create challenge_room: %w", err)
+	}
+	tc.drain()
+
+	challengeRoomID, found := ts.waitForSourceObject(ctx, "/challenge_room.js", 2*time.Second)
+	if !found {
+		tc.Close()
+		return fmt.Errorf("challenge_room was not created")
+	}
+
+	// Create the hidden gem
+	if err := tc.sendLine("/create /hidden_gem.js"); err != nil {
+		tc.Close()
+		return fmt.Errorf("/create hidden_gem: %w", err)
+	}
+	tc.drain()
+
+	hiddenGemID, found := ts.waitForSourceObject(ctx, "/hidden_gem.js", 2*time.Second)
+	if !found {
+		tc.Close()
+		return fmt.Errorf("hidden_gem was not created")
+	}
+
+	// Move the gem into the challenge room
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", hiddenGemID, challengeRoomID)); err != nil {
+		tc.Close()
+		return fmt.Errorf("/move gem to challenge_room: %w", err)
+	}
+	// Wait for prompt to confirm command was processed
+	if _, ok := tc.waitFor("> ", 2*time.Second); !ok {
+		tc.Close()
+		return fmt.Errorf("/move command did not complete")
+	}
+
+	// Wait for gem to be moved before entering room
+	if !ts.waitForObjectLocation(ctx, hiddenGemID, challengeRoomID, 3*time.Second) {
+		tc.Close()
+		// Debug: check where the gem actually is
+		gemObj, _ := ts.Storage().AccessObject(ctx, hiddenGemID, nil)
+		if gemObj != nil {
+			return fmt.Errorf("hidden gem did not move to challenge_room, it is in %q", gemObj.GetLocation())
+		}
+		return fmt.Errorf("hidden gem did not move to challenge_room (gem not found)")
+	}
+
+	// Enter the challenge room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", challengeRoomID)); err != nil {
+		tc.Close()
+		return fmt.Errorf("/enter challenge_room: %w", err)
+	}
+	tc.drain()
+
+	// Verify user is in the challenge room
+	if !ts.waitForObjectLocation(ctx, user.Object, challengeRoomID, 3*time.Second) {
+		tc.Close()
+		return fmt.Errorf("user did not move to challenge_room")
+	}
+
+	// Test 1: Look should NOT show the hidden gem (user has no perception skill)
+	if err := tc.sendLine("look"); err != nil {
+		tc.Close()
+		return fmt.Errorf("look in challenge_room: %w", err)
+	}
+
+	output, ok = tc.waitFor("\n> ", 2*time.Second)
+	if !ok {
+		tc.Close()
+		return fmt.Errorf("look in challenge_room did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Challenge Room") {
+		tc.Close()
+		return fmt.Errorf("look did not show challenge room: %q", output)
+	}
+	if strings.Contains(output, "hidden gem") {
+		tc.Close()
+		return fmt.Errorf("look should NOT show hidden gem without perception skill: %q", output)
+	}
+
+	// Test 2: Verify both exits are visible (no perception challenge on exit descriptions)
+	if !strings.Contains(output, "easy") {
+		tc.Close()
+		return fmt.Errorf("look did not show 'easy' exit: %q", output)
+	}
+	if !strings.Contains(output, "locked") {
+		tc.Close()
+		return fmt.Errorf("look did not show 'locked' exit: %q", output)
+	}
+
+	// Test 3: Try to use the locked exit (should fail - no strength skill)
+	if err := tc.sendLine("locked"); err != nil {
+		tc.Close()
+		return fmt.Errorf("locked exit command: %w", err)
+	}
+	tc.drain()
+
+	// Verify user is still in challenge room (movement failed)
+	obj, err = ts.Storage().AccessObject(ctx, user.Object, nil)
+	if err != nil {
+		tc.Close()
+		return fmt.Errorf("failed to access user object: %w", err)
+	}
+	if obj.GetLocation() != challengeRoomID {
+		tc.Close()
+		return fmt.Errorf("user should still be in challenge_room after failed exit, but is in %q", obj.GetLocation())
+	}
+
+	// Test 4: Use the easy exit (should succeed - no challenge)
+	if err := tc.sendLine("easy"); err != nil {
+		tc.Close()
+		return fmt.Errorf("easy exit command: %w", err)
+	}
+	tc.drain()
+
+	// Verify user moved to genesis
+	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
+		tc.Close()
+		return fmt.Errorf("user did not move to genesis via 'easy' exit")
+	}
+
+	tc.Close()
+
+	fmt.Println("  Challenge system: OK")
+
 	return nil
 }
