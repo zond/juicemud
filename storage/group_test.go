@@ -458,6 +458,102 @@ func TestRemoveUserFromGroup_NonOwnerGroupMemberCannotRemove(t *testing.T) {
 	}
 }
 
+// === AddUserToGroup Permission Tests ===
+
+func TestAddUserToGroup_OwnerCanAdd(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	owner := createTestUser(t, s, "owner", true)
+	alice := createTestUser(t, s, "alice", false)
+
+	createTestGroup(t, s, "wizards", 0, false)
+
+	ctx := userContext(owner)
+	err := s.AddUserToGroup(ctx, alice, "wizards")
+	if err != nil {
+		t.Fatalf("Owner should be able to add user to group: %v", err)
+	}
+
+	members, err := s.GroupMembers(ctx, "wizards")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range members {
+		if m.Name == "alice" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("Alice should be in wizards")
+	}
+}
+
+func TestAddUserToGroup_OwnerGroupMemberCanAdd(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	// admins owns wizards
+	admins := createTestGroup(t, s, "admins", 0, false)
+	createTestGroup(t, s, "wizards", admins.Id, false)
+
+	alice := createTestUser(t, s, "alice", false)
+	bob := createTestUser(t, s, "bob", false)
+
+	// Alice is admin
+	if err := s.AddUserToGroup(juicemud.MakeMainContext(context.Background()), alice, "admins"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := userContext(alice)
+	err := s.AddUserToGroup(ctx, bob, "wizards")
+	if err != nil {
+		t.Fatalf("OwnerGroup member should be able to add user: %v", err)
+	}
+}
+
+func TestAddUserToGroup_NonOwnerGroupMemberCannotAdd(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	createTestGroup(t, s, "wizards", 0, false)
+
+	alice := createTestUser(t, s, "alice", false)
+	bob := createTestUser(t, s, "bob", false)
+
+	// Alice is a wizard, but wizards has OwnerGroup=0 (Owner-only)
+	if err := s.AddUserToGroup(juicemud.MakeMainContext(context.Background()), alice, "wizards"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := userContext(alice)
+	err := s.AddUserToGroup(ctx, bob, "wizards")
+	if err == nil {
+		t.Fatal("Non-OwnerGroup member should NOT be able to add users")
+	}
+}
+
+func TestAddUserToGroup_NotInOwnerGroupCannotAdd(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	// admins owns wizards
+	admins := createTestGroup(t, s, "admins", 0, false)
+	createTestGroup(t, s, "wizards", admins.Id, false)
+
+	alice := createTestUser(t, s, "alice", false)
+	bob := createTestUser(t, s, "bob", false)
+
+	// Alice is NOT in admins
+	ctx := userContext(alice)
+	err := s.AddUserToGroup(ctx, bob, "wizards")
+	if err == nil {
+		t.Fatal("User not in OwnerGroup should NOT be able to add users")
+	}
+}
+
 // === Group Editing Tests ===
 
 func TestEditGroupName_OwnerGroupMemberCanRename(t *testing.T) {
@@ -942,5 +1038,243 @@ func TestEditGroupSupergroup_OwnerCanModifyAnyGroup(t *testing.T) {
 	}
 	if !g.Supergroup {
 		t.Error("Supergroup should be true")
+	}
+}
+
+// === Additional Permission Tests ===
+
+func TestEditGroupName_NonOwnerGroupMemberCannotRename(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	// admins owns wizards, alice is NOT in admins
+	admins := createTestGroup(t, s, "admins", 0, false)
+	createTestGroup(t, s, "wizards", admins.Id, false)
+
+	alice := createTestUser(t, s, "alice", false)
+	// Alice is in wizards but NOT in admins (the OwnerGroup)
+	if err := s.AddUserToGroup(juicemud.MakeMainContext(context.Background()), alice, "wizards"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := userContext(alice)
+	err := s.EditGroupName(ctx, "wizards", "mages")
+	if err == nil {
+		t.Fatal("Non-OwnerGroup member should NOT be able to rename group")
+	}
+}
+
+func TestRemoveUserFromGroup_NotInOwnerGroupCannotRemove(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	// admins owns wizards
+	admins := createTestGroup(t, s, "admins", 0, false)
+	createTestGroup(t, s, "wizards", admins.Id, false)
+
+	alice := createTestUser(t, s, "alice", false)
+	bob := createTestUser(t, s, "bob", false)
+
+	// Alice is NOT in admins, Bob is in wizards
+	if err := s.AddUserToGroup(juicemud.MakeMainContext(context.Background()), bob, "wizards"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := userContext(alice)
+	err := s.RemoveUserFromGroup(ctx, "bob", "wizards")
+	if err == nil {
+		t.Fatal("User not in OwnerGroup should NOT be able to remove users")
+	}
+}
+
+// === Unauthenticated Context Tests ===
+
+func TestDeleteGroup_NoAuthenticatedUserFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	createTestGroup(t, s, "wizards", 0, false)
+
+	ctx := context.Background() // No authenticated user
+	err := s.DeleteGroup(ctx, "wizards")
+	if err == nil {
+		t.Fatal("Should fail without authenticated user")
+	}
+}
+
+func TestEditGroupName_NoAuthenticatedUserFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	createTestGroup(t, s, "wizards", 0, false)
+
+	ctx := context.Background() // No authenticated user
+	err := s.EditGroupName(ctx, "wizards", "mages")
+	if err == nil {
+		t.Fatal("Should fail without authenticated user")
+	}
+}
+
+func TestEditGroupOwner_NoAuthenticatedUserFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	admins := createTestGroup(t, s, "admins", 0, true)
+	createTestGroup(t, s, "wizards", admins.Id, false)
+
+	ctx := context.Background() // No authenticated user
+	err := s.EditGroupOwner(ctx, "wizards", "owner")
+	if err == nil {
+		t.Fatal("Should fail without authenticated user")
+	}
+}
+
+func TestEditGroupSupergroup_NoAuthenticatedUserFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	admins := createTestGroup(t, s, "admins", 0, true)
+	createTestGroup(t, s, "wizards", admins.Id, false)
+
+	ctx := context.Background() // No authenticated user
+	err := s.EditGroupSupergroup(ctx, "wizards", true)
+	if err == nil {
+		t.Fatal("Should fail without authenticated user")
+	}
+}
+
+func TestAddUserToGroup_NoAuthenticatedUserFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	createTestGroup(t, s, "wizards", 0, false)
+	alice := createTestUser(t, s, "alice", false)
+
+	ctx := context.Background() // No authenticated user
+	err := s.AddUserToGroup(ctx, alice, "wizards")
+	if err == nil {
+		t.Fatal("Should fail without authenticated user")
+	}
+}
+
+func TestRemoveUserFromGroup_NoAuthenticatedUserFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	createTestGroup(t, s, "wizards", 0, false)
+	alice := createTestUser(t, s, "alice", false)
+	if err := s.AddUserToGroup(juicemud.MakeMainContext(context.Background()), alice, "wizards"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background() // No authenticated user
+	err := s.RemoveUserFromGroup(ctx, "alice", "wizards")
+	if err == nil {
+		t.Fatal("Should fail without authenticated user")
+	}
+}
+
+// === Non-Existent Group Tests ===
+
+func TestEditGroupName_NonExistentGroupFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	owner := createTestUser(t, s, "owner", true)
+	ctx := userContext(owner)
+
+	err := s.EditGroupName(ctx, "nonexistent", "newname")
+	if err == nil {
+		t.Fatal("Editing non-existent group should fail")
+	}
+}
+
+func TestEditGroupOwner_NonExistentGroupFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	owner := createTestUser(t, s, "owner", true)
+	ctx := userContext(owner)
+
+	createTestGroup(t, s, "admins", 0, true)
+
+	err := s.EditGroupOwner(ctx, "nonexistent", "admins")
+	if err == nil {
+		t.Fatal("Editing non-existent group should fail")
+	}
+}
+
+func TestEditGroupSupergroup_NonExistentGroupFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	owner := createTestUser(t, s, "owner", true)
+	ctx := userContext(owner)
+
+	err := s.EditGroupSupergroup(ctx, "nonexistent", true)
+	if err == nil {
+		t.Fatal("Editing non-existent group should fail")
+	}
+}
+
+func TestAddUserToGroup_NonExistentGroupFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	owner := createTestUser(t, s, "owner", true)
+	alice := createTestUser(t, s, "alice", false)
+	ctx := userContext(owner)
+
+	err := s.AddUserToGroup(ctx, alice, "nonexistent")
+	if err == nil {
+		t.Fatal("Adding to non-existent group should fail")
+	}
+}
+
+func TestRemoveUserFromGroup_NonExistentGroupFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	owner := createTestUser(t, s, "owner", true)
+	createTestUser(t, s, "alice", false)
+	ctx := userContext(owner)
+
+	err := s.RemoveUserFromGroup(ctx, "alice", "nonexistent")
+	if err == nil {
+		t.Fatal("Removing from non-existent group should fail")
+	}
+}
+
+// === Membership Edge Cases ===
+
+func TestRemoveUserFromGroup_UserNotMemberFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	owner := createTestUser(t, s, "owner", true)
+	createTestUser(t, s, "alice", false)
+	ctx := userContext(owner)
+
+	createTestGroup(t, s, "wizards", 0, false)
+	// Alice is NOT a member of wizards
+
+	err := s.RemoveUserFromGroup(ctx, "alice", "wizards")
+	if err == nil {
+		t.Fatal("Removing user who is not a member should fail")
+	}
+}
+
+func TestRemoveUserFromGroup_NonExistentUserFails(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	owner := createTestUser(t, s, "owner", true)
+	ctx := userContext(owner)
+
+	createTestGroup(t, s, "wizards", 0, false)
+
+	err := s.RemoveUserFromGroup(ctx, "nonexistent", "wizards")
+	if err == nil {
+		t.Fatal("Removing non-existent user should fail")
 	}
 }

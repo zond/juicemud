@@ -2,20 +2,21 @@
 
 > **Design Document**: This describes the group permission system. Implementation status:
 >
-> **Completed:**
+> **Completed (Phases 1-4):**
 > - ✅ `Supergroup` field on the Group struct
 > - ✅ `OwnerGroup` index for efficient orphan checks
 > - ✅ Fix `loadGroupByName("")` to return error instead of zero-value Group
 > - ✅ Group name validation (`validGroupName`)
 > - ✅ Cycle prevention (`detectCycle`)
-> - ✅ OwnerGroup validation (`validateGroup`)
+> - ✅ Invariant validation (`validateGroup`)
 > - ✅ Query helpers: `LoadGroup`, `ListGroups`, `GroupMembers`
-> - ✅ Comprehensive semantics tests
+> - ✅ Comprehensive semantics tests (42 tests)
+> - ✅ `CreateGroup` - create groups with permission checks
+> - ✅ `DeleteGroup` - delete empty/unreferenced groups
+> - ✅ `EditGroupName`, `EditGroupOwner`, `EditGroupSupergroup` - edit group properties
+> - ✅ `RemoveUserFromGroup` - remove members with permission checks
 >
-> **In Progress:**
-> - 🔄 `CreateGroup`, `DeleteGroup`, `EditGroup*`, `RemoveUserFromGroup` storage functions
->
-> **Todo:**
+> **Todo (Phases 5-6):**
 > - Commands: `/mkgroup`, `/rmgroup`, `/adduser`, `/rmuser`, `/editgroup`, `/listgroups`, `/members`, `/checkperm`
 > - Integration tests via SSH
 

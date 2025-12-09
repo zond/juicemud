@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"time"
+
+	"github.com/zond/juicemud"
 )
 
 // inspectResult holds the parsed JSON from /inspect command.
@@ -146,7 +148,7 @@ func createUser(sshAddr, username, password string) (*terminalClient, error) {
 
 // makeUserWizard grants wizard and owner privileges to a user.
 func makeUserWizard(ts *TestServer, username string) error {
-	ctx := context.Background()
+	ctx := juicemud.MakeMainContext(context.Background())
 	user, err := ts.Storage().LoadUser(ctx, username)
 	if err != nil {
 		return fmt.Errorf("failed to load user %s: %w", username, err)
