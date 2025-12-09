@@ -2,9 +2,82 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 )
+
+// inspectResult holds the parsed JSON from /inspect command.
+// Only includes fields we need for testing.
+type inspectResult struct {
+	Unsafe struct {
+		ID       string `json:"Id"`
+		Location string `json:"Location"`
+	} `json:"Unsafe"`
+}
+
+// Helper methods to access nested fields
+func (r *inspectResult) GetID() string       { return r.Unsafe.ID }
+func (r *inspectResult) GetLocation() string { return r.Unsafe.Location }
+
+// jsonExtractor matches the JSON object in /inspect output.
+// Uses greedy matching which works correctly here because /inspect outputs
+// exactly one well-formed JSON object with no stray braces in the output.
+var jsonExtractor = regexp.MustCompile(`(?s)\{.*\}`)
+
+// waitForObject polls via /inspect until an object matching the pattern exists in the room.
+// The pattern uses glob matching against object descriptions (e.g., "*box*" matches "wooden box").
+// Returns the object ID and true if found, or empty string and false on timeout.
+func (tc *terminalClient) waitForObject(pattern string, timeout time.Duration) (string, bool) {
+	var objectID string
+	found := waitForCondition(timeout, 50*time.Millisecond, func() bool {
+		result, err := tc.inspect(pattern)
+		if err != nil {
+			return false
+		}
+		objectID = result.GetID()
+		return objectID != ""
+	})
+	return objectID, found
+}
+
+// inspect runs /inspect on the given target (or "self" if empty) and parses the result.
+func (tc *terminalClient) inspect(target string) (*inspectResult, error) {
+	cmd := "/inspect"
+	if target != "" {
+		cmd = fmt.Sprintf("/inspect %s", target)
+	}
+	if err := tc.sendLine(cmd); err != nil {
+		return nil, fmt.Errorf("sending inspect command: %w", err)
+	}
+	output, ok := tc.waitForPrompt(2 * time.Second)
+	if !ok {
+		return nil, fmt.Errorf("inspect command did not complete: %q", output)
+	}
+	// Extract JSON from output (skip command echo and prompt)
+	jsonMatch := jsonExtractor.FindString(output)
+	if jsonMatch == "" {
+		return nil, fmt.Errorf("no JSON found in inspect output: %q", output)
+	}
+	var result inspectResult
+	if err := json.Unmarshal([]byte(jsonMatch), &result); err != nil {
+		return nil, fmt.Errorf("parsing inspect JSON: %w (raw: %q)", err, jsonMatch)
+	}
+	return &result, nil
+}
+
+// waitForLocation polls via /inspect until the object is at the expected location.
+// Use empty string as target to inspect the current user's object, or "#<id>" for other objects.
+func (tc *terminalClient) waitForLocation(target, expectedLocation string, timeout time.Duration) bool {
+	return waitForCondition(timeout, 50*time.Millisecond, func() bool {
+		result, err := tc.inspect(target)
+		if err != nil {
+			return false
+		}
+		return result.GetLocation() == expectedLocation
+	})
+}
 
 // waitForCondition polls until the condition returns true or timeout expires.
 func waitForCondition(timeout time.Duration, interval time.Duration, condition func() bool) bool {

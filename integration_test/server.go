@@ -113,6 +113,7 @@ func (ts *TestServer) HTTPAddr() string {
 }
 
 // waitForSourceObject polls until an object with the given source path exists.
+// Use this for objects that can't be seen via /inspect (e.g., hidden objects with challenges).
 // Returns the object ID and true if found, or empty string and false on timeout.
 func (ts *TestServer) waitForSourceObject(ctx context.Context, sourcePath string, timeout time.Duration) (string, bool) {
 	var objectID string
@@ -129,13 +130,3 @@ func (ts *TestServer) waitForSourceObject(ctx context.Context, sourcePath string
 	return objectID, found
 }
 
-// waitForObjectLocation polls until the object is at the expected location.
-func (ts *TestServer) waitForObjectLocation(ctx context.Context, objectID, expectedLocation string, timeout time.Duration) bool {
-	return waitForCondition(timeout, 50*time.Millisecond, func() bool {
-		obj, err := ts.Storage().AccessObject(ctx, objectID, nil)
-		if err != nil {
-			return false
-		}
-		return obj.GetLocation() == expectedLocation
-	})
-}

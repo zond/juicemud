@@ -2,18 +2,32 @@
 
 This document tracks what functionality is covered by the integration tests and what remains untested.
 
+## Testing Philosophy
+
+Integration tests use SSH and WebDAV interfaces for all interactions, matching how users and wizards interact with the game in production. Direct storage access is only used for:
+
+- **Setup operations** (e.g., `makeUserWizard` to grant wizard privileges)
+- **Verifying persistence** (e.g., `LoadUser` in Test 1 to confirm user was saved)
+- **Hidden objects** (e.g., objects with perception challenges that users can't `/inspect`)
+- **Avoiding interference** (e.g., movement event test where `/inspect` polling would disrupt the test)
+
+For verifying object state and waiting for object creation, tests prefer:
+1. `tc.waitForObject(pattern)` - polls via `/inspect` to find objects by description pattern
+2. `tc.waitForLocation(target, location)` - polls via `/inspect` to check object location
+3. `tc.inspect(target)` - runs `/inspect` and parses the JSON result
+
 ## Currently Tested
 
 | Feature | How it's tested |
 |---------|-----------------|
 | User creation | `createUser()` in helpers.go |
 | User login | `loginUser()` in helpers.go |
-| User persistence | Verified via storage after creation |
+| User persistence | Verified via `LoadUser` after creation |
 | `look` command | Multiple tests verify room descriptions |
 | Exit-based movement | `south`, `north` commands |
 | WebDAV GET/PUT | Reading/writing source files |
 | `/create` | Creating objects from source files |
-| `/inspect` | Test 11: Verifies object existence before/after removal |
+| `/inspect` | Used throughout to verify object location via SSH; Test 11 verifies existence before/after removal |
 | `/ls` | Called but output not verified |
 | `/enter` | Moving into rooms |
 | `/exit` | Moving out of rooms |

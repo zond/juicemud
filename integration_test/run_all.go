@@ -187,8 +187,8 @@ setDescriptions([{
 		return fmt.Errorf("/create command did not complete")
 	}
 
-	// Poll for object creation
-	if _, found := ts.waitForSourceObject(ctx, "/box.js", 2*time.Second); !found {
+	// Poll for object creation via /inspect (uses glob matching, so *box* matches "wooden box")
+	if _, found := tc.waitForObject("*box*", 2*time.Second); !found {
 		return fmt.Errorf("box object was not created")
 	}
 
@@ -249,12 +249,12 @@ setDescriptions([{
 		return fmt.Errorf("/create room2 did not complete")
 	}
 
-	// Poll for room creation
-	room1ID, found := ts.waitForSourceObject(ctx, "/room1.js", 2*time.Second)
+	// Poll for room creation via /inspect (quote patterns with spaces)
+	room1ID, found := tc.waitForObject(`"Room One"`, 2*time.Second)
 	if !found {
 		return fmt.Errorf("room1 was not created")
 	}
-	if _, found := ts.waitForSourceObject(ctx, "/room2.js", 2*time.Second); !found {
+	if _, found := tc.waitForObject(`"Room Two"`, 2*time.Second); !found {
 		return fmt.Errorf("room2 was not created")
 	}
 
@@ -267,7 +267,7 @@ setDescriptions([{
 	}
 
 	// Poll for user to be in room1
-	if !ts.waitForObjectLocation(ctx, user.Object, room1ID, 2*time.Second) {
+	if !tc.waitForLocation("", room1ID, 2*time.Second) {
 		return fmt.Errorf("user did not move to room1")
 	}
 
@@ -280,7 +280,7 @@ setDescriptions([{
 	}
 
 	// Poll for user to be back in genesis
-	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", 2*time.Second) {
 		return fmt.Errorf("user did not return to genesis")
 	}
 
@@ -342,7 +342,7 @@ setDescriptions([{
 		return fmt.Errorf("/create lookroom did not complete")
 	}
 
-	lookRoomID, found := ts.waitForSourceObject(ctx, "/lookroom.js", 2*time.Second)
+	lookRoomID, found := tc.waitForObject("*Library*", 2*time.Second)
 	if !found {
 		return fmt.Errorf("lookroom was not created")
 	}
@@ -354,7 +354,7 @@ setDescriptions([{
 		return fmt.Errorf("/create book did not complete")
 	}
 
-	bookID, found := ts.waitForSourceObject(ctx, "/book.js", 2*time.Second)
+	bookID, found := tc.waitForObject("*book*", 2*time.Second)
 	if !found {
 		return fmt.Errorf("book was not created")
 	}
@@ -376,7 +376,7 @@ setDescriptions([{
 	}
 
 	// Verify user is in the room
-	if !ts.waitForObjectLocation(ctx, user.Object, lookRoomID, 2*time.Second) {
+	if !tc.waitForLocation("", lookRoomID, 2*time.Second) {
 		return fmt.Errorf("user did not move to lookroom")
 	}
 
@@ -419,7 +419,7 @@ setDescriptions([{
 	}
 
 	// Verify player moved back to genesis
-	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", 2*time.Second) {
 		return fmt.Errorf("user did not move to genesis via 'north' command")
 	}
 
@@ -477,7 +477,7 @@ setExits([{
 	}
 
 	// Verify player moved to lookroom
-	if !ts.waitForObjectLocation(ctx, user.Object, lookRoomID, 2*time.Second) {
+	if !tc.waitForLocation("", lookRoomID, 2*time.Second) {
 		return fmt.Errorf("user did not move to lookroom via 'south' command")
 	}
 
@@ -502,7 +502,7 @@ setExits([{
 	}
 
 	// Verify player moved back to genesis
-	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", 2*time.Second) {
 		return fmt.Errorf("user did not move back to genesis via 'north' command")
 	}
 
@@ -584,7 +584,7 @@ setDescriptions([{
 		return fmt.Errorf("/create challenge_room did not complete")
 	}
 
-	challengeRoomID, found := ts.waitForSourceObject(ctx, "/challenge_room.js", 2*time.Second)
+	challengeRoomID, found := tc.waitForObject("*Challenge*", 2*time.Second)
 	if !found {
 		return fmt.Errorf("challenge_room was not created")
 	}
@@ -597,6 +597,7 @@ setDescriptions([{
 		return fmt.Errorf("/create hidden_gem did not complete")
 	}
 
+	// Hidden gem has a perception challenge, so user can't see it - use direct storage access
 	hiddenGemID, found := ts.waitForSourceObject(ctx, "/hidden_gem.js", 2*time.Second)
 	if !found {
 		return fmt.Errorf("hidden_gem was not created")
@@ -612,13 +613,13 @@ setDescriptions([{
 	}
 
 	// Wait for gem to be moved before entering room
-	if !ts.waitForObjectLocation(ctx, hiddenGemID, challengeRoomID, 3*time.Second) {
+	if !tc.waitForLocation(fmt.Sprintf("#%s", hiddenGemID), challengeRoomID, 3*time.Second) {
 		// Debug: check where the gem actually is
-		gemObj, _ := ts.Storage().AccessObject(ctx, hiddenGemID, nil)
-		if gemObj != nil {
-			return fmt.Errorf("hidden gem did not move to challenge_room, it is in %q", gemObj.GetLocation())
+		gemInspect, err := tc.inspect(fmt.Sprintf("#%s", hiddenGemID))
+		if err != nil {
+			return fmt.Errorf("hidden gem did not move to challenge_room (inspect failed: %v)", err)
 		}
-		return fmt.Errorf("hidden gem did not move to challenge_room (gem not found)")
+		return fmt.Errorf("hidden gem did not move to challenge_room, it is in %q", gemInspect.GetLocation())
 	}
 
 	// Enter the challenge room
@@ -630,7 +631,7 @@ setDescriptions([{
 	}
 
 	// Verify user is in the challenge room
-	if !ts.waitForObjectLocation(ctx, user.Object, challengeRoomID, 3*time.Second) {
+	if !tc.waitForLocation("", challengeRoomID, 3*time.Second) {
 		return fmt.Errorf("user did not move to challenge_room")
 	}
 
@@ -667,12 +668,12 @@ setDescriptions([{
 	}
 
 	// Verify user is still in challenge room (movement failed)
-	obj, err = ts.Storage().AccessObject(ctx, user.Object, nil)
+	selfInspect, err := tc.inspect("")
 	if err != nil {
-		return fmt.Errorf("failed to access user object: %w", err)
+		return fmt.Errorf("failed to inspect self: %w", err)
 	}
-	if obj.GetLocation() != challengeRoomID {
-		return fmt.Errorf("user should still be in challenge_room after failed exit, but is in %q", obj.GetLocation())
+	if selfInspect.GetLocation() != challengeRoomID {
+		return fmt.Errorf("user should still be in challenge_room after failed exit, but is in %q", selfInspect.GetLocation())
 	}
 
 	// Test 4: Use the easy exit (should succeed - no challenge)
@@ -684,7 +685,7 @@ setDescriptions([{
 	}
 
 	// Verify user moved to genesis
-	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", 2*time.Second) {
 		return fmt.Errorf("user did not move to genesis via 'easy' exit")
 	}
 
@@ -722,7 +723,7 @@ addCallback('train', ['command'], (msg) => {
 		return fmt.Errorf("/enter challenge_room with skills did not complete")
 	}
 
-	if !ts.waitForObjectLocation(ctx, user.Object, challengeRoomID, 2*time.Second) {
+	if !tc.waitForLocation("", challengeRoomID, 2*time.Second) {
 		return fmt.Errorf("user did not move to challenge_room for skilled test")
 	}
 
@@ -748,7 +749,7 @@ addCallback('train', ['command'], (msg) => {
 	}
 
 	// Verify user moved to genesis via the locked exit
-	if !ts.waitForObjectLocation(ctx, user.Object, "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", 2*time.Second) {
 		return fmt.Errorf("user should have moved to genesis via 'locked' exit with strength skill")
 	}
 
@@ -793,7 +794,7 @@ addCallback('ping', ['action'], (msg) => {
 	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
 		return fmt.Errorf("/create receiver did not complete")
 	}
-	receiverID, found := ts.waitForSourceObject(ctx, "/receiver.js", 2*time.Second)
+	receiverID, found := tc.waitForObject("*receiver*", 2*time.Second)
 	if !found {
 		return fmt.Errorf("receiver was not created")
 	}
@@ -804,7 +805,7 @@ addCallback('ping', ['action'], (msg) => {
 	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
 		return fmt.Errorf("/create sender did not complete")
 	}
-	if _, found := ts.waitForSourceObject(ctx, "/sender.js", 2*time.Second); !found {
+	if _, found := tc.waitForObject("*sender*", 2*time.Second); !found {
 		return fmt.Errorf("sender was not created")
 	}
 
@@ -863,7 +864,7 @@ addCallback('timeout', ['emit'], (msg) => {
 	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
 		return fmt.Errorf("/create timer did not complete")
 	}
-	if _, found := ts.waitForSourceObject(ctx, "/timer.js", 2*time.Second); !found {
+	if _, found := tc.waitForObject("*timer*", 2*time.Second); !found {
 		return fmt.Errorf("timer was not created")
 	}
 
@@ -922,7 +923,7 @@ addCallback('timeout', ['emit'], (msg) => {
 		return fmt.Errorf("/create removable did not complete")
 	}
 
-	removableID, found := ts.waitForSourceObject(ctx, "/removable.js", 2*time.Second)
+	removableID, found := tc.waitForObject("*removable*", 2*time.Second)
 	if !found {
 		return fmt.Errorf("removable was not created")
 	}
