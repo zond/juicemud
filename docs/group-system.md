@@ -297,15 +297,31 @@ meaning (Owner-only). Empty or invalid group names should always produce an erro
 
 ### Centralized Group Validation
 
-The various validation checks should be implemented as a single `Group.Validate(ctx, tx)`
-method that runs inside the transaction. This keeps validation logic in one place and
-ensures both create and edit operations apply the same rules:
+The various validation checks should be implemented as a `Storage.validateGroup` method
+that runs inside the transaction. This keeps validation logic in one place. The method
+takes an `op` parameter to distinguish operations with different permission requirements:
 
 ```go
-func (g *Group) Validate(ctx context.Context, tx *sqly.Tx, s *Storage) error {
+type GroupOp int
+
+const (
+    GroupOpCreate GroupOp = iota  // Requires Supergroup
+    GroupOpDelete                 // Requires Supergroup
+    GroupOpEditName               // Requires OwnerGroup membership
+    GroupOpEditOwner              // Requires Supergroup (for new owner)
+    GroupOpEditSupergroup         // Requires Supergroup
+    GroupOpMembership             // Requires OwnerGroup membership
+)
+
+func (s *Storage) validateGroup(ctx context.Context, tx *sqly.Tx, g *Group, op GroupOp) error {
     // Name constraints
     if !validGroupName(g.Name) {
         return errors.Errorf("invalid group name %q", g.Name)
+    }
+
+    caller, ok := AuthenticatedUser(ctx)
+    if !ok {
+        return errors.New("no authenticated user in context")
     }
 
     // OwnerGroup must exist (if non-zero)
@@ -315,46 +331,40 @@ func (g *Group) Validate(ctx context.Context, tx *sqly.Tx, s *Storage) error {
             return errors.Errorf("OwnerGroup %d does not exist", g.OwnerGroup)
         }
 
-        // Caller must be member of new OwnerGroup (or Owner user)
-        caller, _ := AuthenticatedUser(ctx)
+        // Caller must be member of OwnerGroup (unless Owner user)
         if !caller.Owner {
             if has, _ := s.userAccessToGroupIDTx(ctx, tx, caller, g.OwnerGroup); !has {
                 return errors.Errorf("not a member of OwnerGroup %q", owner.Name)
             }
-            // For create/delete, OwnerGroup must be a Supergroup
-            if !owner.Supergroup {
+
+            // Some operations require OwnerGroup to be a Supergroup
+            requiresSupergroup := op == GroupOpCreate || op == GroupOpDelete ||
+                                  op == GroupOpEditOwner || op == GroupOpEditSupergroup
+            if requiresSupergroup && !owner.Supergroup {
                 return errors.Errorf("OwnerGroup %q is not a Supergroup", owner.Name)
             }
         }
     } else {
         // OwnerGroup=0 requires Owner user
-        caller, _ := AuthenticatedUser(ctx)
         if !caller.Owner {
             return errors.New("only Owner users can set OwnerGroup to 0")
         }
     }
 
-    // No self-ownership
+    // No self-ownership (only relevant for edits where g.Id is already set;
+    // for creates, g.Id is 0 so this check passes - caller must separately
+    // verify the OwnerGroup name doesn't match the new group's name)
     if g.Id != 0 && g.OwnerGroup == g.Id {
         return errors.New("group cannot own itself")
     }
 
-    // No cycles
+    // No cycles (only relevant for edits where g.Id is already set)
     if g.Id != 0 && s.detectCycle(ctx, tx, g.Id, g.OwnerGroup) {
         return errors.Errorf("would create ownership cycle")
     }
 
     return nil
 }
-```
-
-### Cycle Prevention
-
-When creating or modifying OwnerGroup relationships, reject the operation if it would create a cycle. Cycle detection is performed within the same transaction as the modification.
-
-Example error:
-```
-Error: This would create a cycle (A -> B -> A). Operation rejected.
 ```
 
 ### Setting OwnerGroup to 0
@@ -505,6 +515,117 @@ Group{
 ```
 
 Owners can later modify this configuration as needed.
+
+## Implementation Plan
+
+### Phase 1: Schema Changes
+
+1. Add `Supergroup bool` field to `Group` struct in `storage/storage.go`
+2. Fix `loadGroupByName("")` to return error instead of zero-value Group
+3. Add `index` tag to `Group.OwnerGroup` for efficient orphan checks
+
+### Phase 2: Core Storage Functions (Stubs)
+
+Create stub implementations that return `errors.New("not implemented")`:
+
+```go
+// Group CRUD
+func (s *Storage) CreateGroup(ctx context.Context, name string, ownerGroupName string, supergroup bool) error
+func (s *Storage) DeleteGroup(ctx context.Context, name string) error
+func (s *Storage) EditGroupName(ctx context.Context, name string, newName string) error
+func (s *Storage) EditGroupOwner(ctx context.Context, name string, newOwnerName string) error
+func (s *Storage) EditGroupSupergroup(ctx context.Context, name string, supergroup bool) error
+
+// Membership
+func (s *Storage) RemoveUserFromGroup(ctx context.Context, userName string, groupName string) error
+
+// Validation (used internally)
+func (s *Storage) validateGroup(ctx context.Context, tx *sqly.Tx, g *Group) error
+func (s *Storage) detectCycle(ctx context.Context, tx *sqly.Tx, groupID, newOwner int64) bool
+func (s *Storage) userAccessToGroupIDTx(ctx context.Context, tx *sqly.Tx, user *User, groupID int64) (bool, error)
+
+// Query helpers
+func (s *Storage) LoadGroup(ctx context.Context, name string) (*Group, error)
+func (s *Storage) ListGroups(ctx context.Context) ([]Group, error)
+func (s *Storage) GroupMembers(ctx context.Context, groupName string) ([]User, error)
+func (s *Storage) loadGroupByID(ctx context.Context, db sqlx.QueryerContext, id int64) (*Group, error)
+```
+
+### Phase 3: Semantics Tests
+
+Write comprehensive tests in `storage/storage_test.go` that verify all rules from this document. Tests should initially fail against the stubs.
+
+**Test categories:**
+
+1. **Group creation**
+   - Owner user can create group with OwnerGroup=0
+   - Owner user can create group with any valid OwnerGroup
+   - Non-owner in Supergroup can create group owned by that Supergroup
+   - Non-owner in non-Supergroup cannot create groups
+   - Non-owner cannot create group with OwnerGroup=0
+   - Non-owner cannot create group owned by Supergroup they're not in
+   - Invalid group names are rejected
+   - Reserved group names (e.g., "owner") are rejected
+   - Duplicate group names are rejected
+
+2. **Group deletion**
+   - Owner user can delete any empty, unreferenced group
+   - Non-owner in Supergroup can delete groups owned by that Supergroup
+   - Cannot delete group with members
+   - Cannot delete group referenced as OwnerGroup by other groups
+   - Cannot delete group referenced by files (ReadGroup or WriteGroup)
+   - Non-owner in non-Supergroup cannot delete groups
+
+3. **Membership changes**
+   - Owner user can add/remove anyone to/from any group
+   - Non-owner in OwnerGroup can add/remove members
+   - Non-owner not in OwnerGroup cannot modify membership
+   - Self-removal warnings (test warning is returned, not error)
+
+4. **Group editing**
+   - Name changes require OwnerGroup membership
+   - OwnerGroup changes require current OwnerGroup membership AND new owner must be Supergroup caller is in
+   - Supergroup flag changes require Supergroup membership
+   - Self-ownership is rejected
+   - Cycles are rejected
+   - OwnerGroup=0 requires Owner user
+
+5. **Transactional integrity**
+   - Concurrent modifications don't cause inconsistent state
+   - Permission checks use transaction snapshot (no TOCTOU)
+
+### Phase 4: Implement Storage Functions
+
+Implement each function to make its tests pass, one at a time:
+
+1. `validateGroup` - centralized validation logic
+2. `detectCycle` - cycle detection
+3. `userAccessToGroupIDTx` - transaction-aware permission check
+4. `CreateGroup`
+5. `DeleteGroup`
+6. `EditGroupName`
+7. `EditGroupOwner`
+8. `EditGroupSupergroup`
+9. `RemoveUserFromGroup`
+10. Query helpers
+
+### Phase 5: Commands
+
+Once all storage functions pass their tests, implement the `/` commands in the game layer that call the storage functions:
+
+1. `/mkgroup` → `CreateGroup`
+2. `/rmgroup` → `DeleteGroup`
+3. `/editgroup` → `EditGroupName`, `EditGroupOwner`, `EditGroupSupergroup`
+4. `/adduser` → `AddUserToGroup` (already exists)
+5. `/rmuser` → `RemoveUserFromGroup`
+6. `/groups` → `UserGroups` (already exists)
+7. `/members` → `GroupMembers`
+8. `/listgroups` → `ListGroups`
+9. `/checkperm` → dry-run versions of above
+
+### Phase 6: Integration Tests
+
+Add happy-path integration tests via SSH to verify commands work end-to-end. The thorough semantics testing is already covered in Phase 3.
 
 ## Checkperm Examples
 
