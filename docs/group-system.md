@@ -8,8 +8,9 @@
 > - OwnerGroup-based permission checks
 > - Orphan prevention (can't delete groups that are referenced)
 > - OwnerGroup validation (must reference existing group or be 0)
-> - Cycle detection warnings
+> - Cycle prevention
 > - Group name validation
+> - Fix `loadGroupByName("")` to return error instead of zero-value Group
 
 This document describes the group permission system used for access control in juicemud.
 
@@ -73,7 +74,7 @@ Each group has an `OwnerGroup` field that determines who can manage it:
 ### Supergroup
 This flag grants members full administrative power over the group hierarchy:
 - **Direct admin**: Full control over groups directly owned by this Supergroup (where `group.OwnerGroup == this_supergroup`)
-- **Indirect admin**: Members can iteratively take ownership of groups lower in the hierarchy by repeatedly using `/editgroup -owner` to pull groups up to their Supergroup, then exercise direct admin rights. This is not implemented as a shortcut—each level must be explicitly transferred.
+- **Indirect admin**: Members can gain control of groups deeper in the hierarchy by first transferring them up. For example, if `admins` (Supergroup) owns `wizards`, and `wizards` owns `builders`, an admin can `/editgroup wizards -owner admins` to take direct ownership of `wizards`, then use their `wizards` membership to transfer `builders`. This requires being in the intermediate group—there's no automatic transitive power.
 
 Without this flag, members can only manage membership and names of groups they directly own, not create, delete, or modify Supergroup flags.
 
@@ -144,6 +145,143 @@ All operations that check-then-modify must be atomic. Specifically:
 
 Use database transactions to prevent race conditions (TOCTOU vulnerabilities).
 
+## Transaction Semantics Implementation
+
+### Why This Is Simple
+
+All authorization-related data lives in SQLite:
+
+| Data | Backend | Authorization Role |
+|------|---------|-------------------|
+| Groups | SQLite | Defines permission groups |
+| GroupMembers | SQLite | Who has what permissions |
+| Files | SQLite | ReadGroup/WriteGroup on each file |
+| Users | SQLite | Owner flag for superuser bypass |
+
+The tkrzw backends store only content and game state (source file content, objects,
+events). They don't store any permission information. File permissions are checked
+via the `File` table in SQLite, not by anything in tkrzw.
+
+This means **all group operations are fully transactional** using SQLite's standard
+transaction support via `sqly.Write()`.
+
+### Implementation Pattern
+
+Every group operation follows the same pattern:
+
+```go
+func (s *Storage) SomeGroupOperation(ctx context.Context, ...) error {
+    return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+        // 1. Load entities
+        group, err := s.loadGroupByName(ctx, tx, name)
+        if err != nil {
+            return err
+        }
+
+        // 2. Check permissions (reads from same transaction)
+        if err := s.CheckCallerAccessToGroupID(ctx, group.OwnerGroup); err != nil {
+            return err
+        }
+
+        // 3. Validate constraints (reads from same transaction)
+        // e.g., check no members, no dependent groups, no file references
+
+        // 4. Perform the operation (writes in same transaction)
+        return tx.Upsert(ctx, group, true)
+    })
+    // Transaction commits or rolls back atomically
+}
+```
+
+### Example: Delete Group with All Checks
+
+```go
+func (s *Storage) DeleteGroup(ctx context.Context, name string) error {
+    return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+        group, err := s.loadGroupByName(ctx, tx, name)
+        if err != nil {
+            return err
+        }
+
+        // Permission: must be in OwnerGroup (which must be Supergroup)
+        if err := s.checkCallerCanDeleteGroup(ctx, tx, group); err != nil {
+            return err
+        }
+
+        // No members
+        var memberCount int
+        tx.GetContext(ctx, &memberCount,
+            "SELECT COUNT(*) FROM GroupMember WHERE `Group` = ?", group.Id)
+        if memberCount > 0 {
+            return errors.Errorf("group has %d members", memberCount)
+        }
+
+        // No dependent groups
+        var depCount int
+        tx.GetContext(ctx, &depCount,
+            "SELECT COUNT(*) FROM `Group` WHERE OwnerGroup = ?", group.Id)
+        if depCount > 0 {
+            return errors.Errorf("%d groups use this as OwnerGroup", depCount)
+        }
+
+        // No file references
+        var fileCount int
+        tx.GetContext(ctx, &fileCount,
+            "SELECT COUNT(*) FROM File WHERE ReadGroup = ? OR WriteGroup = ?",
+            group.Id, group.Id)
+        if fileCount > 0 {
+            return errors.Errorf("%d files reference this group", fileCount)
+        }
+
+        // All checks passed atomically - safe to delete
+        _, err = tx.ExecContext(ctx, "DELETE FROM `Group` WHERE Id = ?", group.Id)
+        return err
+    })
+}
+```
+
+### Cycle Prevention
+
+Cycles in OwnerGroup references must be prevented, not just warned about. The check
+is fully transactional since it only reads the `Group` table:
+
+```go
+func (s *Storage) detectCycle(ctx context.Context, tx *sqly.Tx, groupID, newOwner int64) bool {
+    visited := map[int64]bool{groupID: true}
+    current := newOwner
+
+    for current != 0 {
+        if visited[current] {
+            return true // Cycle detected - reject the operation
+        }
+        visited[current] = true
+
+        group, err := s.loadGroupByID(ctx, tx, current)
+        if err != nil {
+            return false // Broken chain, no cycle
+        }
+        current = group.OwnerGroup
+    }
+    return false
+}
+```
+
+If a cycle is detected, the operation fails with an error explaining which groups
+would form the cycle.
+
+### The Only Cross-Backend Consideration
+
+The `sourceObjects` tree (tkrzw) maps source file paths to object IDs. When checking
+if a source file can be deleted, we query this tree. However:
+
+1. This is a **read-only check** from tkrzw during a delete operation
+2. The authoritative permission for deletion is in the SQLite `File` table
+3. If the check races with object creation, the worst case is a stale reference
+   that gets lazily cleaned up on next access
+
+This isn't a transaction concern for the group system—it's a separate file deletion
+concern already handled by the existing `delFileIfExists` logic.
+
 ### OwnerGroup Validation
 
 When setting OwnerGroup (on create or edit):
@@ -151,13 +289,19 @@ When setting OwnerGroup (on create or edit):
 - If value is non-zero: must reference an existing group's ID
 - Cannot reference the group being created/edited (no self-ownership)
 
-### Cycle Detection
+### Group Name Validation
 
-When creating or modifying OwnerGroup relationships, warn if the operation would create a cycle. Cycles are not prevented (they simply create Owner-only groups), but a warning helps administrators avoid unintentional lockouts. Cycle detection is performed within the same transaction as the modification.
+The `loadGroupByName` function currently returns a zero-value `Group{Id: 0}` for empty
+string input. This must be fixed to return an error instead, as `Id=0` has special
+meaning (Owner-only). Empty or invalid group names should always produce an error.
 
-Example warning:
+### Cycle Prevention
+
+When creating or modifying OwnerGroup relationships, reject the operation if it would create a cycle. Cycle detection is performed within the same transaction as the modification.
+
+Example error:
 ```
-Warning: This creates a cycle (A -> B -> A). Both groups will only be manageable by Owners.
+Error: This would create a cycle (A -> B -> A). Operation rejected.
 ```
 
 ### Setting OwnerGroup to 0
@@ -246,12 +390,14 @@ wizards (OwnerGroup=wizard-admins, Supergroup=false)
 
 ### Circular OwnerGroup references
 
+Cycles are prevented at creation time. Any `/editgroup -owner` command that would create a cycle is rejected:
+
 ```
-Group A: OwnerGroup=B
-Group B: OwnerGroup=A
+> /editgroup groupA -owner groupB
+Error: This would create a cycle (groupA -> groupB -> groupA). Operation rejected.
 ```
 
-If both groups are empty, neither can be managed (deadlock). Only Owners can break the cycle. The system warns when creating cycles but does not prevent them—they simply create Owner-only groups.
+This avoids the deadlock scenario where neither group can be managed.
 
 ### Empty managing groups
 
