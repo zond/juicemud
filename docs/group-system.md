@@ -295,6 +295,59 @@ The `loadGroupByName` function currently returns a zero-value `Group{Id: 0}` for
 string input. This must be fixed to return an error instead, as `Id=0` has special
 meaning (Owner-only). Empty or invalid group names should always produce an error.
 
+### Centralized Group Validation
+
+The various validation checks should be implemented as a single `Group.Validate(ctx, tx)`
+method that runs inside the transaction. This keeps validation logic in one place and
+ensures both create and edit operations apply the same rules:
+
+```go
+func (g *Group) Validate(ctx context.Context, tx *sqly.Tx, s *Storage) error {
+    // Name constraints
+    if !validGroupName(g.Name) {
+        return errors.Errorf("invalid group name %q", g.Name)
+    }
+
+    // OwnerGroup must exist (if non-zero)
+    if g.OwnerGroup != 0 {
+        owner, err := s.loadGroupByID(ctx, tx, g.OwnerGroup)
+        if err != nil {
+            return errors.Errorf("OwnerGroup %d does not exist", g.OwnerGroup)
+        }
+
+        // Caller must be member of new OwnerGroup (or Owner user)
+        caller, _ := AuthenticatedUser(ctx)
+        if !caller.Owner {
+            if has, _ := s.userAccessToGroupIDTx(ctx, tx, caller, g.OwnerGroup); !has {
+                return errors.Errorf("not a member of OwnerGroup %q", owner.Name)
+            }
+            // For create/delete, OwnerGroup must be a Supergroup
+            if !owner.Supergroup {
+                return errors.Errorf("OwnerGroup %q is not a Supergroup", owner.Name)
+            }
+        }
+    } else {
+        // OwnerGroup=0 requires Owner user
+        caller, _ := AuthenticatedUser(ctx)
+        if !caller.Owner {
+            return errors.New("only Owner users can set OwnerGroup to 0")
+        }
+    }
+
+    // No self-ownership
+    if g.Id != 0 && g.OwnerGroup == g.Id {
+        return errors.New("group cannot own itself")
+    }
+
+    // No cycles
+    if g.Id != 0 && s.detectCycle(ctx, tx, g.Id, g.OwnerGroup) {
+        return errors.Errorf("would create ownership cycle")
+    }
+
+    return nil
+}
+```
+
 ### Cycle Prevention
 
 When creating or modifying OwnerGroup relationships, reject the operation if it would create a cycle. Cycle detection is performed within the same transaction as the modification.
