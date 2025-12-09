@@ -754,5 +754,296 @@ addCallback('train', ['command'], (msg) => {
 
 	fmt.Println("  Challenge system: OK")
 
+	// === Test 9: emit() inter-object communication ===
+	fmt.Println("Testing emit() inter-object communication...")
+
+	// Ensure we're in genesis before creating objects
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter genesis did not complete")
+	}
+
+	// Receiver updates its description when it receives a pong
+	receiverSource := `setDescriptions([{Short: 'receiver orb (waiting)'}]);
+addCallback('pong', ['emit'], (msg) => {
+	setDescriptions([{Short: 'receiver orb (got: ' + msg.message + ')'}]);
+});
+`
+	if err := dav.Put("/receiver.js", receiverSource); err != nil {
+		return fmt.Errorf("failed to create /receiver.js: %w", err)
+	}
+
+	// Sender takes target ID from msg.line and emits to it
+	senderSource := `setDescriptions([{Short: 'sender orb'}]);
+addCallback('ping', ['action'], (msg) => {
+	const targetId = msg.line.replace(/^ping\s+/, '');
+	emit(targetId, 'pong', {message: 'hello'});
+	setDescriptions([{Short: 'sender orb (sent)'}]);
+});
+`
+	if err := dav.Put("/sender.js", senderSource); err != nil {
+		return fmt.Errorf("failed to create /sender.js: %w", err)
+	}
+
+	if err := tc.sendLine("/create /receiver.js"); err != nil {
+		return fmt.Errorf("/create receiver: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create receiver did not complete")
+	}
+	receiverID, found := ts.waitForSourceObject(ctx, "/receiver.js", 2*time.Second)
+	if !found {
+		return fmt.Errorf("receiver was not created")
+	}
+
+	if err := tc.sendLine("/create /sender.js"); err != nil {
+		return fmt.Errorf("/create sender: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create sender did not complete")
+	}
+	if _, found := ts.waitForSourceObject(ctx, "/sender.js", 2*time.Second); !found {
+		return fmt.Errorf("sender was not created")
+	}
+
+	// Ping the sender with the receiver's ID as target
+	if err := tc.sendLine(fmt.Sprintf("ping %s", receiverID)); err != nil {
+		return fmt.Errorf("ping command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("ping receiver command did not complete")
+	}
+
+	// Poll with look until we see the receiver got the message (emit has ~100ms delay)
+	var lookOutput string
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		lookOutput, _ = tc.waitForPrompt(2*time.Second)
+		return strings.Contains(lookOutput, "receiver orb (got: hello)")
+	})
+	if !found {
+		return fmt.Errorf("receiver did not update description after receiving emit: %q", lookOutput)
+	}
+	if !strings.Contains(lookOutput, "sender orb (sent)") {
+		return fmt.Errorf("sender did not update description after emit: %q", lookOutput)
+	}
+
+	fmt.Println("  emit() inter-object communication: OK")
+
+	// === Test 10: setTimeout() delayed events ===
+	fmt.Println("Testing setTimeout() delayed events...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for timer: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter genesis for timer did not complete")
+	}
+
+	// Timer updates its description when started and when timeout fires
+	timerSource := `setDescriptions([{Short: 'timer orb (idle)'}]);
+addCallback('start', ['action'], (msg) => {
+	setDescriptions([{Short: 'timer orb (started)'}]);
+	setTimeout(200, 'timeout', {});
+});
+addCallback('timeout', ['emit'], (msg) => {
+	setDescriptions([{Short: 'timer orb (fired)'}]);
+});
+`
+	if err := dav.Put("/timer.js", timerSource); err != nil {
+		return fmt.Errorf("failed to create /timer.js: %w", err)
+	}
+
+	if err := tc.sendLine("/create /timer.js"); err != nil {
+		return fmt.Errorf("/create timer: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create timer did not complete")
+	}
+	if _, found := ts.waitForSourceObject(ctx, "/timer.js", 2*time.Second); !found {
+		return fmt.Errorf("timer was not created")
+	}
+
+	// Poll until timer is visible in room
+	var timerOutput string
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		timerOutput, _ = tc.waitForPrompt(2*time.Second)
+		return strings.Contains(timerOutput, "timer orb (idle)")
+	})
+	if !found {
+		return fmt.Errorf("timer should be idle initially: %q", timerOutput)
+	}
+
+	// Start the timer
+	if err := tc.sendLine("start timer orb"); err != nil {
+		return fmt.Errorf("start timer orb command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("start timer orb command did not complete")
+	}
+
+	// Poll with look until we see the timer fired (setTimeout has 200ms delay)
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		timerOutput, _ = tc.waitForPrompt(2*time.Second)
+		return strings.Contains(timerOutput, "timer orb (fired)")
+	})
+	if !found {
+		return fmt.Errorf("timer should show (fired) after timeout: %q", timerOutput)
+	}
+
+	fmt.Println("  setTimeout() delayed events: OK")
+
+	// === Test 11: /remove command ===
+	fmt.Println("Testing /remove command...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for remove: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter genesis for remove did not complete")
+	}
+
+	removableSource := `setDescriptions([{Short: 'removable widget'}]);
+`
+	if err := dav.Put("/removable.js", removableSource); err != nil {
+		return fmt.Errorf("failed to create /removable.js: %w", err)
+	}
+
+	if err := tc.sendLine("/create /removable.js"); err != nil {
+		return fmt.Errorf("/create removable: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create removable did not complete")
+	}
+
+	removableID, found := ts.waitForSourceObject(ctx, "/removable.js", 2*time.Second)
+	if !found {
+		return fmt.Errorf("removable was not created")
+	}
+
+	// Verify object exists via /inspect (poll to handle buffered output)
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		tc.sendLine(fmt.Sprintf("/inspect #%s", removableID))
+		output, _ = tc.waitForPrompt(2*time.Second)
+		return strings.Contains(output, "removable widget")
+	})
+	if !found {
+		return fmt.Errorf("removable object should exist before removal: %q", output)
+	}
+
+	// Remove the object
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", removableID)); err != nil {
+		return fmt.Errorf("/remove command: %w", err)
+	}
+	if _, ok = tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/remove command did not complete")
+	}
+
+	// Verify object no longer exists via /inspect (should show error or empty)
+	found = waitForCondition(2*time.Second, 50*time.Millisecond, func() bool {
+		tc.sendLine(fmt.Sprintf("/inspect #%s", removableID))
+		output, _ = tc.waitForPrompt(2*time.Second)
+		// Object is gone if inspect doesn't show the description
+		return !strings.Contains(output, "removable widget")
+	})
+	if !found {
+		return fmt.Errorf("removable object should not exist after removal: %q", output)
+	}
+
+	// Test edge case: can't remove self - verify we stay logged in
+	if err := tc.sendLine("/remove self"); err != nil {
+		return fmt.Errorf("/remove self command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/remove self command did not complete: %q", output)
+	}
+	// Verify we're still logged in by checking we can look around
+	if err := tc.sendLine("look"); err != nil {
+		return fmt.Errorf("look after remove self: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("should still be logged in after failed self-removal: %q", output)
+	}
+
+	fmt.Println("  /remove command: OK")
+
+	// === Test 12: Movement events ===
+	fmt.Println("Testing movement event notifications...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for movement: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter genesis for movement did not complete")
+	}
+
+	// Observer updates its description when it sees movement
+	observerSource := `setDescriptions([{Short: 'watcher orb (watching)'}]);
+addCallback('movement', ['emit'], (msg) => {
+	const id = msg.Object && msg.Object.Unsafe ? msg.Object.Unsafe.Id : 'unknown';
+	setDescriptions([{Short: 'watcher orb (saw: ' + id + ')'}]);
+});
+`
+	if err := dav.Put("/observer.js", observerSource); err != nil {
+		return fmt.Errorf("failed to create /observer.js: %w", err)
+	}
+
+	moveableSource := `setDescriptions([{Short: 'moveable cube'}]);
+`
+	if err := dav.Put("/moveable.js", moveableSource); err != nil {
+		return fmt.Errorf("failed to create /moveable.js: %w", err)
+	}
+
+	if err := tc.sendLine("/create /observer.js"); err != nil {
+		return fmt.Errorf("/create observer: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create observer did not complete")
+	}
+	if _, found := ts.waitForSourceObject(ctx, "/observer.js", 2*time.Second); !found {
+		return fmt.Errorf("observer was not created")
+	}
+
+	if err := tc.sendLine("/create /moveable.js"); err != nil {
+		return fmt.Errorf("/create moveable: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create moveable did not complete")
+	}
+
+	moveableID, found := ts.waitForSourceObject(ctx, "/moveable.js", 2*time.Second)
+	if !found {
+		return fmt.Errorf("moveable was not created")
+	}
+
+	// Move the moveable to lookroom
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", moveableID, lookRoomID)); err != nil {
+		return fmt.Errorf("/move moveable to lookroom: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/move moveable to lookroom did not complete")
+	}
+
+	// Poll with look until observer shows it saw the movement
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(2*time.Second)
+		return strings.Contains(output, "watcher orb (saw: "+moveableID+")")
+	})
+	if !found {
+		return fmt.Errorf("observer should have seen moveable in movement event: %q", output)
+	}
+
+	fmt.Println("  Movement event notifications: OK")
+
 	return nil
 }
