@@ -93,7 +93,9 @@ func (h *Hash) Set(k string, v []byte, overwrite bool) error {
 func (h *Hash) Del(k string) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
-	if stat := h.dbm.Remove(k); !stat.IsOK() {
+	if stat := h.dbm.Remove(k); stat.GetCode() == tkrzw.StatusNotFoundError {
+		return juicemud.WithStack(os.ErrNotExist)
+	} else if !stat.IsOK() {
 		return juicemud.WithStack(stat)
 	}
 	return nil

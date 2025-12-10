@@ -682,16 +682,22 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 		if err := tx.Upsert(ctx, toMove, true); err != nil {
 			return juicemud.WithStack(err)
 		}
-		if err := logSync(ctx, tx, &FileSync{
-			Remove: oldPath,
-		}); err != nil {
-			return juicemud.WithStack(err)
+		// Only sync content if the file has content (modTime != 0 means content exists)
+		if modTime != 0 {
+			if err := logSync(ctx, tx, &FileSync{
+				Remove: oldPath,
+			}); err != nil {
+				return juicemud.WithStack(err)
+			}
+			if err := logSync(ctx, tx, &FileSync{
+				Set:     newPath,
+				Content: content,
+				ModTime: modTime,
+			}); err != nil {
+				return juicemud.WithStack(err)
+			}
 		}
-		return juicemud.WithStack(logSync(ctx, tx, &FileSync{
-			Set:     newPath,
-			Content: content,
-			ModTime: modTime,
-		}))
+		return nil
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
