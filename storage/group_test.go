@@ -1311,4 +1311,3 @@ func TestAddUserToGroup_AlreadyMemberIsIdempotent(t *testing.T) {
 		t.Fatalf("Expected alice, got %s", members[0].Name)
 	}
 }
-

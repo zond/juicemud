@@ -801,10 +801,15 @@ func (s *Storage) delFileIfExists(ctx context.Context, db sqlx.ExtContext, path 
 	if _, err := db.ExecContext(ctx, "DELETE FROM File WHERE Id = ?", file.Id); err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := logSync(ctx, db, &FileSync{
-		Remove: path,
-	}); err != nil {
+	// Only sync content removal if the file has content (modTime != 0 means content exists)
+	if modTime, err := s.SourceModTime(ctx, path); err != nil {
 		return juicemud.WithStack(err)
+	} else if modTime != 0 {
+		if err := logSync(ctx, db, &FileSync{
+			Remove: path,
+		}); err != nil {
+			return juicemud.WithStack(err)
+		}
 	}
 	return nil
 }

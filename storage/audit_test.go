@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zond/juicemud"
 )
@@ -804,9 +805,9 @@ func TestAudit_TimeIsRFC3339(t *testing.T) {
 			t.Error("Time field is empty")
 			continue
 		}
-		// RFC3339Nano should parse RFC3339 as well
-		if !strings.Contains(entry.Time, "T") || !strings.Contains(entry.Time, "Z") {
-			t.Errorf("Time %q doesn't look like RFC3339", entry.Time)
+		// Use proper RFC3339 parsing for validation
+		if _, err := time.Parse(time.RFC3339Nano, entry.Time); err != nil {
+			t.Errorf("Time %q is not valid RFC3339: %v", entry.Time, err)
 		}
 	}
 }
