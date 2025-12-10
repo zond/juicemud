@@ -1546,14 +1546,8 @@ addCallback('trigger', ['action'], (msg) => {
 		return fmt.Errorf("logger should have updated description after trigger: %q", output)
 	}
 
-	// Reset the logger for the next test
-	loggerResetSource := `setDescriptions([{Short: 'logger stone'}]);
-addCallback('trigger', ['action'], (msg) => {
-	log('DEBUG: trigger received with line:', msg.line);
-	setDescriptions([{Short: 'logger stone (triggered)'}]);
-});
-`
-	if err := dav.Put("/logger.js", loggerResetSource); err != nil {
+	// Reset the logger for the next test (re-upload resets description to untriggered state)
+	if err := dav.Put("/logger.js", loggerSource); err != nil {
 		return fmt.Errorf("failed to reset /logger.js: %w", err)
 	}
 
@@ -1614,7 +1608,7 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Reset the logger again
-	if err := dav.Put("/logger.js", loggerResetSource); err != nil {
+	if err := dav.Put("/logger.js", loggerSource); err != nil {
 		return fmt.Errorf("failed to reset /logger.js again: %w", err)
 	}
 

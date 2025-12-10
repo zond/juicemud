@@ -118,7 +118,7 @@ addCallback('greet', ['command'], (msg) => {
 
 **Event Tags** determine how events are routed:
 - `command`: Commands from a player to their own object. Content: `{name: "...", line: "..."}`
-- `action`: Actions an object takes on siblings (other objects in the same location). Content: `{name: "...", line: "..."}`
+- `action`: Actions directed at sibling objects (other objects in the same location). Content: `{name: "...", line: "..."}`
 - `emit`: System infrastructure events with arbitrary JSON content depending on the source
 
 **Inter-Object Communication**: Objects can communicate with siblings using `emit()`:
