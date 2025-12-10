@@ -47,6 +47,17 @@ For verifying object state and waiting for object creation, tests prefer:
 | `emit()` | 9 | Sender emits to receiver, descriptions update |
 | `setTimeout()` | 10 | Timer schedules delayed event |
 | `movement` event | 12 | Observer sees object move out of room |
+| `/mkgroup` | 13 | Create groups with owner and supergroup flags |
+| `/rmgroup` | 13 | Delete empty groups |
+| `/adduser` | 13 | Add user to group |
+| `/rmuser` | 13 | Remove user from group |
+| `/editgroup` | 13 | Edit group name, owner, supergroup flag |
+| `/listgroups` | 13 | List all groups with properties |
+| `/members` | 13 | List members of a group |
+| `/groups` | 13 | Show user's group memberships |
+| `/debug` | 14 | Attach to object console |
+| `/undebug` | 14 | Detach from object console |
+| `log()` | 14 | Console output appears when debug attached |
 
 ## Not Tested
 
@@ -60,15 +71,13 @@ For verifying object state and waiting for object creation, tests prefer:
 
 | Command | Description | Priority |
 |---------|-------------|----------|
-| `/debug` / `/undebug` | Attach to object console, see `log()` output | High |
-| `/groups` | Show user's group memberships | Low |
 | `/chread` / `/chwrite` | File read/write permissions | Medium |
+| `/checkperm` | Dry-run permission check (not implemented) | Low |
 
 ### JavaScript API Functions
 
 | Function | Description | Priority |
 |----------|-------------|----------|
-| `log()` | Console output (requires `/debug`) | High |
 | `getNeighbourhood()` | Get surrounding rooms/objects | Medium |
 | `removeCallback()` | Unregister a callback | Low |
 | `getSkillConfig()` / `setSkillConfig()` | Individual skill configuration | Low |
@@ -98,39 +107,31 @@ For verifying object state and waiting for object creation, tests prefer:
 
 ## Suggested Next Tests
 
-### 1. `/debug` and `log()` (High Priority)
-Test the debugging workflow that wizards use during development:
-- Create object with `log('message')` calls
-- Run `/debug #objectid` to attach console
-- Trigger event that causes log output
-- Verify output appears in terminal
-- Run `/undebug #objectid` to detach
-
-### 2. `created` event (Medium Priority)
+### 1. `created` event (Medium Priority)
 Verify objects receive notification when created:
 - Create object source with `addCallback('created', ['emit'], ...)`
 - Use `/create` to instantiate it
 - Verify callback was invoked with creator info
 
-### 3. `look [target]` (Medium Priority)
+### 2. `look [target]` (Medium Priority)
 Test looking at specific objects:
 - Create an object with a long description
 - Use `look <object>` to examine it
 - Verify shows object name and long description
 
-### 4. Room/sibling action handlers (Medium Priority)
+### 3. Room/sibling action handlers (Medium Priority)
 Test that actions can be handled by room or siblings:
 - Create room with action handler
 - Enter room and issue action command
 - Verify room's handler is invoked
 
-### 5. State persistence (Medium Priority)
+### 4. State persistence (Medium Priority)
 Test that JS `state` object persists:
 - Create object that stores counter in `state`
 - Increment counter via command
 - Verify counter persists across multiple commands
 
-### 6. Edge cases (Lower Priority)
+### 5. Edge cases (Lower Priority)
 - `/exit` at genesis should fail gracefully
 - `/move #obj #obj` should fail (circular)
 - WebDAV access without wizard privileges

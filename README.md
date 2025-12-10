@@ -107,16 +107,66 @@ go generate ./structs
 
 ### Key Concepts
 
-**Event System**: Objects receive events with types and tags:
-- `emit` tag: Infrastructure events (connected, movement, created)
-- `command` tag: Player commands to their object
-- `action` tag: Actions from other objects
+**Event System**: Objects communicate through events. Objects register callbacks with `addCallback(eventType, tags, handler)`:
+
+```javascript
+// Register a callback for the "greet" event with the "command" tag
+addCallback('greet', ['command'], (msg) => {
+    send(msg.name + ' greets everyone warmly.');
+});
+```
+
+**Event Tags** determine how events are routed:
+- `command`: Commands from a player to their own object. Content: `{name: "...", line: "..."}`
+- `action`: Actions an object takes on siblings (other objects in the same location). Content: `{name: "...", line: "..."}`
+- `emit`: System infrastructure events with arbitrary JSON content depending on the source
+
+**Inter-Object Communication**: Objects can communicate with siblings using `emit()`:
+
+```javascript
+// Emit an event to all siblings in the current location
+emit('ping', {message: 'hello from sender'});
+
+// Receive emitted events
+addCallback('ping', ['emit'], (msg) => {
+    log('Received ping:', msg.message);
+});
+```
+
+The `emit()` function sends events to all objects in the same location. Movement events are a special type of emit:
+```javascript
+// Movement events include: Object (moved), Source (old location), Destination (new location)
+addCallback('movement', ['emit'], (msg) => {
+    if (msg.Object && msg.Object.Unsafe) {
+        log('Object moved:', msg.Object.Unsafe.Id);
+    }
+});
+```
+
+**Calling Other Objects**: Use `call(target, eventType, line)` to trigger actions on other objects:
+```javascript
+// Trigger the "trigger" event on an object matching "logger stone"
+call('logger stone', 'trigger', 'with some extra args');
+```
+
+**Delayed Execution**: Use `setTimeout(handler, ms)` to schedule code to run later:
+```javascript
+setTimeout(() => {
+    setDescriptions([{Short: 'timer (activated)'}]);
+}, 1000);
+```
+
+**Debugging**: Wizards can attach to an object's console with `/debug #objectid` to see `log()` output, and detach with `/undebug #objectid`.
 
 **Skill/Challenge System**: Descriptions and exits can have challenge requirements. Objects have skills with theoretical/practical levels, recharge times, and forgetting mechanics. See `docs/skill-system.md` for details.
 
 **File System**: JavaScript sources stored in virtual filesystem with read/write group permissions. Files tracked in SQLite, content in tkrzw hash.
 
-**Wizard Commands**: Users in "wizards" group get access to `/create`, `/inspect`, `/move`, `/remove`, `/enter`, `/exit`, `/debug`, `/ls`, `/chread`, `/chwrite`, `/groups`.
+**Wizard Commands**: Users in "wizards" group get access to:
+- Object management: `/create`, `/inspect`, `/move`, `/remove`, `/enter`, `/exit`
+- Debugging: `/debug`, `/undebug`
+- File permissions: `/ls`, `/chread`, `/chwrite`
+- Group management: `/groups`, `/mkgroup`, `/rmgroup`, `/editgroup`, `/adduser`, `/rmuser`, `/members`, `/listgroups`
 
 ## Dependencies
 

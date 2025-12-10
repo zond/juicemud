@@ -1489,5 +1489,158 @@ addCallback('movement', ['emit'], (msg) => {
 
 	fmt.Println("  Group management commands: OK")
 
+	// === Test 14: /debug and log() ===
+	fmt.Println("Testing /debug and log()...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for debug: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter genesis for debug did not complete")
+	}
+
+	// Create an object that logs when triggered via an action
+	loggerSource := `setDescriptions([{Short: 'logger stone'}]);
+addCallback('trigger', ['action'], (msg) => {
+	log('DEBUG: trigger received with line:', msg.line);
+	setDescriptions([{Short: 'logger stone (triggered)'}]);
+});
+`
+	if err := dav.Put("/logger.js", loggerSource); err != nil {
+		return fmt.Errorf("failed to create /logger.js: %w", err)
+	}
+
+	if err := tc.sendLine("/create /logger.js"); err != nil {
+		return fmt.Errorf("/create logger: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create logger did not complete")
+	}
+
+	loggerID, found := tc.waitForObject("*logger*", 2*time.Second)
+	if !found {
+		return fmt.Errorf("logger was not created")
+	}
+
+	// Test 1: Without /debug, log output should NOT appear
+	if err := tc.sendLine("trigger logger stone"); err != nil {
+		return fmt.Errorf("trigger without debug: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("trigger without debug did not complete: %q", output)
+	}
+	// Verify no DEBUG message appears (we're not attached to console)
+	if strings.Contains(output, "DEBUG:") {
+		return fmt.Errorf("log output should NOT appear without /debug: %q", output)
+	}
+
+	// Wait for object to update its description
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(2*time.Second)
+		return strings.Contains(output, "logger stone (triggered)")
+	})
+	if !found {
+		return fmt.Errorf("logger should have updated description after trigger: %q", output)
+	}
+
+	// Reset the logger for the next test
+	loggerResetSource := `setDescriptions([{Short: 'logger stone'}]);
+addCallback('trigger', ['action'], (msg) => {
+	log('DEBUG: trigger received with line:', msg.line);
+	setDescriptions([{Short: 'logger stone (triggered)'}]);
+});
+`
+	if err := dav.Put("/logger.js", loggerResetSource); err != nil {
+		return fmt.Errorf("failed to reset /logger.js: %w", err)
+	}
+
+	// Wait for description to reset
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(2*time.Second)
+		return strings.Contains(output, "logger stone") && !strings.Contains(output, "(triggered)")
+	})
+	if !found {
+		return fmt.Errorf("logger should have reset description: %q", output)
+	}
+
+	// Test 2: Attach console with /debug
+	if err := tc.sendLine(fmt.Sprintf("/debug #%s", loggerID)); err != nil {
+		return fmt.Errorf("/debug command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/debug command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "connected to console") {
+		return fmt.Errorf("/debug should show 'connected to console': %q", output)
+	}
+
+	// Trigger the logger - now log output should appear
+	if err := tc.sendLine("trigger logger stone"); err != nil {
+		return fmt.Errorf("trigger with debug: %w", err)
+	}
+
+	// Wait for output that includes the DEBUG message
+	// The log output appears asynchronously, so we poll
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		output = tc.readUntil(200*time.Millisecond, func(s string) bool {
+			return strings.Contains(s, "DEBUG:")
+		})
+		return strings.Contains(output, "DEBUG: trigger received with line:")
+	})
+	if !found {
+		return fmt.Errorf("log output should appear with /debug attached: %q", output)
+	}
+
+	// Wait for prompt after the action completes
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		// Prompt might already have been received in the readUntil above
+	}
+
+	// Test 3: Detach with /undebug
+	if err := tc.sendLine(fmt.Sprintf("/undebug #%s", loggerID)); err != nil {
+		return fmt.Errorf("/undebug command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/undebug command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "disconnected from console") {
+		return fmt.Errorf("/undebug should show 'disconnected from console': %q", output)
+	}
+
+	// Reset the logger again
+	if err := dav.Put("/logger.js", loggerResetSource); err != nil {
+		return fmt.Errorf("failed to reset /logger.js again: %w", err)
+	}
+
+	// Wait for description to reset
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(2*time.Second)
+		return strings.Contains(output, "logger stone") && !strings.Contains(output, "(triggered)")
+	})
+	if !found {
+		return fmt.Errorf("logger should have reset description again: %q", output)
+	}
+
+	// Trigger again - log output should NOT appear anymore
+	if err := tc.sendLine("trigger logger stone"); err != nil {
+		return fmt.Errorf("trigger after undebug: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("trigger after undebug did not complete: %q", output)
+	}
+	if strings.Contains(output, "DEBUG:") {
+		return fmt.Errorf("log output should NOT appear after /undebug: %q", output)
+	}
+
+	fmt.Println("  /debug and log(): OK")
+
 	return nil
 }
