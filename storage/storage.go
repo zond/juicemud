@@ -140,6 +140,7 @@ func (s *Storage) LoadSource(ctx context.Context, path string) ([]byte, int64, e
 }
 
 func (s *Storage) StoreSource(ctx context.Context, path string, content []byte) error {
+	callerRef := s.callerRef(ctx)
 	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		file, err := s.loadFile(ctx, tx, path)
 		if err != nil {
@@ -156,6 +157,10 @@ func (s *Storage) StoreSource(ctx context.Context, path string, content []byte) 
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
+	s.AuditLog(ctx, "FILE_UPDATE", AuditFileUpdate{
+		Caller: callerRef,
+		Path:   path,
+	})
 	return s.sync(ctx)
 }
 
@@ -512,7 +517,9 @@ type File struct {
 }
 
 func (s *Storage) ChwriteFile(ctx context.Context, path string, writer string) error {
-	return juicemud.WithStack(s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var callerRef AuditRef
+	var oldGroupRef, newGroupRef *AuditRef
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		file, err := s.loadFile(ctx, tx, path)
 		if err != nil {
 			return juicemud.WithStack(err)
@@ -520,6 +527,11 @@ func (s *Storage) ChwriteFile(ctx context.Context, path string, writer string) e
 		if err := s.CheckCallerAccessToGroupID(ctx, file.WriteGroup); err != nil {
 			return juicemud.WithStack(err)
 		}
+		oldGroup, err := s.loadGroupByID(ctx, tx, file.WriteGroup)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		oldGroupRef = RefPtr(oldGroup.Id, oldGroup.Name)
 		wg, err := s.loadGroupByName(ctx, tx, writer)
 		if err != nil {
 			return juicemud.WithStack(err)
@@ -527,16 +539,30 @@ func (s *Storage) ChwriteFile(ctx context.Context, path string, writer string) e
 		if err := s.CheckCallerAccessToGroupID(ctx, wg.Id); err != nil {
 			return juicemud.WithStack(err)
 		}
+		newGroupRef = RefPtr(wg.Id, wg.Name)
+		callerRef = s.callerRef(ctx)
 		file.WriteGroup = wg.Id
 		if err := tx.Upsert(ctx, file, true); err != nil {
 			return juicemud.WithStack(err)
 		}
 		return nil
-	}))
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+	s.AuditLog(ctx, "FILE_CHMOD", AuditFileChmod{
+		Caller:     callerRef,
+		Path:       path,
+		Permission: "write",
+		OldGroup:   oldGroupRef,
+		NewGroup:   newGroupRef,
+	})
+	return nil
 }
 
 func (s *Storage) ChreadFile(ctx context.Context, path string, reader string) error {
-	return juicemud.WithStack(s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var callerRef AuditRef
+	var oldGroupRef, newGroupRef *AuditRef
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		file, err := s.loadFile(ctx, tx, path)
 		if err != nil {
 			return juicemud.WithStack(err)
@@ -544,6 +570,11 @@ func (s *Storage) ChreadFile(ctx context.Context, path string, reader string) er
 		if err := s.CheckCallerAccessToGroupID(ctx, file.WriteGroup); err != nil {
 			return juicemud.WithStack(err)
 		}
+		oldGroup, err := s.loadGroupByID(ctx, tx, file.ReadGroup)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		oldGroupRef = RefPtr(oldGroup.Id, oldGroup.Name)
 		rg, err := s.loadGroupByName(ctx, tx, reader)
 		if err != nil {
 			return juicemud.WithStack(err)
@@ -551,12 +582,24 @@ func (s *Storage) ChreadFile(ctx context.Context, path string, reader string) er
 		if err := s.CheckCallerAccessToGroupID(ctx, rg.Id); err != nil {
 			return juicemud.WithStack(err)
 		}
+		newGroupRef = RefPtr(rg.Id, rg.Name)
+		callerRef = s.callerRef(ctx)
 		file.ReadGroup = rg.Id
 		if err := tx.Upsert(ctx, file, true); err != nil {
 			return juicemud.WithStack(err)
 		}
 		return nil
-	}))
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+	s.AuditLog(ctx, "FILE_CHMOD", AuditFileChmod{
+		Caller:     callerRef,
+		Path:       path,
+		Permission: "read",
+		OldGroup:   oldGroupRef,
+		NewGroup:   newGroupRef,
+	})
+	return nil
 }
 
 func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, created bool, err error) {
@@ -594,10 +637,18 @@ func (s *Storage) EnsureFile(ctx context.Context, path string) (file *File, crea
 	}); err != nil {
 		return nil, false, juicemud.WithStack(err)
 	}
+	if created {
+		s.AuditLog(ctx, "FILE_CREATE", AuditFileCreate{
+			Caller: s.callerRef(ctx),
+			Path:   path,
+			IsDir:  false,
+		})
+	}
 	return file, created, nil
 }
 
 func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) error {
+	callerRef := s.callerRef(ctx)
 	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		toMove, err := s.loadFile(ctx, tx, oldPath)
 		if err != nil {
@@ -639,6 +690,11 @@ func (s *Storage) MoveFile(ctx context.Context, oldPath string, newPath string) 
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
+	s.AuditLog(ctx, "FILE_MOVE", AuditFileMove{
+		Caller:  callerRef,
+		OldPath: oldPath,
+		NewPath: newPath,
+	})
 	return s.sync(ctx)
 }
 
@@ -743,23 +799,47 @@ func (s *Storage) delFileIfExists(ctx context.Context, db sqlx.ExtContext, path 
 }
 
 func (s *Storage) DelFile(ctx context.Context, path string) error {
+	var isDir bool
+	var deleted bool
+	callerRef := s.callerRef(ctx)
 	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
+		// Check if file exists and get its type before deleting
+		file, err := s.loadFile(ctx, tx, path)
+		if errors.Is(err, os.ErrNotExist) {
+			deleted = false
+			return nil
+		}
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		isDir = file.Dir
 		if err := s.delFileIfExists(ctx, tx, path, true); err != nil {
 			return juicemud.WithStack(err)
 		}
+		deleted = true
 		return nil
 	}); err != nil {
 		return juicemud.WithStack(err)
+	}
+	if deleted {
+		s.AuditLog(ctx, "FILE_DELETE", AuditFileDelete{
+			Caller: callerRef,
+			Path:   path,
+			IsDir:  isDir,
+		})
 	}
 	return s.sync(ctx)
 }
 
 func (s *Storage) CreateDir(ctx context.Context, path string) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var created bool
+	callerRef := s.callerRef(ctx)
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		if existing, err := s.loadFile(ctx, tx, path); err == nil {
 			if !existing.Dir {
 				return errors.Wrapf(os.ErrExist, "%q already exists, is not directory", path)
 			}
+			created = false
 			return nil
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return juicemud.WithStack(err)
@@ -788,8 +868,19 @@ func (s *Storage) CreateDir(ctx context.Context, path string) error {
 		if err := tx.Upsert(ctx, file, true); err != nil {
 			return juicemud.WithStack(err)
 		}
+		created = true
 		return nil
-	})
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if created {
+		s.AuditLog(ctx, "FILE_CREATE", AuditFileCreate{
+			Caller: callerRef,
+			Path:   path,
+			IsDir:  true,
+		})
+	}
+	return nil
 }
 
 type Group struct {
@@ -905,6 +996,14 @@ func AuthenticatedUser(ctx context.Context) (*User, bool) {
 // AuthenticateUser stores the user in the context for access control checks.
 func AuthenticateUser(ctx context.Context, u *User) context.Context {
 	return context.WithValue(ctx, authenticatedUser, u)
+}
+
+// callerRef returns an AuditRef for the authenticated user, or SystemRef if none.
+func (s *Storage) callerRef(ctx context.Context) AuditRef {
+	if caller, ok := AuthenticatedUser(ctx); ok {
+		return Ref(caller.Id, caller.Name)
+	}
+	return SystemRef()
 }
 
 func (s *Storage) LoadUser(ctx context.Context, name string) (*User, error) {

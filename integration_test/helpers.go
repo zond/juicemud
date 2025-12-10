@@ -68,14 +68,23 @@ func (tc *terminalClient) inspect(target string) (*inspectResult, error) {
 
 // waitForLocation polls via /inspect until the object is at the expected location.
 // Use empty string as target to inspect the current user's object, or "#<id>" for other objects.
+// After finding the expected location, it drains any remaining buffered output to avoid
+// interference with subsequent commands.
 func (tc *terminalClient) waitForLocation(target, expectedLocation string, timeout time.Duration) bool {
-	return waitForCondition(timeout, 50*time.Millisecond, func() bool {
+	found := waitForCondition(timeout, 50*time.Millisecond, func() bool {
 		result, err := tc.inspect(target)
 		if err != nil {
 			return false
 		}
 		return result.GetLocation() == expectedLocation
 	})
+	if found {
+		// Drain any buffered output that might have arrived after the last prompt.
+		// This prevents leftover data from the final /inspect from interfering
+		// with subsequent commands.
+		tc.readUntil(50*time.Millisecond, nil)
+	}
+	return found
 }
 
 // waitForCondition polls until the condition returns true or timeout expires.

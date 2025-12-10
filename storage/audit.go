@@ -153,6 +153,52 @@ type AuditMemberRemove struct {
 
 func (AuditMemberRemove) auditData() {}
 
+// AuditFileCreate is logged when a file or directory is created.
+type AuditFileCreate struct {
+	Caller AuditRef `json:"caller"`
+	Path   string   `json:"path"`
+	IsDir  bool     `json:"is_dir"`
+}
+
+func (AuditFileCreate) auditData() {}
+
+// AuditFileUpdate is logged when file content is modified.
+type AuditFileUpdate struct {
+	Caller AuditRef `json:"caller"`
+	Path   string   `json:"path"`
+}
+
+func (AuditFileUpdate) auditData() {}
+
+// AuditFileDelete is logged when a file or directory is deleted.
+type AuditFileDelete struct {
+	Caller AuditRef `json:"caller"`
+	Path   string   `json:"path"`
+	IsDir  bool     `json:"is_dir"`
+}
+
+func (AuditFileDelete) auditData() {}
+
+// AuditFileMove is logged when a file or directory is moved/renamed.
+type AuditFileMove struct {
+	Caller  AuditRef `json:"caller"`
+	OldPath string   `json:"old_path"`
+	NewPath string   `json:"new_path"`
+}
+
+func (AuditFileMove) auditData() {}
+
+// AuditFileChmod is logged when file permissions are changed.
+type AuditFileChmod struct {
+	Caller     AuditRef  `json:"caller"`
+	Path       string    `json:"path"`
+	Permission string    `json:"permission"` // "read" or "write"
+	OldGroup   *AuditRef `json:"old_group,omitempty"`
+	NewGroup   *AuditRef `json:"new_group,omitempty"`
+}
+
+func (AuditFileChmod) auditData() {}
+
 // NewAuditLogger creates a new audit logger writing to the specified file.
 func NewAuditLogger(path string) (*AuditLogger, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
