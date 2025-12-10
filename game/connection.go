@@ -34,12 +34,82 @@ var (
 	consoleByObjectID    = juicemud.NewSyncMap[string, *Fanout]()
 )
 
-const loginAttemptInterval = 10 * time.Second
-
-var (
-	lastLoginAttempt   = map[string]time.Time{}
-	lastLoginAttemptMu sync.Mutex
+const (
+	loginAttemptInterval = 10 * time.Second
+	loginAttemptCleanup  = 1 * time.Minute
 )
+
+// loginRateLimiterT tracks failed login attempts per username for rate limiting.
+// Entries older than loginAttemptInterval are periodically cleaned up.
+type loginRateLimiterT struct {
+	mu       sync.Mutex
+	attempts map[string]time.Time
+	closeCh  chan struct{}
+}
+
+var loginRateLimiter = newLoginRateLimiter()
+
+func newLoginRateLimiter() *loginRateLimiterT {
+	l := &loginRateLimiterT{
+		attempts: make(map[string]time.Time),
+		closeCh:  make(chan struct{}),
+	}
+	go l.cleanup()
+	return l
+}
+
+// Close stops the cleanup goroutine.
+func (l *loginRateLimiterT) Close() {
+	close(l.closeCh)
+}
+
+// cleanup periodically removes expired login attempt entries.
+func (l *loginRateLimiterT) cleanup() {
+	ticker := time.NewTicker(loginAttemptCleanup)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-l.closeCh:
+			return
+		case <-ticker.C:
+			l.mu.Lock()
+			now := time.Now()
+			for username, lastAttempt := range l.attempts {
+				if now.Sub(lastAttempt) > loginAttemptInterval {
+					delete(l.attempts, username)
+				}
+			}
+			l.mu.Unlock()
+		}
+	}
+}
+
+// waitIfNeeded blocks if a recent failed attempt exists for the username.
+func (l *loginRateLimiterT) waitIfNeeded(username string, term *term.Terminal) {
+	l.mu.Lock()
+	last, ok := l.attempts[username]
+	l.mu.Unlock()
+	if ok {
+		if wait := loginAttemptInterval - time.Since(last); wait > 0 {
+			fmt.Fprintf(term, "Please wait %v before trying again.\n", wait.Round(time.Second))
+			time.Sleep(wait)
+		}
+	}
+}
+
+// recordFailure records a failed login attempt for rate limiting.
+func (l *loginRateLimiterT) recordFailure(username string) {
+	l.mu.Lock()
+	l.attempts[username] = time.Now()
+	l.mu.Unlock()
+}
+
+// clearFailure removes the rate limit entry on successful login.
+func (l *loginRateLimiterT) clearFailure(username string) {
+	l.mu.Lock()
+	delete(l.attempts, username)
+	l.mu.Unlock()
+}
 
 func addConsole(id string, term *term.Terminal) {
 	consoleByObjectID.WithLock(id, func() {
@@ -963,8 +1033,7 @@ func (c *Connection) Connect() error {
 
 func (c *Connection) loginUser() error {
 	fmt.Fprint(c.term, "** Login user **\n\n")
-	var user *storage.User
-	for user == nil {
+	for c.user == nil {
 		fmt.Fprintln(c.term, "Enter username or [abort]:")
 		username, err := c.term.ReadLine()
 		if err != nil {
@@ -973,49 +1042,45 @@ func (c *Connection) loginUser() error {
 		if username == "abort" {
 			return juicemud.WithStack(ErrOperationAborted)
 		}
-		if user, err = c.game.storage.LoadUser(c.ctx, username); errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintln(c.term, "Username not found!")
-		} else if err != nil {
-			return juicemud.WithStack(err)
-		}
-	}
-	for c.user == nil {
-		// Rate limit login attempts per user (only after failed attempts)
-		lastLoginAttemptMu.Lock()
-		if last, ok := lastLoginAttempt[user.Name]; ok {
-			if wait := loginAttemptInterval - time.Since(last); wait > 0 {
-				lastLoginAttemptMu.Unlock()
-				fmt.Fprintf(c.term, "Please wait %v before trying again.\n", wait.Round(time.Second))
-				time.Sleep(wait)
-				lastLoginAttemptMu.Lock()
-			}
-		}
-		lastLoginAttemptMu.Unlock()
+
+		// Rate limit login attempts per username (only after failed attempts)
+		loginRateLimiter.waitIfNeeded(username, c.term)
 
 		fmt.Fprint(c.term, "Enter password or [abort]:\n")
 		password, err := c.term.ReadPassword("> ")
 		if err != nil {
 			return err
 		}
+		if password == "abort" {
+			return juicemud.WithStack(ErrOperationAborted)
+		}
+
+		user, err := c.game.storage.LoadUser(c.ctx, username)
+		if errors.Is(err, os.ErrNotExist) {
+			// User doesn't exist - add delay to prevent timing-based enumeration
+			loginRateLimiter.recordFailure(username)
+			c.game.storage.AuditLog(c.ctx, "LOGIN_FAILED", storage.AuditLoginFailed{
+				User:   storage.Ref(0, username),
+				Remote: c.sess.RemoteAddr().String(),
+			})
+			fmt.Fprintln(c.term, "Invalid credentials!")
+			continue
+		} else if err != nil {
+			return juicemud.WithStack(err)
+		}
+
 		ha1 := digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
 		if subtle.ConstantTimeCompare([]byte(ha1), []byte(user.PasswordHash)) != 1 {
-			// Record failed attempt for rate limiting (per-user, in-memory).
-			// Note: We don't rate-limit failed attempts for non-existent users since
-			// that would require unbounded memory. The audit log may grow if an attacker
-			// tries many non-existent usernames, but this is acceptable for forensics.
-			lastLoginAttemptMu.Lock()
-			lastLoginAttempt[user.Name] = time.Now()
-			lastLoginAttemptMu.Unlock()
+			// Record failed attempt for rate limiting
+			loginRateLimiter.recordFailure(user.Name)
 			c.game.storage.AuditLog(c.ctx, "LOGIN_FAILED", storage.AuditLoginFailed{
 				User:   storage.Ref(user.Id, user.Name),
 				Remote: c.sess.RemoteAddr().String(),
 			})
-			fmt.Fprintln(c.term, "Incorrect password!")
+			fmt.Fprintln(c.term, "Invalid credentials!")
 		} else {
 			// Successful login - clear any rate limit for this user
-			lastLoginAttemptMu.Lock()
-			delete(lastLoginAttempt, user.Name)
-			lastLoginAttemptMu.Unlock()
+			loginRateLimiter.clearFailure(user.Name)
 			c.user = user
 		}
 	}

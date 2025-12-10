@@ -17,6 +17,11 @@ type Fs struct {
 	Storage *storage.Storage
 }
 
+// pathify normalizes a path to an absolute path within the virtual filesystem.
+// It uses filepath.Clean to resolve any ".." segments, ensuring paths like
+// "/../../../etc/passwd" become "/etc/passwd" within the virtual root.
+// Since the virtual filesystem is completely separate from the real filesystem,
+// and all paths are forced to start with "/", path traversal is not a concern.
 func pathify(s *string) {
 	*s = filepath.Clean(*s)
 	if *s != "/" && (*s)[len(*s)-1] == '/' {

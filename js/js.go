@@ -45,6 +45,10 @@ const (
 )
 
 func newMachine() (*machine, error) {
+	// Note: v8go doesn't expose V8's memory limit configuration (ResourceConstraints).
+	// We rely on execution timeouts to prevent runaway scripts. The state size is
+	// limited post-execution via maxStateSize, but memory usage during execution
+	// is unconstrained. This is a known limitation of the v8go wrapper.
 	m := &machine{
 		iso: v8go.NewIsolate(),
 	}

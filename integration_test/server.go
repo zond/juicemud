@@ -28,11 +28,12 @@ func NewTestServer() (*TestServer, error) {
 
 	ctx := context.Background()
 	config := server.Config{
-		SSHAddr:   "127.0.0.1:0",
-		HTTPSAddr: "127.0.0.1:0",
-		HTTPAddr:  "127.0.0.1:0",
-		Hostname:  "localhost",
-		Dir:       tmpDir,
+		SSHAddr:    "127.0.0.1:0",
+		HTTPSAddr:  "127.0.0.1:0",
+		HTTPAddr:   "127.0.0.1:0",
+		EnableHTTP: true, // Enable HTTP for testing
+		Hostname:   "localhost",
+		Dir:        tmpDir,
 	}
 
 	srv, err := server.New(ctx, config)

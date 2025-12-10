@@ -67,11 +67,12 @@ func (s *sizeBody) Close() error {
 
 // Config holds the server configuration.
 type Config struct {
-	SSHAddr   string // Address for SSH connections (e.g., "127.0.0.1:15000")
-	HTTPSAddr string // Address for HTTPS WebDAV (e.g., "127.0.0.1:8081")
-	HTTPAddr  string // Address for HTTP WebDAV (e.g., "127.0.0.1:8080")
-	Hostname  string // Hostname for HTTPS certificate
-	Dir       string // Directory for database and settings
+	SSHAddr    string // Address for SSH connections (e.g., "127.0.0.1:15000")
+	HTTPSAddr  string // Address for HTTPS WebDAV (e.g., "127.0.0.1:8081")
+	HTTPAddr   string // Address for HTTP WebDAV (e.g., "127.0.0.1:8080")
+	EnableHTTP bool   // Enable HTTP server (insecure, for development only)
+	Hostname   string // Hostname for HTTPS certificate
+	Dir        string // Directory for database and settings
 }
 
 // DefaultConfig returns the default server configuration.
@@ -197,6 +198,38 @@ func New(ctx context.Context, config Config) (*Server, error) {
 // Start begins serving on all configured addresses.
 // This function blocks until the server is shut down.
 func (s *Server) Start() error {
+	sshLn, err := net.Listen("tcp", s.config.SSHAddr)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	httpsLn, err := net.Listen("tcp", s.config.HTTPSAddr)
+	if err != nil {
+		sshLn.Close()
+		return juicemud.WithStack(err)
+	}
+
+	var httpLn net.Listener
+	if s.config.EnableHTTP {
+		httpLn, err = net.Listen("tcp", s.config.HTTPAddr)
+		if err != nil {
+			sshLn.Close()
+			httpsLn.Close()
+			return juicemud.WithStack(err)
+		}
+	}
+
+	return s.StartWithListeners(sshLn, httpLn, httpsLn)
+}
+
+// StartWithListeners starts the server using the provided listeners.
+// This is useful for testing where you want to use random ports.
+// The httpLn listener is only used if EnableHTTP is true in the config.
+func (s *Server) StartWithListeners(sshLn, httpLn, httpsLn net.Listener) error {
+	s.sshListener = sshLn
+	s.httpListener = httpLn
+	s.httpsListener = httpsLn
+
 	fingerprint := ""
 	if pemBytes, err := os.ReadFile(s.crypto.PrivKeyPath); err == nil {
 		if signer, err := gossh.ParsePrivateKey(pemBytes); err == nil {
@@ -204,43 +237,26 @@ func (s *Server) Start() error {
 		}
 	}
 
-	log.Printf("Serving SSH on %q with public key %q", s.config.SSHAddr, fingerprint)
-	log.Printf("Serving HTTPS on %q with public key %q", s.config.HTTPSAddr, fingerprint)
-	log.Printf("Serving HTTP on %q", s.config.HTTPAddr)
+	log.Printf("Serving SSH on %q with public key %q", sshLn.Addr(), fingerprint)
+	log.Printf("Serving HTTPS on %q with public key %q", httpsLn.Addr(), fingerprint)
 
-	errCh := make(chan error, 3)
+	numServers := 2
+	if s.config.EnableHTTP && httpLn != nil {
+		log.Printf("Serving HTTP on %q (insecure, for development only)", httpLn.Addr())
+		numServers = 3
+	}
 
-	go func() {
-		errCh <- s.httpsServer.ListenAndServeTLS(s.crypto.HTTPSCertPath, s.crypto.PrivKeyPath)
-	}()
-
-	go func() {
-		errCh <- s.httpServer.ListenAndServe()
-	}()
-
-	go func() {
-		errCh <- s.sshServer.ListenAndServe()
-	}()
-
-	return <-errCh
-}
-
-// StartWithListeners starts the server using the provided listeners.
-// This is useful for testing where you want to use random ports.
-func (s *Server) StartWithListeners(sshLn, httpLn, httpsLn net.Listener) error {
-	s.sshListener = sshLn
-	s.httpListener = httpLn
-	s.httpsListener = httpsLn
-
-	errCh := make(chan error, 3)
+	errCh := make(chan error, numServers)
 
 	go func() {
 		errCh <- s.httpsServer.ServeTLS(httpsLn, s.crypto.HTTPSCertPath, s.crypto.PrivKeyPath)
 	}()
 
-	go func() {
-		errCh <- s.httpServer.Serve(httpLn)
-	}()
+	if s.config.EnableHTTP && httpLn != nil {
+		go func() {
+			errCh <- s.httpServer.Serve(httpLn)
+		}()
+	}
 
 	go func() {
 		errCh <- s.sshServer.Serve(sshLn)
@@ -266,6 +282,7 @@ func (s *Server) Close() error {
 		errs = append(errs, err)
 	}
 	s.davHandler.Close()
+	s.game.Close()
 	if err := s.storage.Close(); err != nil {
 		errs = append(errs, err)
 	}

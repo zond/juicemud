@@ -46,10 +46,21 @@ func (c Crypto) Generate() error {
 	}
 
 	// Create a self-signed certificate template
+	// Generate random serial number (required to be unique per CA, good practice even for self-signed)
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return err
+	}
+
+	hostname := c.Hostname
+	if hostname == "" {
+		hostname = "localhost"
+	}
+
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName: "localhost",
+			CommonName: hostname,
 		},
 		NotBefore: time.Now(),
 		NotAfter:  time.Now().AddDate(1, 0, 0),
@@ -57,7 +68,7 @@ func (c Crypto) Generate() error {
 		ExtKeyUsage: []x509.ExtKeyUsage{
 			x509.ExtKeyUsageServerAuth,
 		},
-		DNSNames: []string{"localhost"},
+		DNSNames: []string{hostname, "localhost"},
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &privateKey.PublicKey, privateKey)

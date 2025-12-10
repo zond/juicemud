@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/xml"
 	"errors"
@@ -392,6 +393,9 @@ func createDavResponse(href string, info *FileInfo) davResponse {
 	if info.IsDir && !strings.HasSuffix(href, "/") {
 		href = href + "/"
 	}
+	// URL-encode the path for proper RFC 4918 compliance.
+	// Split into segments to preserve path structure while encoding each segment.
+	href = encodePath(href)
 
 	displayName := info.Name
 	if displayName == "" && info.IsDir {
@@ -540,7 +544,7 @@ func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) error {
 	token = strings.Trim(token, "<>")
 
 	lock := h.locks[path]
-	if lock == nil || lock.Token != token {
+	if lock == nil || subtle.ConstantTimeCompare([]byte(lock.Token), []byte(token)) != 1 {
 		http.Error(w, "Lock not found or token mismatch", http.StatusConflict)
 		return errors.New("lock not found or token mismatch")
 	}
@@ -548,4 +552,13 @@ func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) error {
 	delete(h.locks, path)
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// encodePath URL-encodes each segment of a path while preserving the "/" separators.
+func encodePath(p string) string {
+	segments := strings.Split(p, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return strings.Join(segments, "/")
 }

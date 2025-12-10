@@ -282,6 +282,11 @@ func (g *Game) loadNeighbourhoodAt(ctx context.Context, loc string) (*structs.Ne
 	return neighbourhood, nil
 }
 
+// addGlobalCallbacks adds callbacks available to all JavaScript code (boot.js and object scripts).
+// These include skill configuration functions that modify global state. This is safe because:
+// 1. Only wizards can create/edit source files (within their group permissions)
+// 2. Wizards are trusted to configure the game
+// 3. Skill configs are game balance settings, not security-sensitive
 func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
 	callbacks["getSkillConfigs"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()

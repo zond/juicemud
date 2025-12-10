@@ -180,6 +180,11 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	return g, nil
 }
 
+// Close stops any background goroutines associated with the Game.
+func (g *Game) Close() {
+	loginRateLimiter.Close()
+}
+
 func (g *Game) HandleSession(sess ssh.Session) {
 	env := &Connection{
 		game: g,

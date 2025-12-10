@@ -15,6 +15,12 @@ import (
 // Queue is a persistent priority queue for scheduled events, backed by a B-tree.
 // Events are processed in timestamp order. The offset field handles time jumps
 // on restart by adjusting all timestamps relative to the earliest queued event.
+//
+// Timestamp overflow analysis: Timestamps are uint64 nanoseconds. Current Unix
+// time is ~1.7e18 ns. JavaScript's MAX_SAFE_INTEGER (2^53-1 ≈ 9e15) as milliseconds
+// yields ~9e18 ns, so the maximum practical setTimeout() value produces
+// 1.7e18 + 9e18 ≈ 1.1e19, well within uint64's 1.8e19 limit. The system would
+// need to run until year 2554 for current time alone to overflow int64.
 type Queue struct {
 	tree      *dbm.TypeTree[structs.Event, *structs.Event]
 	cond      *sync.Cond

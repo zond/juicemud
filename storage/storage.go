@@ -1121,7 +1121,8 @@ func (s *Storage) EachObject(_ context.Context) iter.Seq2[*structs.Object, error
 	return s.objects.Each()
 }
 
-func (s *Storage) GetHA1AndUser(ctx context.Context, username string) (string, bool, *User, error) {
+// GetHA1AndAuthContext implements digest.UserStore for HTTP Digest authentication.
+func (s *Storage) GetHA1AndAuthContext(ctx context.Context, username string) (string, bool, context.Context, error) {
 	user := &User{}
 	if err := getSQL(ctx, s.sql, user, "SELECT * FROM User WHERE Name = ?", username); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1129,7 +1130,7 @@ func (s *Storage) GetHA1AndUser(ctx context.Context, username string) (string, b
 		}
 		return "", false, nil, juicemud.WithStack(err)
 	}
-	return user.PasswordHash, true, user, nil
+	return user.PasswordHash, true, AuthenticateUser(ctx, user), nil
 }
 
 type GroupMember struct {
