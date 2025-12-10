@@ -941,7 +941,7 @@ func (c *Connection) Process() error {
 
 func (c *Connection) Connect() error {
 	// Generate session ID at connection start so all audit events (including failed logins) can be correlated
-	c.ctx = storage.SetSessionID(c.ctx, storage.GenerateSessionID())
+	c.ctx = storage.SetSessionID(c.ctx, juicemud.NextUniqueID())
 	fmt.Fprint(c.term, "Welcome!\n\n")
 	sel := func() error {
 		return c.SelectExec(map[string]func() error{

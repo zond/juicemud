@@ -4,26 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
+	"io"
 	"sync"
 	"time"
 
-	"github.com/zond/juicemud"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// GenerateSessionID creates a unique session ID.
-// This is a convenience wrapper around juicemud.NextUniqueID.
-func GenerateSessionID() string {
-	return juicemud.NextUniqueID()
-}
-
 // AuditLogger writes security-relevant events to a log file as JSON.
-// TODO: Consider implementing log rotation when the audit log grows large.
+// Log rotation is handled automatically via lumberjack.
 type AuditLogger struct {
-	mu   sync.Mutex
-	file *os.File
-	enc  *json.Encoder
+	mu     sync.Mutex
+	writer io.WriteCloser
+	enc    *json.Encoder
 }
 
 // AuditRef identifies a user or group by both ID and name for audit logging.
@@ -199,19 +192,23 @@ type AuditFileChmod struct {
 
 func (AuditFileChmod) auditData() {}
 
-// NewAuditLogger creates a new audit logger writing to the specified file.
-func NewAuditLogger(path string) (*AuditLogger, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return nil, juicemud.WithStack(err)
+// NewAuditLogger creates a new audit logger writing to the specified file
+// with automatic log rotation.
+func NewAuditLogger(path string) *AuditLogger {
+	writer := &lumberjack.Logger{
+		Filename:   path,
+		MaxSize:    100,  // megabytes
+		MaxBackups: 10,   // old log files
+		MaxAge:     365,  // days
+		Compress:   true, // gzip rotated files
 	}
 	return &AuditLogger{
-		file: f,
-		enc:  json.NewEncoder(f),
-	}, nil
+		writer: writer,
+		enc:    json.NewEncoder(writer),
+	}
 }
 
-// Log writes a structured audit entry as JSON and flushes to disk.
+// Log writes a structured audit entry as JSON.
 // Panics if encoding fails. This is intentional: all AuditData implementations
 // are typed structs defined in this package with JSON-safe fields, so encoding
 // should never fail. A failure indicates a programming error that must be fixed.
@@ -227,14 +224,11 @@ func (a *AuditLogger) Log(ctx context.Context, event string, data AuditData) {
 	}); err != nil {
 		panic(fmt.Sprintf("audit log encode failed: %v", err))
 	}
-	if err := a.file.Sync(); err != nil {
-		log.Printf("audit log sync failed: %v", err)
-	}
 }
 
 // Close closes the audit log file.
 func (a *AuditLogger) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.file.Close()
+	return a.writer.Close()
 }

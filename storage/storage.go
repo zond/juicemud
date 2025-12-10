@@ -46,10 +46,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	audit, err := NewAuditLogger(filepath.Join(dir, "audit.log"))
-	if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
+	audit := NewAuditLogger(filepath.Join(dir, "audit.log"))
 	s := &Storage{
 		sql:           sql,
 		sources:       sources,
