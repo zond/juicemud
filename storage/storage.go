@@ -886,17 +886,11 @@ func SessionID(ctx context.Context) (string, bool) {
 }
 
 // SetSessionID stores a session ID in the context for audit logging.
-// For settable contexts (like gliderlabs ssh), mutates in place and returns the same context.
-// For standard contexts, returns a new context with the value set.
 func SetSessionID(ctx context.Context, sessionID string) context.Context {
-	if sctx, ok := ctx.(settableContext); ok {
-		sctx.SetValue(sessionIDKey, sessionID)
-		return ctx
-	}
 	return context.WithValue(ctx, sessionIDKey, sessionID)
 }
 
-// AuthenticatedUser retrieves the user from context if authenticated via WebDAV.
+// AuthenticatedUser retrieves the user from context if authenticated.
 func AuthenticatedUser(ctx context.Context) (*User, bool) {
 	val := ctx.Value(authenticatedUser)
 	if val == nil {
@@ -908,18 +902,8 @@ func AuthenticatedUser(ctx context.Context) (*User, bool) {
 	return nil, false
 }
 
-type settableContext interface {
-	SetValue(any, any)
-}
-
 // AuthenticateUser stores the user in the context for access control checks.
-// For settable contexts (like gliderlabs ssh), mutates in place and returns the same context.
-// For standard contexts, returns a new context with the value set.
 func AuthenticateUser(ctx context.Context, u *User) context.Context {
-	if sctx, ok := ctx.(settableContext); ok {
-		sctx.SetValue(authenticatedUser, u)
-		return ctx
-	}
 	return context.WithValue(ctx, authenticatedUser, u)
 }
 
@@ -1055,6 +1039,9 @@ type GroupMember struct {
 // This operation is idempotent: adding an already-present member succeeds silently.
 // Note: RemoveUserFromGroup is NOT idempotent and errors if user is not a member.
 func (s *Storage) AddUserToGroup(ctx context.Context, user *User, groupName string) error {
+	if user == nil {
+		return errors.New("user cannot be nil")
+	}
 	var callerRef AuditRef
 	var groupRef AuditRef
 	var added bool

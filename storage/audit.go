@@ -89,7 +89,8 @@ func (AuditUserLogin) auditData() {}
 
 // AuditSessionEnd is logged when a session ends (disconnect/logout).
 type AuditSessionEnd struct {
-	User AuditRef `json:"user"`
+	User   AuditRef `json:"user"`
+	Remote string   `json:"remote"`
 }
 
 func (AuditSessionEnd) auditData() {}
@@ -165,7 +166,9 @@ func NewAuditLogger(path string) (*AuditLogger, error) {
 }
 
 // Log writes a structured audit entry as JSON and flushes to disk.
-// Panics if encoding fails (indicates a bug in the typed AuditData structs).
+// Panics if encoding fails. This is intentional: all AuditData implementations
+// are typed structs defined in this package with JSON-safe fields, so encoding
+// should never fail. A failure indicates a programming error that must be fixed.
 func (a *AuditLogger) Log(ctx context.Context, event string, data AuditData) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -999,7 +999,10 @@ func (c *Connection) loginUser() error {
 		}
 		ha1 := digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
 		if subtle.ConstantTimeCompare([]byte(ha1), []byte(user.PasswordHash)) != 1 {
-			// Record failed attempt for rate limiting
+			// Record failed attempt for rate limiting (per-user, in-memory).
+			// Note: We don't rate-limit failed attempts for non-existent users since
+			// that would require unbounded memory. The audit log may grow if an attacker
+			// tries many non-existent usernames, but this is acceptable for forensics.
 			lastLoginAttemptMu.Lock()
 			lastLoginAttempt[user.Name] = time.Now()
 			lastLoginAttemptMu.Unlock()

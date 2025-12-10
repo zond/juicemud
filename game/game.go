@@ -197,7 +197,8 @@ func (g *Game) HandleSession(sess ssh.Session) {
 	// Log session end if user was authenticated
 	if env.user != nil {
 		g.storage.AuditLog(env.ctx, "SESSION_END", storage.AuditSessionEnd{
-			User: storage.Ref(env.user.Id, env.user.Name),
+			User:   storage.Ref(env.user.Id, env.user.Name),
+			Remote: sess.RemoteAddr().String(),
 		})
 	}
 }
