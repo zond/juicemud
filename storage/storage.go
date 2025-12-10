@@ -549,13 +549,17 @@ func (s *Storage) ChwriteFile(ctx context.Context, path string, writer string) e
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
-	s.AuditLog(ctx, "FILE_CHMOD", AuditFileChmod{
-		Caller:     callerRef,
-		Path:       path,
-		Permission: "write",
-		OldGroup:   oldGroupRef,
-		NewGroup:   newGroupRef,
-	})
+	// Only audit if the group actually changed.
+	// Both refs are guaranteed non-nil with valid IDs since the transaction succeeded.
+	if *oldGroupRef.ID != *newGroupRef.ID {
+		s.AuditLog(ctx, "FILE_CHMOD", AuditFileChmod{
+			Caller:     callerRef,
+			Path:       path,
+			Permission: "write",
+			OldGroup:   oldGroupRef,
+			NewGroup:   newGroupRef,
+		})
+	}
 	return nil
 }
 
@@ -592,13 +596,17 @@ func (s *Storage) ChreadFile(ctx context.Context, path string, reader string) er
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
-	s.AuditLog(ctx, "FILE_CHMOD", AuditFileChmod{
-		Caller:     callerRef,
-		Path:       path,
-		Permission: "read",
-		OldGroup:   oldGroupRef,
-		NewGroup:   newGroupRef,
-	})
+	// Only audit if the group actually changed.
+	// Both refs are guaranteed non-nil with valid IDs since the transaction succeeded.
+	if *oldGroupRef.ID != *newGroupRef.ID {
+		s.AuditLog(ctx, "FILE_CHMOD", AuditFileChmod{
+			Caller:     callerRef,
+			Path:       path,
+			Permission: "read",
+			OldGroup:   oldGroupRef,
+			NewGroup:   newGroupRef,
+		})
+	}
 	return nil
 }
 
