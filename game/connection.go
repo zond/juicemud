@@ -1133,6 +1133,10 @@ func (c *Connection) createUser() error {
 		if err != nil {
 			return err
 		}
+		if password == "abort" {
+			fmt.Fprintln(c.term, "Password cannot be 'abort' (reserved keyword).")
+			continue
+		}
 		fmt.Fprintln(c.term, "Repeat new password:")
 		verification, err := c.term.ReadPassword("> ")
 		if err != nil {

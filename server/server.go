@@ -99,6 +99,7 @@ type Server struct {
 	httpsListener net.Listener
 	crypto        crypto.Crypto
 	davHandler    *dav.Handler
+	digestAuth    *digest.DigestAuth
 }
 
 // New creates a new server with the given configuration.
@@ -161,7 +162,8 @@ func New(ctx context.Context, config Config) (*Server, error) {
 	// Create WebDAV handler with auth
 	fsys := &fs.Fs{Storage: store}
 	davHandler := dav.New(fsys)
-	auth := digest.NewDigestAuth(juicemud.DAVAuthRealm, store).Wrap(davHandler)
+	digestAuth := digest.NewDigestAuth(juicemud.DAVAuthRealm, store)
+	auth := digestAuth.Wrap(davHandler)
 
 	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t := time.Now()
@@ -192,6 +194,7 @@ func New(ctx context.Context, config Config) (*Server, error) {
 		httpServer:  httpServer,
 		crypto:      cr,
 		davHandler:  davHandler,
+		digestAuth:  digestAuth,
 	}, nil
 }
 
@@ -282,6 +285,7 @@ func (s *Server) Close() error {
 		errs = append(errs, err)
 	}
 	s.davHandler.Close()
+	s.digestAuth.Close()
 	s.game.Close()
 	if err := s.storage.Close(); err != nil {
 		errs = append(errs, err)

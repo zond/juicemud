@@ -97,25 +97,16 @@ func (da *DigestAuth) issueNonce() string {
 	da.noncesMu.Lock()
 	defer da.noncesMu.Unlock()
 
-	// If we have too many nonces, remove oldest ones
+	// If we have too many nonces, evict older entries to stay under the limit.
+	// First pass: delete entries older than half the max age.
+	// Second pass: if still over limit, delete every other entry.
 	if len(da.nonces) >= nonceMaxCount {
-		// Find and remove oldest 10%
-		type nonceAge struct {
-			nonce    string
-			issuedAt time.Time
-		}
-		var oldest []nonceAge
-		for n, e := range da.nonces {
-			oldest = append(oldest, nonceAge{n, e.issuedAt})
-		}
-		// Simple approach: just delete entries older than median age
 		now := time.Now()
 		for n, e := range da.nonces {
 			if now.Sub(e.issuedAt) > nonceMaxAge/2 {
 				delete(da.nonces, n)
 			}
 		}
-		// If still too many, delete half randomly
 		if len(da.nonces) >= nonceMaxCount {
 			count := 0
 			for n := range da.nonces {
