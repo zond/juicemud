@@ -4,8 +4,6 @@ package structs
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/binary"
 	"hash/fnv"
 	"iter"
@@ -27,13 +25,7 @@ import (
 )
 
 var (
-	lastEventCounter  uint64 = 0
-	lastObjectCounter uint64 = 0
-	Encoding                 = base64.StdEncoding.WithPadding(base64.NoPadding)
-)
-
-const (
-	objectIDLen = 16
+	lastEventCounter uint64 = 0
 )
 
 type Timestamp uint64
@@ -54,18 +46,6 @@ func Stamp(t time.Time) Timestamp {
 	return Timestamp(t.UnixNano())
 }
 
-// NextObjectID generates a unique object ID using a monotonic timestamp prefix
-// followed by random bytes, then base64-encodes the result.
-func NextObjectID() (string, error) {
-	objectCounter := juicemud.Increment(&lastObjectCounter)
-	timeSize := binary.Size(objectCounter)
-	result := make([]byte, objectIDLen)
-	binary.BigEndian.PutUint64(result, objectCounter)
-	if _, err := rand.Read(result[timeSize:]); err != nil {
-		return "", juicemud.WithStack(err)
-	}
-	return Encoding.EncodeToString(result), nil
-}
 
 type Serializable[T any] interface {
 	Marshal([]byte)
@@ -154,13 +134,9 @@ func (o *ObjectDO) PostUnmarshal() {
 }
 
 func MakeObject(ctx context.Context) (*Object, error) {
-	newID, err := NextObjectID()
-	if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
 	obj := &Object{
 		Unsafe: &ObjectDO{
-			Id: newID,
+			Id: juicemud.NextUniqueID(),
 		},
 	}
 	obj.Unsafe.PostUnmarshal()

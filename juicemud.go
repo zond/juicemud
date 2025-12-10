@@ -3,6 +3,9 @@ package juicemud
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"iter"
 	"sync"
@@ -13,6 +16,32 @@ import (
 
 	goccy "github.com/goccy/go-json"
 )
+
+var (
+	lastUniqueIDCounter uint64 = 0
+)
+
+const (
+	uniqueIDLen = 16
+)
+
+// Encoding is the base64 encoding used for unique IDs.
+// Uses URL-safe encoding to avoid problematic characters in URLs and file paths.
+var Encoding = base64.RawURLEncoding
+
+// NextUniqueID generates a unique ID using a monotonic timestamp prefix
+// followed by random bytes, then base64-encodes the result.
+// This is used for object IDs, session IDs, and other unique identifiers.
+func NextUniqueID() string {
+	counter := Increment(&lastUniqueIDCounter)
+	timeSize := binary.Size(counter)
+	result := make([]byte, uniqueIDLen)
+	binary.BigEndian.PutUint64(result, counter)
+	if _, err := rand.Read(result[timeSize:]); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return Encoding.EncodeToString(result)
+}
 
 type contextKey int
 

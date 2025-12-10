@@ -35,7 +35,7 @@ func createTestUser(t *testing.T, s *Storage, name string, owner bool) *User {
 	t.Helper()
 	ctx := juicemud.MakeMainContext(context.Background())
 	user := &User{Name: name, Owner: owner}
-	if err := s.StoreUser(ctx, user, false); err != nil {
+	if err := s.StoreUser(ctx, user, false, "test"); err != nil {
 		t.Fatal(err)
 	}
 	// Reload to get ID
@@ -1276,5 +1276,38 @@ func TestRemoveUserFromGroup_NonExistentUserFails(t *testing.T) {
 	err := s.RemoveUserFromGroup(ctx, "nonexistent", "wizards")
 	if err == nil {
 		t.Fatal("Removing non-existent user should fail")
+	}
+}
+
+func TestAddUserToGroup_AlreadyMemberIsIdempotent(t *testing.T) {
+	s, cleanup := testStorage(t)
+	defer cleanup()
+
+	owner := createTestUser(t, s, "owner", true)
+	alice := createTestUser(t, s, "alice", false)
+	ctx := userContext(owner)
+
+	createTestGroup(t, s, "wizards", 0, false)
+
+	// Add alice to wizards
+	if err := s.AddUserToGroup(ctx, alice, "wizards"); err != nil {
+		t.Fatalf("First add should succeed: %v", err)
+	}
+
+	// Adding again should be idempotent (no error)
+	if err := s.AddUserToGroup(ctx, alice, "wizards"); err != nil {
+		t.Fatalf("Adding already-member should be idempotent: %v", err)
+	}
+
+	// Verify alice is still a member (only once)
+	members, err := s.GroupMembers(ctx, "wizards")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("Expected 1 member, got %d", len(members))
+	}
+	if members[0].Name != "alice" {
+		t.Fatalf("Expected alice, got %s", members[0].Name)
 	}
 }

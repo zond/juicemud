@@ -185,6 +185,7 @@ func (g *Game) HandleSession(sess ssh.Session) {
 		game: g,
 		term: term.NewTerminal(sess, "> "),
 		sess: sess,
+		ctx:  sess.Context(), // Initialize from session, will be updated with session ID and user
 	}
 	if err := env.Connect(); err != nil {
 		if !errors.Is(err, io.EOF) {
@@ -192,5 +193,11 @@ func (g *Game) HandleSession(sess ssh.Session) {
 			log.Println(err)
 			log.Println(juicemud.StackTrace(err))
 		}
+	}
+	// Log session end if user was authenticated
+	if env.user != nil {
+		g.storage.AuditLog(env.ctx, "SESSION_END", storage.AuditSessionEnd{
+			User: storage.Ref(env.user.Id, env.user.Name),
+		})
 	}
 }

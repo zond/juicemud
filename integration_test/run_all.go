@@ -114,17 +114,34 @@ func RunAll(ts *TestServer) error {
 	// === Test 2: WebDAV file operations ===
 	fmt.Println("Testing WebDAV file operations...")
 
-	// Make testuser an owner and wizard for subsequent tests
+	// Make testuser an owner for subsequent tests (needed to bootstrap wizard access)
 	user.Owner = true
-	if err := ts.Storage().StoreUser(ctx, user, true); err != nil {
+	if err := ts.Storage().StoreUser(ctx, user, true, ""); err != nil {
 		return fmt.Errorf("failed to make testuser owner: %w", err)
 	}
-	if err := makeUserWizard(ts, "testuser"); err != nil {
-		return err
+
+	// Reconnect as owner - owner status is checked at login time
+	tc, err := loginUser(ts.SSHAddr(), "testuser", "testpass123")
+	if err != nil {
+		return fmt.Errorf("loginUser as owner: %w", err)
 	}
 
-	// Reconnect as wizard - wizard status is checked at login time
-	tc, err := loginUser(ts.SSHAddr(), "testuser", "testpass123")
+	// Use /adduser command to add ourselves to the wizards group
+	// This tests the group management commands via SSH interface
+	if err := tc.sendLine("/adduser testuser wizards"); err != nil {
+		return fmt.Errorf("/adduser to wizards: %w", err)
+	}
+	output, ok := tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/adduser to wizards did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Added "testuser" to "wizards"`) {
+		return fmt.Errorf("/adduser to wizards should show success: %q", output)
+	}
+
+	// Reconnect to pick up wizard status - wizard membership is checked at login time
+	tc.Close()
+	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
 	if err != nil {
 		return fmt.Errorf("loginUser as wizard: %w", err)
 	}
@@ -294,7 +311,7 @@ setDescriptions([{
 		return fmt.Errorf("look in genesis: %w", err)
 	}
 
-	output, ok := tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(2*time.Second)
 	if !ok {
 		return fmt.Errorf("look in genesis did not complete: %q", output)
 	}
@@ -1045,6 +1062,432 @@ addCallback('movement', ['emit'], (msg) => {
 	}
 
 	fmt.Println("  Movement event notifications: OK")
+
+	// === Test 13: Group management commands ===
+	fmt.Println("Testing group management commands...")
+
+	// Drain any buffered output from the previous polling loop by waiting for any
+	// pending responses and then sending a known command.
+	// The polling loop in the previous test sends 'look' commands - wait a moment
+	// to let any in-flight responses arrive, then drain them.
+	time.Sleep(200 * time.Millisecond)
+	// Read and discard any buffered output
+	tc.readUntil(100*time.Millisecond, nil)
+
+	// Now send a drain command and wait for its prompt to ensure clean state
+	if err := tc.sendLine("/groups"); err != nil {
+		return fmt.Errorf("/groups drain command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/groups drain command did not complete")
+	}
+
+	// Test /mkgroup - create a group owned by "owner" (root level)
+	if err := tc.sendLine("/mkgroup testgroup owner"); err != nil {
+		return fmt.Errorf("/mkgroup command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/mkgroup command did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Created group "testgroup"`) {
+		return fmt.Errorf("/mkgroup should show success message: %q", output)
+	}
+
+	// Test /listgroups - verify group was created
+	if err := tc.sendLine("/listgroups"); err != nil {
+		return fmt.Errorf("/listgroups command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/listgroups command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "testgroup") {
+		return fmt.Errorf("/listgroups should show testgroup: %q", output)
+	}
+	if !strings.Contains(output, "wizards") {
+		return fmt.Errorf("/listgroups should show wizards group: %q", output)
+	}
+
+	// Test /mkgroup with supergroup flag
+	if err := tc.sendLine("/mkgroup supertest testgroup true"); err != nil {
+		return fmt.Errorf("/mkgroup supertest command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/mkgroup supertest command did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Created group "supertest"`) {
+		return fmt.Errorf("/mkgroup supertest should show success: %q", output)
+	}
+
+	// Verify supertest appears in /listgroups with supergroup flag
+	if err := tc.sendLine("/listgroups"); err != nil {
+		return fmt.Errorf("/listgroups after supertest: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/listgroups after supertest did not complete: %q", output)
+	}
+	if !strings.Contains(output, "supertest") {
+		return fmt.Errorf("/listgroups should show supertest: %q", output)
+	}
+	// Supertest should show "yes" in Supergroup column
+	if !strings.Contains(output, "yes") {
+		return fmt.Errorf("/listgroups should show 'yes' for supergroup: %q", output)
+	}
+
+	// Test /adduser - add testuser to testgroup
+	if err := tc.sendLine("/adduser testuser testgroup"); err != nil {
+		return fmt.Errorf("/adduser command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/adduser command did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Added "testuser" to "testgroup"`) {
+		return fmt.Errorf("/adduser should show success: %q", output)
+	}
+
+	// Test /members - verify user is in group
+	if err := tc.sendLine("/members testgroup"); err != nil {
+		return fmt.Errorf("/members command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/members command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "testuser") {
+		return fmt.Errorf("/members should show testuser: %q", output)
+	}
+	// lang.Card produces "a member" for count 1
+	if !strings.Contains(output, "a member") {
+		return fmt.Errorf("/members should show 'a member': %q", output)
+	}
+
+	// Test /groups - verify user sees their groups
+	if err := tc.sendLine("/groups"); err != nil {
+		return fmt.Errorf("/groups command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/groups command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "testgroup") {
+		return fmt.Errorf("/groups should show testgroup: %q", output)
+	}
+	if !strings.Contains(output, "wizards") {
+		return fmt.Errorf("/groups should show wizards: %q", output)
+	}
+
+	// Test /groups with user argument
+	if err := tc.sendLine("/groups testuser"); err != nil {
+		return fmt.Errorf("/groups testuser command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/groups testuser command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "testgroup") {
+		return fmt.Errorf("/groups testuser should show testgroup: %q", output)
+	}
+
+	// Test /editgroup -name - rename group
+	if err := tc.sendLine("/editgroup testgroup -name renamedgroup"); err != nil {
+		return fmt.Errorf("/editgroup -name command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/editgroup -name command did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Renamed group "testgroup" to "renamedgroup"`) {
+		return fmt.Errorf("/editgroup -name should show success: %q", output)
+	}
+
+	// Verify rename via /listgroups
+	if err := tc.sendLine("/listgroups"); err != nil {
+		return fmt.Errorf("/listgroups after rename: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/listgroups after rename did not complete: %q", output)
+	}
+	if strings.Contains(output, "testgroup") {
+		return fmt.Errorf("/listgroups should not show old name 'testgroup': %q", output)
+	}
+	if !strings.Contains(output, "renamedgroup") {
+		return fmt.Errorf("/listgroups should show new name 'renamedgroup': %q", output)
+	}
+
+	// Test /editgroup -super - change supergroup flag
+	if err := tc.sendLine("/editgroup renamedgroup -super true"); err != nil {
+		return fmt.Errorf("/editgroup -super command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/editgroup -super command did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Changed Supergroup of "renamedgroup" to true`) {
+		return fmt.Errorf("/editgroup -super should show success: %q", output)
+	}
+
+	// Test /editgroup -owner - change OwnerGroup
+	// First create a new group that we can use as an owner
+	if err := tc.sendLine("/mkgroup ownertest owner"); err != nil {
+		return fmt.Errorf("/mkgroup ownertest command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/mkgroup ownertest did not complete: %q", output)
+	}
+
+	// Change renamedgroup's OwnerGroup to ownertest
+	if err := tc.sendLine("/editgroup renamedgroup -owner ownertest"); err != nil {
+		return fmt.Errorf("/editgroup -owner command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/editgroup -owner command did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Changed OwnerGroup of "renamedgroup" to "ownertest"`) {
+		return fmt.Errorf("/editgroup -owner should show success: %q", output)
+	}
+
+	// Verify via /listgroups that renamedgroup now shows ownertest as owner
+	if err := tc.sendLine("/listgroups"); err != nil {
+		return fmt.Errorf("/listgroups after -owner: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/listgroups after -owner did not complete: %q", output)
+	}
+	// The output should show renamedgroup with ownertest as its owner
+	// (ownertest appears in the OwnerGroup column for renamedgroup's row)
+
+	// Change OwnerGroup back to "owner" (root level)
+	if err := tc.sendLine("/editgroup renamedgroup -owner owner"); err != nil {
+		return fmt.Errorf("/editgroup -owner to owner command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/editgroup -owner to owner did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Changed OwnerGroup of "renamedgroup" to "owner"`) {
+		return fmt.Errorf("/editgroup -owner to owner should show success: %q", output)
+	}
+
+	// Cleanup ownertest
+	if err := tc.sendLine("/rmgroup ownertest"); err != nil {
+		return fmt.Errorf("/rmgroup ownertest command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/rmgroup ownertest did not complete")
+	}
+
+	// Test /rmuser - remove user from group
+	if err := tc.sendLine("/rmuser testuser renamedgroup"); err != nil {
+		return fmt.Errorf("/rmuser command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/rmuser command did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Removed "testuser" from "renamedgroup"`) {
+		return fmt.Errorf("/rmuser should show success: %q", output)
+	}
+
+	// Verify removal via /members
+	if err := tc.sendLine("/members renamedgroup"); err != nil {
+		return fmt.Errorf("/members after rmuser: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/members after rmuser did not complete: %q", output)
+	}
+	if strings.Contains(output, "testuser") {
+		return fmt.Errorf("/members should not show testuser after removal: %q", output)
+	}
+	// lang.Card produces "no members" for count 0
+	if !strings.Contains(output, "no members") {
+		return fmt.Errorf("/members should show 'no members': %q", output)
+	}
+
+	// Test /rmgroup - delete group
+	if err := tc.sendLine("/rmgroup supertest"); err != nil {
+		return fmt.Errorf("/rmgroup command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/rmgroup command did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Deleted group "supertest"`) {
+		return fmt.Errorf("/rmgroup should show success: %q", output)
+	}
+
+	// Verify deletion via /listgroups
+	if err := tc.sendLine("/listgroups"); err != nil {
+		return fmt.Errorf("/listgroups after rmgroup: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/listgroups after rmgroup did not complete: %q", output)
+	}
+	if strings.Contains(output, "supertest") {
+		return fmt.Errorf("/listgroups should not show deleted group 'supertest': %q", output)
+	}
+
+	// Test error cases
+
+	// Cannot create group with invalid name (starts with digit)
+	if err := tc.sendLine("/mkgroup 123invalid owner"); err != nil {
+		return fmt.Errorf("/mkgroup 123invalid command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/mkgroup 123invalid did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Error:") {
+		return fmt.Errorf("/mkgroup 123invalid should show error: %q", output)
+	}
+
+	// Cannot create duplicate group
+	if err := tc.sendLine("/mkgroup renamedgroup owner"); err != nil {
+		return fmt.Errorf("/mkgroup duplicate command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/mkgroup duplicate did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Error:") {
+		return fmt.Errorf("/mkgroup duplicate should show error: %q", output)
+	}
+
+	// Cannot delete non-existent group
+	if err := tc.sendLine("/rmgroup nonexistent"); err != nil {
+		return fmt.Errorf("/rmgroup nonexistent command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/rmgroup nonexistent did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Error:") {
+		return fmt.Errorf("/rmgroup nonexistent should show error: %q", output)
+	}
+
+	// Cannot remove user from group they're not in
+	if err := tc.sendLine("/rmuser testuser renamedgroup"); err != nil {
+		return fmt.Errorf("/rmuser not-member command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/rmuser not-member did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Error:") {
+		return fmt.Errorf("/rmuser not-member should show error: %q", output)
+	}
+
+	// === Test permission failures with non-owner user ===
+
+	// Create a second user who is not an owner
+	tc2, err := createUser(ts.SSHAddr(), "regularuser", "pass456")
+	if err != nil {
+		return fmt.Errorf("createUser regularuser: %w", err)
+	}
+
+	// Add regularuser to wizards group so they can use wizard commands
+	if err := tc.sendLine("/adduser regularuser wizards"); err != nil {
+		tc2.Close()
+		return fmt.Errorf("/adduser regularuser wizards: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		tc2.Close()
+		return fmt.Errorf("/adduser regularuser wizards did not complete")
+	}
+
+	// Reconnect regularuser to pick up wizard status
+	tc2.Close()
+	tc2, err = loginUser(ts.SSHAddr(), "regularuser", "pass456")
+	if err != nil {
+		return fmt.Errorf("loginUser regularuser: %w", err)
+	}
+	defer tc2.Close()
+
+	// Non-owner cannot create root-level group (OwnerGroup=0)
+	if err := tc2.sendLine("/mkgroup rootgroup owner"); err != nil {
+		return fmt.Errorf("/mkgroup rootgroup by non-owner: %w", err)
+	}
+	output, ok = tc2.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/mkgroup rootgroup by non-owner did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Error:") {
+		return fmt.Errorf("non-owner creating root-level group should fail: %q", output)
+	}
+
+	// Create a supergroup owned by wizards
+	// It must be a supergroup so members can create groups under it
+	if err := tc.sendLine("/mkgroup testowned wizards true"); err != nil {
+		return fmt.Errorf("/mkgroup testowned: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/mkgroup testowned did not complete")
+	}
+
+	// Add regularuser to testowned so they can create groups under it
+	if err := tc.sendLine("/adduser regularuser testowned"); err != nil {
+		return fmt.Errorf("/adduser regularuser testowned: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/adduser regularuser testowned did not complete")
+	}
+
+	// regularuser CAN create a group under testowned (since they're in testowned which is a Supergroup)
+	if err := tc2.sendLine("/mkgroup subgroup testowned"); err != nil {
+		return fmt.Errorf("/mkgroup subgroup by regularuser: %w", err)
+	}
+	output, ok = tc2.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/mkgroup subgroup by regularuser did not complete: %q", output)
+	}
+	if !strings.Contains(output, `Created group "subgroup"`) {
+		return fmt.Errorf("wizard member should create group under owned group: %q", output)
+	}
+
+	// Non-owner cannot modify root-level groups
+	if err := tc2.sendLine("/adduser regularuser renamedgroup"); err != nil {
+		return fmt.Errorf("/adduser to root group by non-owner: %w", err)
+	}
+	output, ok = tc2.waitForPrompt(2*time.Second)
+	if !ok {
+		return fmt.Errorf("/adduser to root group by non-owner did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Error:") {
+		return fmt.Errorf("non-owner modifying root-level group should fail: %q", output)
+	}
+
+	// Cleanup permission test groups
+	if err := tc.sendLine("/rmgroup subgroup"); err != nil {
+		return fmt.Errorf("/rmgroup subgroup: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/rmgroup subgroup did not complete")
+	}
+	if err := tc.sendLine("/rmgroup testowned"); err != nil {
+		return fmt.Errorf("/rmgroup testowned: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/rmgroup testowned did not complete")
+	}
+
+	// Cleanup: delete renamedgroup
+	if err := tc.sendLine("/rmgroup renamedgroup"); err != nil {
+		return fmt.Errorf("/rmgroup cleanup command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/rmgroup cleanup did not complete")
+	}
+
+	fmt.Println("  Group management commands: OK")
 
 	return nil
 }

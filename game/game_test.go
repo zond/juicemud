@@ -8,6 +8,7 @@ import (
 
 	"github.com/bxcodec/faker/v4"
 	"github.com/bxcodec/faker/v4/pkg/options"
+	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 )
@@ -18,11 +19,7 @@ func fakeObject(t testing.TB, g *Game) *structs.Object {
 	if err != nil {
 		log.Panic(err)
 	}
-	id, err := structs.NextObjectID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Unsafe.Id = id
+	res.Unsafe.Id = juicemud.NextUniqueID()
 	res.Unsafe.SourcePath = userSource
 	res.Unsafe.Content = map[string]bool{}
 	res.Unsafe.Location = genesisID

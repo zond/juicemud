@@ -46,6 +46,10 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
+	audit, err := NewAuditLogger(filepath.Join(dir, "audit.log"))
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	s := &Storage{
 		sql:           sql,
 		sources:       sources,
@@ -53,6 +57,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 		modTimes:      modTimes,
 		objects:       objects,
 		queue:         queue.New(ctx, queueTree),
+		audit:         audit,
 	}
 	for _, prototype := range []any{File{}, FileSync{}, Group{}, User{}, GroupMember{}} {
 		if err := sql.CreateTableIfNotExists(ctx, prototype); err != nil {
@@ -69,6 +74,7 @@ type Storage struct {
 	sourceObjects *dbm.Tree
 	modTimes      *dbm.Hash
 	objects       *dbm.LiveTypeHash[structs.Object, *structs.Object]
+	audit         *AuditLogger
 }
 
 func (s *Storage) Close() error {
@@ -87,11 +93,22 @@ func (s *Storage) Close() error {
 	if err := s.modTimes.Close(); err != nil {
 		return juicemud.WithStack(err)
 	}
+	if err := s.audit.Close(); err != nil {
+		return juicemud.WithStack(err)
+	}
 	return juicemud.WithStack(s.objects.Close())
 }
 
 func (s *Storage) Queue() *queue.Queue {
 	return s.queue
+}
+
+// AuditLog writes a structured audit entry to the log.
+// Note: The "remote" field in login events reflects the direct connection peer,
+// which may be a proxy/load balancer rather than the actual client if the server
+// is deployed behind such infrastructure.
+func (s *Storage) AuditLog(ctx context.Context, event string, data AuditData) {
+	s.audit.Log(ctx, event, data)
 }
 
 func (s *Storage) StartObjects(_ context.Context) error {
@@ -851,9 +868,33 @@ type User struct {
 
 type contextKey int
 
-var (
-	authenticatedUser contextKey = 0
+const (
+	authenticatedUser contextKey = iota
+	sessionIDKey
 )
+
+// SessionID retrieves the session ID from context if set.
+func SessionID(ctx context.Context) (string, bool) {
+	val := ctx.Value(sessionIDKey)
+	if val == nil {
+		return "", false
+	}
+	if s, ok := val.(string); ok {
+		return s, true
+	}
+	return "", false
+}
+
+// SetSessionID stores a session ID in the context for audit logging.
+// For settable contexts (like gliderlabs ssh), mutates in place and returns the same context.
+// For standard contexts, returns a new context with the value set.
+func SetSessionID(ctx context.Context, sessionID string) context.Context {
+	if sctx, ok := ctx.(settableContext); ok {
+		sctx.SetValue(sessionIDKey, sessionID)
+		return ctx
+	}
+	return context.WithValue(ctx, sessionIDKey, sessionID)
+}
 
 // AuthenticatedUser retrieves the user from context if authenticated via WebDAV.
 func AuthenticatedUser(ctx context.Context) (*User, bool) {
@@ -872,13 +913,14 @@ type settableContext interface {
 }
 
 // AuthenticateUser stores the user in the context for access control checks.
+// For settable contexts (like gliderlabs ssh), mutates in place and returns the same context.
+// For standard contexts, returns a new context with the value set.
 func AuthenticateUser(ctx context.Context, u *User) context.Context {
 	if sctx, ok := ctx.(settableContext); ok {
 		sctx.SetValue(authenticatedUser, u)
 		return ctx
-	} else {
-		return context.WithValue(ctx, authenticatedUser, u)
 	}
+	return context.WithValue(ctx, authenticatedUser, u)
 }
 
 func (s *Storage) LoadUser(ctx context.Context, name string) (*User, error) {
@@ -909,8 +951,17 @@ func (s *Storage) UserGroups(ctx context.Context, user *User) (Groups, error) {
 	return result, nil
 }
 
-func (s *Storage) StoreUser(ctx context.Context, user *User, overwrite bool) error {
-	return s.sql.Upsert(ctx, user, overwrite)
+func (s *Storage) StoreUser(ctx context.Context, user *User, overwrite bool, remote string) error {
+	if err := s.sql.Upsert(ctx, user, overwrite); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if !overwrite {
+		s.audit.Log(ctx, "USER_CREATE", AuditUserCreate{
+			User:   Ref(user.Id, user.Name),
+			Remote: remote,
+		})
+	}
+	return nil
 }
 
 func (s *Storage) UserAccessToGroup(ctx context.Context, user *User, groupName string) (bool, error) {
@@ -1001,37 +1052,73 @@ type GroupMember struct {
 
 // AddUserToGroup adds a user to a group by name.
 // Caller must be in the group's OwnerGroup (or be an Owner user).
+// This operation is idempotent: adding an already-present member succeeds silently.
+// Note: RemoveUserFromGroup is NOT idempotent and errors if user is not a member.
 func (s *Storage) AddUserToGroup(ctx context.Context, user *User, groupName string) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var callerRef AuditRef
+	var groupRef AuditRef
+	var added bool
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		group, err := s.loadGroupByName(ctx, tx, groupName)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
+		groupRef = Ref(group.Id, group.Name)
 
 		// Check permission: caller must be in OwnerGroup (or be Owner user)
 		caller, callerExists := AuthenticatedUser(ctx)
 		if !callerExists && !juicemud.IsMainContext(ctx) {
 			return errors.New("no authenticated user in context")
 		}
-		if callerExists && !caller.Owner {
-			if group.OwnerGroup == 0 {
-				return errors.New("only Owner users can modify groups with OwnerGroup=0")
+		callerRef = SystemRef()
+		if callerExists {
+			callerRef = Ref(caller.Id, caller.Name)
+			if !caller.Owner {
+				if group.OwnerGroup == 0 {
+					return errors.New("only Owner users can modify groups with OwnerGroup=0")
+				}
+				has, err := s.userAccessToGroupIDTx(ctx, tx, caller, group.OwnerGroup)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if !has {
+					return errors.New("not a member of OwnerGroup")
+				}
 			}
-			has, err := s.userAccessToGroupIDTx(ctx, tx, caller, group.OwnerGroup)
-			if err != nil {
-				return juicemud.WithStack(err)
-			}
-			if !has {
-				return errors.New("not a member of OwnerGroup")
-			}
+		}
+
+		// Check if user is already a member (idempotent operation)
+		existing := &GroupMember{}
+		err = getSQL(ctx, tx, existing, "SELECT * FROM GroupMember WHERE `User` = ? AND `Group` = ?", user.Id, group.Id)
+		if err == nil {
+			added = false
+			return nil // Already a member - success (no audit log for idempotent no-op)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return juicemud.WithStack(err)
 		}
 
 		member := &GroupMember{
 			User:  user.Id,
 			Group: group.Id,
 		}
-		return tx.Upsert(ctx, member, false)
-	})
+		if err := tx.Upsert(ctx, member, false); err != nil {
+			return juicemud.WithStack(err)
+		}
+		added = true
+		return nil
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	if added {
+		s.audit.Log(ctx, "MEMBER_ADD", AuditMemberAdd{
+			Caller: callerRef,
+			Added:  Ref(user.Id, user.Name),
+			Group:  groupRef,
+		})
+	}
+	return nil
 }
 
 // validGroupName checks if a group name meets the naming constraints.
@@ -1089,34 +1176,45 @@ func (s *Storage) validateGroup(ctx context.Context, tx *sqly.Tx, g *Group) erro
 	}
 
 	// No cycles (only relevant for existing groups)
-	if g.Id != 0 && s.detectCycle(ctx, tx, g.Id, g.OwnerGroup) {
-		return errors.New("would create ownership cycle")
+	if g.Id != 0 {
+		hasCycle, err := s.detectCycle(ctx, tx, g.Id, g.OwnerGroup)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		if hasCycle {
+			return errors.New("would create ownership cycle")
+		}
 	}
 
 	return nil
 }
 
 // detectCycle checks if setting groupID's OwnerGroup to newOwner would create a cycle.
-func (s *Storage) detectCycle(ctx context.Context, tx *sqly.Tx, groupID, newOwner int64) bool {
+// Returns (true, nil) if a cycle would be created, (false, nil) if no cycle,
+// or (false, error) if a database error occurred.
+func (s *Storage) detectCycle(ctx context.Context, tx *sqly.Tx, groupID, newOwner int64) (bool, error) {
 	if newOwner == 0 {
-		return false
+		return false, nil
 	}
 	visited := map[int64]bool{groupID: true}
 	current := newOwner
 
 	for current != 0 {
 		if visited[current] {
-			return true
+			return true, nil
 		}
 		visited[current] = true
 
 		group, err := s.loadGroupByID(ctx, tx, current)
 		if err != nil {
-			return false // Broken chain, no cycle
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil // Broken chain (missing group), no cycle
+			}
+			return false, juicemud.WithStack(err) // Actual database error
 		}
 		current = group.OwnerGroup
 	}
-	return false
+	return false, nil
 }
 
 // userAccessToGroupIDTx checks if a user has access to a group within a transaction.
@@ -1137,11 +1235,18 @@ func (s *Storage) userAccessToGroupIDTx(ctx context.Context, tx *sqly.Tx, user *
 // CreateGroup creates a new group with the specified owner.
 // ownerGroupName can be "owner" (or empty) for OwnerGroup=0, otherwise must be an existing Supergroup the caller is in.
 func (s *Storage) CreateGroup(ctx context.Context, name string, ownerGroupName string, supergroup bool) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var callerRef AuditRef
+	var groupRef AuditRef
+	var ownerRef AuditRef
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		// Get caller
 		caller, callerExists := AuthenticatedUser(ctx)
 		if !callerExists && !juicemud.IsMainContext(ctx) {
 			return errors.New("no authenticated user in context")
+		}
+		callerRef = SystemRef()
+		if callerExists {
+			callerRef = Ref(caller.Id, caller.Name)
 		}
 
 		// Check if group already exists
@@ -1159,6 +1264,7 @@ func (s *Storage) CreateGroup(ctx context.Context, name string, ownerGroupName s
 				return errors.New("only Owner users can create groups with OwnerGroup=0")
 			}
 			ownerGroupID = 0
+			ownerRef = OwnerRef()
 		} else {
 			ownerGroup, err := s.loadGroupByName(ctx, tx, ownerGroupName)
 			if err != nil {
@@ -1181,6 +1287,7 @@ func (s *Storage) CreateGroup(ctx context.Context, name string, ownerGroupName s
 				}
 			}
 			ownerGroupID = ownerGroup.Id
+			ownerRef = Ref(ownerGroup.Id, ownerGroup.Name)
 		}
 
 		group := &Group{
@@ -1194,42 +1301,63 @@ func (s *Storage) CreateGroup(ctx context.Context, name string, ownerGroupName s
 			return juicemud.WithStack(err)
 		}
 
-		return tx.Upsert(ctx, group, false)
+		if err := tx.Upsert(ctx, group, false); err != nil {
+			return juicemud.WithStack(err)
+		}
+		groupRef = Ref(group.Id, group.Name)
+		return nil
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	s.audit.Log(ctx, "GROUP_CREATE", AuditGroupCreate{
+		Caller:     callerRef,
+		Group:      groupRef,
+		Owner:      ownerRef,
+		Supergroup: supergroup,
 	})
+	return nil
 }
 
 // DeleteGroup deletes a group by name.
 // The group must be empty (no members) and unreferenced (no groups or files reference it).
 // Caller must be in a Supergroup that owns this group (or be an Owner user).
 func (s *Storage) DeleteGroup(ctx context.Context, name string) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var callerRef AuditRef
+	var groupRef AuditRef
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		group, err := s.loadGroupByName(ctx, tx, name)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
+		groupRef = Ref(group.Id, group.Name)
 
 		// Check permission: caller must be in OwnerGroup which must be a Supergroup
 		caller, callerExists := AuthenticatedUser(ctx)
 		if !callerExists && !juicemud.IsMainContext(ctx) {
 			return errors.New("no authenticated user in context")
 		}
-		if callerExists && !caller.Owner {
-			if group.OwnerGroup == 0 {
-				return errors.New("only Owner users can delete groups with OwnerGroup=0")
-			}
-			owner, err := s.loadGroupByID(ctx, tx, group.OwnerGroup)
-			if err != nil {
-				return juicemud.WithStack(err)
-			}
-			if !owner.Supergroup {
-				return errors.Errorf("OwnerGroup %q is not a Supergroup", owner.Name)
-			}
-			has, err := s.userAccessToGroupIDTx(ctx, tx, caller, group.OwnerGroup)
-			if err != nil {
-				return juicemud.WithStack(err)
-			}
-			if !has {
-				return errors.Errorf("not a member of OwnerGroup %q", owner.Name)
+		callerRef = SystemRef()
+		if callerExists {
+			callerRef = Ref(caller.Id, caller.Name)
+			if !caller.Owner {
+				if group.OwnerGroup == 0 {
+					return errors.New("only Owner users can delete groups with OwnerGroup=0")
+				}
+				owner, err := s.loadGroupByID(ctx, tx, group.OwnerGroup)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if !owner.Supergroup {
+					return errors.Errorf("OwnerGroup %q is not a Supergroup", owner.Name)
+				}
+				has, err := s.userAccessToGroupIDTx(ctx, tx, caller, group.OwnerGroup)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if !has {
+					return errors.Errorf("not a member of OwnerGroup %q", owner.Name)
+				}
 			}
 		}
 
@@ -1263,16 +1391,40 @@ func (s *Storage) DeleteGroup(ctx context.Context, name string) error {
 		// All checks passed - delete
 		_, err = tx.ExecContext(ctx, "DELETE FROM `Group` WHERE Id = ?", group.Id)
 		return juicemud.WithStack(err)
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	s.audit.Log(ctx, "GROUP_DELETE", AuditGroupDelete{
+		Caller: callerRef,
+		Group:  groupRef,
 	})
+	return nil
+}
+
+// groupEditAudit holds info needed for audit logging after a group edit transaction commits.
+type groupEditAudit struct {
+	Caller       AuditRef
+	Group        AuditRef
+	OldName      string
+	NewName      string
+	OldOwnerRef  *AuditRef
+	NewOwnerRef  *AuditRef
+	OldSuper     bool
+	NewSuper     bool
+	NameChanged  bool
+	OwnerChanged bool
+	SuperChanged bool
 }
 
 // editGroup updates a group's properties within a transaction.
 // The group is identified by its Id field. Name, OwnerGroup, and Supergroup can be modified.
+// Returns audit info to be logged after transaction commits.
 // Permission rules:
 //   - Caller must be in current OwnerGroup (or Owner user)
 //   - Changing OwnerGroup: new owner must be a Supergroup caller is in (or 0 if Owner)
 //   - Changing Supergroup: current OwnerGroup must be a Supergroup (or caller is Owner user)
-func (s *Storage) editGroup(ctx context.Context, tx *sqly.Tx, updated *Group) error {
+func (s *Storage) editGroup(ctx context.Context, tx *sqly.Tx, updated *Group, audit *groupEditAudit) error {
 	// Load current state
 	current, err := s.loadGroupByID(ctx, tx, updated.Id)
 	if err != nil {
@@ -1284,6 +1436,11 @@ func (s *Storage) editGroup(ctx context.Context, tx *sqly.Tx, updated *Group) er
 	if !callerExists && !juicemud.IsMainContext(ctx) {
 		return errors.New("no authenticated user in context")
 	}
+	audit.Caller = SystemRef()
+	if callerExists {
+		audit.Caller = Ref(caller.Id, caller.Name)
+	}
+	audit.Group = Ref(current.Id, current.Name)
 
 	// Check base permission: caller must be in current OwnerGroup
 	if callerExists && !caller.Owner {
@@ -1345,20 +1502,87 @@ func (s *Storage) editGroup(ctx context.Context, tx *sqly.Tx, updated *Group) er
 		}
 	}
 
-	return tx.Upsert(ctx, updated, true)
+	if err := tx.Upsert(ctx, updated, true); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	// Populate audit info for logging after commit
+	if updated.Name != current.Name {
+		audit.OldName = current.Name
+		audit.NewName = updated.Name
+		audit.NameChanged = true
+	}
+	if updated.OwnerGroup != current.OwnerGroup {
+		// Build owner refs with names
+		if current.OwnerGroup == 0 {
+			audit.OldOwnerRef = OwnerRefPtr()
+		} else {
+			oldOwner, err := s.loadGroupByID(ctx, tx, current.OwnerGroup)
+			if err != nil {
+				return juicemud.WithStack(err)
+			}
+			audit.OldOwnerRef = RefPtr(oldOwner.Id, oldOwner.Name)
+		}
+		if updated.OwnerGroup == 0 {
+			audit.NewOwnerRef = OwnerRefPtr()
+		} else {
+			newOwner, err := s.loadGroupByID(ctx, tx, updated.OwnerGroup)
+			if err != nil {
+				return juicemud.WithStack(err)
+			}
+			audit.NewOwnerRef = RefPtr(newOwner.Id, newOwner.Name)
+		}
+		audit.OwnerChanged = true
+	}
+	if updated.Supergroup != current.Supergroup {
+		audit.OldSuper = current.Supergroup
+		audit.NewSuper = updated.Supergroup
+		audit.SuperChanged = true
+	}
+
+	return nil
+}
+
+// logGroupEdit writes the GROUP_EDIT audit entry if there were changes.
+func (s *Storage) logGroupEdit(ctx context.Context, audit *groupEditAudit) {
+	if !audit.NameChanged && !audit.OwnerChanged && !audit.SuperChanged {
+		return
+	}
+	entry := AuditGroupEdit{
+		Caller: audit.Caller,
+		Group:  audit.Group,
+	}
+	if audit.NameChanged {
+		entry.NameFrom = audit.OldName
+		entry.NameTo = audit.NewName
+	}
+	if audit.OwnerChanged {
+		entry.OwnerFrom = audit.OldOwnerRef
+		entry.OwnerTo = audit.NewOwnerRef
+	}
+	if audit.SuperChanged {
+		entry.SupergroupFrom = &audit.OldSuper
+		entry.SupergroupTo = &audit.NewSuper
+	}
+	s.audit.Log(ctx, "GROUP_EDIT", entry)
 }
 
 // EditGroupName renames a group.
 // Caller must be in the group's OwnerGroup (or be an Owner user).
 func (s *Storage) EditGroupName(ctx context.Context, currentName, newName string) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var audit groupEditAudit
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		group, err := s.loadGroupByName(ctx, tx, currentName)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
 		group.Name = newName
-		return s.editGroup(ctx, tx, group)
-	})
+		return s.editGroup(ctx, tx, group, &audit)
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+	s.logGroupEdit(ctx, &audit)
+	return nil
 }
 
 // EditGroupOwner changes a group's OwnerGroup.
@@ -1366,7 +1590,8 @@ func (s *Storage) EditGroupName(ctx context.Context, currentName, newName string
 // Caller must be in the current OwnerGroup (or be an Owner user).
 // For non-Owner users: new owner must be a Supergroup the caller is in.
 func (s *Storage) EditGroupOwner(ctx context.Context, groupName, newOwnerName string) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var audit groupEditAudit
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		group, err := s.loadGroupByName(ctx, tx, groupName)
 		if err != nil {
 			return juicemud.WithStack(err)
@@ -1380,58 +1605,77 @@ func (s *Storage) EditGroupOwner(ctx context.Context, groupName, newOwnerName st
 			}
 			group.OwnerGroup = newOwner.Id
 		}
-		return s.editGroup(ctx, tx, group)
-	})
+		return s.editGroup(ctx, tx, group, &audit)
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+	s.logGroupEdit(ctx, &audit)
+	return nil
 }
 
 // EditGroupSupergroup changes a group's Supergroup flag.
 // Caller must be in the group's OwnerGroup which must be a Supergroup (or be an Owner user).
 func (s *Storage) EditGroupSupergroup(ctx context.Context, groupName string, supergroup bool) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var audit groupEditAudit
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		group, err := s.loadGroupByName(ctx, tx, groupName)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
 		group.Supergroup = supergroup
-		return s.editGroup(ctx, tx, group)
-	})
+		return s.editGroup(ctx, tx, group, &audit)
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+	s.logGroupEdit(ctx, &audit)
+	return nil
 }
 
 // RemoveUserFromGroup removes a user from a group.
 // Caller must be in the group's OwnerGroup (or be an Owner user).
+// Returns an error if the user is not a member (non-idempotent).
 func (s *Storage) RemoveUserFromGroup(ctx context.Context, userName string, groupName string) error {
-	return s.sql.Write(ctx, func(tx *sqly.Tx) error {
+	var callerRef AuditRef
+	var removedRef AuditRef
+	var groupRef AuditRef
+	if err := s.sql.Write(ctx, func(tx *sqly.Tx) error {
 		// Load the group
 		group, err := s.loadGroupByName(ctx, tx, groupName)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
+		groupRef = Ref(group.Id, group.Name)
 
 		// Load the user to remove
 		user := &User{}
 		if err := getSQL(ctx, tx, user, "SELECT * FROM User WHERE Name = ?", userName); err != nil {
 			return juicemud.WithStack(err)
 		}
+		removedRef = Ref(user.Id, user.Name)
 
 		// Check permission: caller must be in OwnerGroup (or be Owner user)
 		caller, callerExists := AuthenticatedUser(ctx)
 		if !callerExists && !juicemud.IsMainContext(ctx) {
 			return errors.New("no authenticated user in context")
 		}
-		if callerExists && !caller.Owner {
-			if group.OwnerGroup == 0 {
-				return errors.New("only Owner users can modify groups with OwnerGroup=0")
-			}
-			has, err := s.userAccessToGroupIDTx(ctx, tx, caller, group.OwnerGroup)
-			if err != nil {
-				return juicemud.WithStack(err)
-			}
-			if !has {
-				return errors.New("not a member of OwnerGroup")
+		callerRef = SystemRef()
+		if callerExists {
+			callerRef = Ref(caller.Id, caller.Name)
+			if !caller.Owner {
+				if group.OwnerGroup == 0 {
+					return errors.New("only Owner users can modify groups with OwnerGroup=0")
+				}
+				has, err := s.userAccessToGroupIDTx(ctx, tx, caller, group.OwnerGroup)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if !has {
+					return errors.New("not a member of OwnerGroup")
+				}
 			}
 		}
 
-		// Check user is actually a member
+		// Check user is actually a member (non-idempotent - error if not a member)
 		member := &GroupMember{}
 		if err := getSQL(ctx, tx, member, "SELECT * FROM GroupMember WHERE User = ? AND `Group` = ?", user.Id, group.Id); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -1443,12 +1687,26 @@ func (s *Storage) RemoveUserFromGroup(ctx context.Context, userName string, grou
 		// Remove the membership
 		_, err = tx.ExecContext(ctx, "DELETE FROM GroupMember WHERE User = ? AND `Group` = ?", user.Id, group.Id)
 		return juicemud.WithStack(err)
+	}); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	s.audit.Log(ctx, "MEMBER_REMOVE", AuditMemberRemove{
+		Caller:  callerRef,
+		Removed: removedRef,
+		Group:   groupRef,
 	})
+	return nil
 }
 
 // LoadGroup loads a group by name.
 func (s *Storage) LoadGroup(ctx context.Context, name string) (*Group, error) {
 	return s.loadGroupByName(ctx, s.sql, name)
+}
+
+// LoadGroupByID loads a group by ID.
+func (s *Storage) LoadGroupByID(ctx context.Context, id int64) (*Group, error) {
+	return s.loadGroupByID(ctx, s.sql, id)
 }
 
 // ListGroups returns all groups.

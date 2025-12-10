@@ -1,13 +1,10 @@
 package integration_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"time"
-
-	"github.com/zond/juicemud"
 )
 
 // inspectResult holds the parsed JSON from /inspect command.
@@ -144,23 +141,6 @@ func createUser(sshAddr, username, password string) (*terminalClient, error) {
 		return nil, fmt.Errorf("final prompt after user creation did not appear")
 	}
 	return tc, nil
-}
-
-// makeUserWizard grants wizard and owner privileges to a user.
-func makeUserWizard(ts *TestServer, username string) error {
-	ctx := juicemud.MakeMainContext(context.Background())
-	user, err := ts.Storage().LoadUser(ctx, username)
-	if err != nil {
-		return fmt.Errorf("failed to load user %s: %w", username, err)
-	}
-	user.Owner = true
-	if err := ts.Storage().StoreUser(ctx, user, true); err != nil {
-		return fmt.Errorf("failed to make user %s owner: %w", username, err)
-	}
-	if err := ts.Storage().AddUserToGroup(ctx, user, "wizards"); err != nil {
-		return fmt.Errorf("failed to add user %s to wizards: %w", username, err)
-	}
-	return nil
 }
 
 // loginUser logs in as an existing user via SSH.

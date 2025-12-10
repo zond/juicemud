@@ -1,6 +1,7 @@
 package game
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"os"
@@ -64,6 +65,7 @@ type Connection struct {
 	term *term.Terminal
 	user *storage.User
 	wiz  bool
+	ctx  context.Context // Derived from sess.Context(), updated with session ID and authenticated user
 }
 
 // func (c *Connection) Linebreak(s string) string {
@@ -110,7 +112,7 @@ func (c *Connection) SelectReturn(prompt string, options []string) (string, erro
 }
 
 func (c *Connection) scan() error {
-	viewer, neigh, err := c.game.loadDeepNeighbourhoodOf(c.sess.Context(), c.user.Object)
+	viewer, neigh, err := c.game.loadDeepNeighbourhoodOf(c.ctx, c.user.Object)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -133,7 +135,7 @@ func (c *Connection) scan() error {
 }
 
 func (c *Connection) renderMovement(m *movement) error {
-	_, neigh, err := c.game.loadNeighbourhoodOf(c.sess.Context(), c.user.Object)
+	_, neigh, err := c.game.loadNeighbourhoodOf(c.ctx, c.user.Object)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -179,7 +181,7 @@ func (c *Connection) describeLocation(loc *structs.Location) error {
 }
 
 func (c *Connection) look() error {
-	viewer, loc, err := c.game.loadLocationOf(c.sess.Context(), c.user.Object)
+	viewer, loc, err := c.game.loadLocationOf(c.ctx, c.user.Object)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -236,7 +238,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 			return juicemud.WithStack(err)
 		}
 		if len(parts) == 1 {
-			obj, err := c.game.accessObject(c.sess.Context(), c.user.Object)
+			obj, err := c.game.accessObject(c.ctx, c.user.Object)
 			if err != nil {
 				return juicemud.WithStack(err)
 			}
@@ -247,7 +249,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 			case defaultSelf:
 				return f(c, obj, obj)
 			case defaultLoc:
-				loc, err := c.game.accessObject(c.sess.Context(), obj.GetLocation())
+				loc, err := c.game.accessObject(c.ctx, obj.GetLocation())
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
@@ -259,7 +261,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 				return nil
 			}
 		}
-		obj, loc, err := c.game.loadLocationOf(c.sess.Context(), c.user.Object)
+		obj, loc, err := c.game.loadLocationOf(c.ctx, c.user.Object)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
@@ -269,7 +271,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 		targets := []*structs.Object{}
 		for _, pattern := range parts[1:] {
 			if c.wiz && strings.HasPrefix(pattern, "#") {
-				target, err := c.game.accessObject(c.sess.Context(), pattern[1:])
+				target, err := c.game.accessObject(c.ctx, pattern[1:])
 				if err != nil {
 					fmt.Fprintln(c.term, err.Error())
 					return nil
@@ -293,14 +295,33 @@ func (c *Connection) wizCommands() commands {
 		{
 			names: m("/groups"),
 			f: func(c *Connection, s string) error {
-				groups, err := c.game.storage.UserGroups(c.sess.Context(), c.user)
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				var targetUser *storage.User
+				var userName string
+				if len(parts) >= 2 {
+					// Query another user's groups
+					userName = parts[1]
+					targetUser, err = c.game.storage.LoadUser(c.ctx, userName)
+					if err != nil {
+						fmt.Fprintf(c.term, "Error: user %q not found\n", userName)
+						return nil
+					}
+				} else {
+					// Query own groups
+					targetUser = c.user
+					userName = c.user.Name
+				}
+				groups, err := c.game.storage.UserGroups(c.ctx, targetUser)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
 				sort.Sort(groups)
-				fmt.Fprintf(c.term, "Member of %v\n", lang.Card(len(groups), "groups"))
+				fmt.Fprintf(c.term, "%s is member of %v:\n", userName, lang.Card(len(groups), "groups"))
 				for _, group := range groups {
-					fmt.Fprintln(c.term, group.Name)
+					fmt.Fprintf(c.term, "  %s\n", group.Name)
 				}
 				return nil
 			},
@@ -309,7 +330,7 @@ func (c *Connection) wizCommands() commands {
 			names: m("/move"),
 			f: c.identifyingCommand(defaultNone, func(c *Connection, self *structs.Object, targets ...*structs.Object) error {
 				if len(targets) == 1 {
-					obj, err := c.game.accessObject(c.sess.Context(), targets[0].GetId())
+					obj, err := c.game.accessObject(c.ctx, targets[0].GetId())
 					if err != nil {
 						return juicemud.WithStack(err)
 					}
@@ -317,23 +338,23 @@ func (c *Connection) wizCommands() commands {
 						if self.GetLocation() == "" {
 							return errors.New("Can't move things outside the known universe.")
 						}
-						loc, err := c.game.accessObject(c.sess.Context(), self.GetLocation())
+						loc, err := c.game.accessObject(c.ctx, self.GetLocation())
 						if err != nil {
 							return juicemud.WithStack(err)
 						}
-						return juicemud.WithStack(c.game.moveObject(c.sess.Context(), obj, loc.GetLocation()))
+						return juicemud.WithStack(c.game.moveObject(c.ctx, obj, loc.GetLocation()))
 					} else {
-						return juicemud.WithStack(c.game.moveObject(c.sess.Context(), obj, self.GetLocation()))
+						return juicemud.WithStack(c.game.moveObject(c.ctx, obj, self.GetLocation()))
 					}
 				}
 				dest := targets[len(targets)-1]
 				for _, target := range targets[:len(targets)-1] {
 					if dest.GetId() != target.GetLocation() {
-						obj, err := c.game.accessObject(c.sess.Context(), target.GetId())
+						obj, err := c.game.accessObject(c.ctx, target.GetId())
 						if err != nil {
 							return juicemud.WithStack(err)
 						}
-						if err := c.game.moveObject(c.sess.Context(), obj, dest.GetId()); err != nil {
+						if err := c.game.moveObject(c.ctx, obj, dest.GetId()); err != nil {
 							return juicemud.WithStack(err)
 						}
 					}
@@ -352,10 +373,10 @@ func (c *Connection) wizCommands() commands {
 						return errors.New("Can't remove yourself.")
 					}
 					var err error
-					if target, err = c.game.accessObject(c.sess.Context(), target.GetId()); err != nil {
+					if target, err = c.game.accessObject(c.ctx, target.GetId()); err != nil {
 						return juicemud.WithStack(err)
 					}
-					if err := c.game.removeObject(c.sess.Context(), target); err != nil {
+					if err := c.game.removeObject(c.ctx, target); err != nil {
 						return juicemud.WithStack(err)
 					}
 				}
@@ -373,7 +394,7 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "usage: /create [path]")
 					return nil
 				}
-				exists, err := c.game.storage.FileExists(c.sess.Context(), parts[1])
+				exists, err := c.game.storage.FileExists(c.ctx, parts[1])
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
@@ -381,20 +402,20 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintf(c.term, "%q doesn't exist", parts[1])
 					return nil
 				}
-				self, err := c.game.accessObject(c.sess.Context(), c.user.Object)
+				self, err := c.game.accessObject(c.ctx, c.user.Object)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				obj, err := structs.MakeObject(c.sess.Context())
+				obj, err := structs.MakeObject(c.ctx)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
 				obj.Unsafe.SourcePath = parts[1]
 				obj.Unsafe.Location = self.GetLocation()
-				if err := c.game.createObject(c.sess.Context(), obj); err != nil {
+				if err := c.game.createObject(c.ctx, obj); err != nil {
 					return juicemud.WithStack(err)
 				}
-				if _, err := c.game.run(c.sess.Context(), obj, &structs.AnyCall{
+				if _, err := c.game.run(c.ctx, obj, &structs.AnyCall{
 					Name: createdEventType,
 					Tag:  emitEventTag,
 					Content: map[string]any{
@@ -454,7 +475,7 @@ func (c *Connection) wizCommands() commands {
 				if obj.GetLocation() == target.GetId() {
 					return nil
 				}
-				if err := c.game.moveObject(c.sess.Context(), obj, target.GetId()); err != nil {
+				if err := c.game.moveObject(c.ctx, obj, target.GetId()); err != nil {
 					return juicemud.WithStack(err)
 				}
 				return juicemud.WithStack(c.look())
@@ -463,7 +484,7 @@ func (c *Connection) wizCommands() commands {
 		{
 			names: m("/exit"),
 			f: func(c *Connection, s string) error {
-				obj, err := c.game.accessObject(c.sess.Context(), c.user.Object)
+				obj, err := c.game.accessObject(c.ctx, c.user.Object)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
@@ -471,11 +492,11 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "Unable to leave the universe.")
 					return nil
 				}
-				loc, err := c.game.accessObject(c.sess.Context(), obj.GetLocation())
+				loc, err := c.game.accessObject(c.ctx, obj.GetLocation())
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				if err := c.game.moveObject(c.sess.Context(), obj, loc.GetLocation()); err != nil {
+				if err := c.game.moveObject(c.ctx, obj, loc.GetLocation()); err != nil {
 					return juicemud.WithStack(err)
 				}
 				return juicemud.WithStack(c.look())
@@ -489,11 +510,11 @@ func (c *Connection) wizCommands() commands {
 					return juicemud.WithStack(err)
 				}
 				if len(parts) == 2 {
-					if err := c.game.storage.ChwriteFile(c.sess.Context(), parts[1], ""); err != nil {
+					if err := c.game.storage.ChwriteFile(c.ctx, parts[1], ""); err != nil {
 						return juicemud.WithStack(err)
 					}
 				} else if len(parts) == 3 {
-					if err := c.game.storage.ChwriteFile(c.sess.Context(), parts[1], parts[2]); err != nil {
+					if err := c.game.storage.ChwriteFile(c.ctx, parts[1], parts[2]); err != nil {
 						return juicemud.WithStack(err)
 					}
 				} else {
@@ -510,11 +531,11 @@ func (c *Connection) wizCommands() commands {
 					return juicemud.WithStack(err)
 				}
 				if len(parts) == 2 {
-					if err := c.game.storage.ChreadFile(c.sess.Context(), parts[1], ""); err != nil {
+					if err := c.game.storage.ChreadFile(c.ctx, parts[1], ""); err != nil {
 						return juicemud.WithStack(err)
 					}
 				} else if len(parts) == 3 {
-					if err := c.game.storage.ChreadFile(c.sess.Context(), parts[1], parts[2]); err != nil {
+					if err := c.game.storage.ChreadFile(c.ctx, parts[1], parts[2]); err != nil {
 						return juicemud.WithStack(err)
 					}
 				} else {
@@ -537,7 +558,7 @@ func (c *Connection) wizCommands() commands {
 				t := table.New("Path", "Read", "Write").WithWriter(c.term)
 				lastWasFile := false
 				for _, part := range parts {
-					f, err := c.game.storage.LoadFile(c.sess.Context(), part)
+					f, err := c.game.storage.LoadFile(c.ctx, part)
 					if errors.Is(err, os.ErrNotExist) {
 						t.AddRow(fmt.Sprintf("%s: %v", part, err), "", "")
 						continue
@@ -545,18 +566,18 @@ func (c *Connection) wizCommands() commands {
 						return juicemud.WithStack(err)
 					}
 					lastWasFile = !f.Dir
-					r, w, err := c.game.storage.FileGroups(c.sess.Context(), f)
+					r, w, err := c.game.storage.FileGroups(c.ctx, f)
 					if err != nil {
 						return juicemud.WithStack(err)
 					}
 					t.AddRow(f.Path, r.Name, w.Name)
 					if f.Dir {
-						children, err := c.game.storage.LoadChildren(c.sess.Context(), f.Id)
+						children, err := c.game.storage.LoadChildren(c.ctx, f.Id)
 						if err != nil {
 							return juicemud.WithStack(err)
 						}
 						for _, child := range children {
-							r, w, err := c.game.storage.FileGroups(c.sess.Context(), &child)
+							r, w, err := c.game.storage.FileGroups(c.ctx, &child)
 							if err != nil {
 								return juicemud.WithStack(err)
 							}
@@ -568,7 +589,7 @@ func (c *Connection) wizCommands() commands {
 				t.Print()
 				if len(parts) == 1 && lastWasFile {
 					objectIDs := []string{}
-					for id, err := range c.game.storage.EachSourceObject(c.sess.Context(), parts[0]) {
+					for id, err := range c.game.storage.EachSourceObject(c.ctx, parts[0]) {
 						if err != nil {
 							return juicemud.WithStack(err)
 						}
@@ -581,6 +602,200 @@ func (c *Connection) wizCommands() commands {
 						}
 					}
 				}
+				return nil
+			},
+		},
+		// Group management commands
+		{
+			names: m("/mkgroup"),
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) < 3 {
+					fmt.Fprintln(c.term, "usage: /mkgroup <name> <owner> [super]")
+					fmt.Fprintln(c.term, "  owner: group name or 'owner' for OwnerGroup=0")
+					fmt.Fprintln(c.term, "  super: 'true' to make this a Supergroup (default: false)")
+					return nil
+				}
+				name := parts[1]
+				ownerName := parts[2]
+				supergroup := false
+				if len(parts) >= 4 && parts[3] == "true" {
+					supergroup = true
+				}
+				if err := c.game.storage.CreateGroup(c.ctx, name, ownerName, supergroup); err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+				fmt.Fprintf(c.term, "Created group %q\n", name)
+				return nil
+			},
+		},
+		{
+			names: m("/rmgroup"),
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) != 2 {
+					fmt.Fprintln(c.term, "usage: /rmgroup <name>")
+					return nil
+				}
+				name := parts[1]
+				if err := c.game.storage.DeleteGroup(c.ctx, name); err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+				fmt.Fprintf(c.term, "Deleted group %q\n", name)
+				return nil
+			},
+		},
+		{
+			names: m("/editgroup"),
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) < 4 {
+					fmt.Fprintln(c.term, "usage: /editgroup <group> <option> <value>")
+					fmt.Fprintln(c.term, "  options:")
+					fmt.Fprintln(c.term, "    -name <newname>     Rename the group")
+					fmt.Fprintln(c.term, "    -owner <newowner>   Change OwnerGroup ('owner' for OwnerGroup=0)")
+					fmt.Fprintln(c.term, "    -super <true|false> Change Supergroup flag")
+					return nil
+				}
+				groupName := parts[1]
+				option := parts[2]
+				value := parts[3]
+				switch option {
+				case "-name":
+					if err := c.game.storage.EditGroupName(c.ctx, groupName, value); err != nil {
+						fmt.Fprintf(c.term, "Error: %v\n", err)
+						return nil
+					}
+					fmt.Fprintf(c.term, "Renamed group %q to %q\n", groupName, value)
+				case "-owner":
+					if err := c.game.storage.EditGroupOwner(c.ctx, groupName, value); err != nil {
+						fmt.Fprintf(c.term, "Error: %v\n", err)
+						return nil
+					}
+					fmt.Fprintf(c.term, "Changed OwnerGroup of %q to %q\n", groupName, value)
+				case "-super":
+					supergroup := value == "true"
+					if err := c.game.storage.EditGroupSupergroup(c.ctx, groupName, supergroup); err != nil {
+						fmt.Fprintf(c.term, "Error: %v\n", err)
+						return nil
+					}
+					fmt.Fprintf(c.term, "Changed Supergroup of %q to %v\n", groupName, supergroup)
+				default:
+					fmt.Fprintf(c.term, "Unknown option: %s\n", option)
+					fmt.Fprintln(c.term, "Valid options: -name, -owner, -super")
+				}
+				return nil
+			},
+		},
+		{
+			names: m("/adduser"),
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) != 3 {
+					fmt.Fprintln(c.term, "usage: /adduser <user> <group>")
+					return nil
+				}
+				userName := parts[1]
+				groupName := parts[2]
+				user, err := c.game.storage.LoadUser(c.ctx, userName)
+				if err != nil {
+					fmt.Fprintf(c.term, "Error: user %q not found\n", userName)
+					return nil
+				}
+				if err := c.game.storage.AddUserToGroup(c.ctx, user, groupName); err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+				fmt.Fprintf(c.term, "Added %q to %q\n", userName, groupName)
+				return nil
+			},
+		},
+		{
+			names: m("/rmuser"),
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) != 3 {
+					fmt.Fprintln(c.term, "usage: /rmuser <user> <group>")
+					return nil
+				}
+				userName := parts[1]
+				groupName := parts[2]
+				if err := c.game.storage.RemoveUserFromGroup(c.ctx, userName, groupName); err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+				fmt.Fprintf(c.term, "Removed %q from %q\n", userName, groupName)
+				return nil
+			},
+		},
+		{
+			names: m("/members"),
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) != 2 {
+					fmt.Fprintln(c.term, "usage: /members <group>")
+					return nil
+				}
+				groupName := parts[1]
+				members, err := c.game.storage.GroupMembers(c.ctx, groupName)
+				if err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+				fmt.Fprintf(c.term, "Members of %q (%s):\n", groupName, lang.Card(len(members), "members"))
+				for _, user := range members {
+					fmt.Fprintf(c.term, "  %s\n", user.Name)
+				}
+				return nil
+			},
+		},
+		{
+			names: m("/listgroups"),
+			f: func(c *Connection, s string) error {
+				groups, err := c.game.storage.ListGroups(c.ctx)
+				if err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+				t := table.New("Name", "OwnerGroup", "Supergroup")
+				t.WithWriter(c.term)
+				for _, g := range groups {
+					ownerName := "owner"
+					if g.OwnerGroup != 0 {
+						owner, err := c.game.storage.LoadGroupByID(c.ctx, g.OwnerGroup)
+						if err == nil {
+							ownerName = owner.Name
+						} else {
+							ownerName = fmt.Sprintf("#%d", g.OwnerGroup)
+						}
+					}
+					superStr := ""
+					if g.Supergroup {
+						superStr = "yes"
+					}
+					t.AddRow(g.Name, ownerName, superStr)
+				}
+				t.Print()
 				return nil
 			},
 		},
@@ -632,11 +847,11 @@ type objectAttempter struct {
 }
 
 func (o objectAttempter) attempt(c *Connection, name string, line string) (found bool, err error) {
-	obj, err := c.game.accessObject(c.sess.Context(), o.id)
+	obj, err := c.game.accessObject(c.ctx, o.id)
 	if err != nil {
 		return false, juicemud.WithStack(err)
 	}
-	found, err = c.game.run(c.sess.Context(), obj, &structs.AnyCall{
+	found, err = c.game.run(c.ctx, obj, &structs.AnyCall{
 		Name: name,
 		Tag:  commandEventTag,
 		Content: map[string]any{
@@ -659,7 +874,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		},
 	}
 
-	loc, found, err := c.game.loadRun(c.sess.Context(), obj.GetLocation(), actionCall)
+	loc, found, err := c.game.loadRun(c.ctx, obj.GetLocation(), actionCall)
 	if found || err != nil {
 		return found, err
 	}
@@ -671,7 +886,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 	for _, exit := range loc.GetExits() {
 		if exit.Name() == name {
 			if structs.Challenges(exit.UseChallenges).Check(obj, loc.GetId()) > 0 {
-				return true, juicemud.WithStack(c.game.moveObject(c.sess.Context(), obj, exit.Destination))
+				return true, juicemud.WithStack(c.game.moveObject(c.ctx, obj, exit.Destination))
 			}
 		}
 	}
@@ -679,7 +894,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 	cont := loc.GetContent()
 	delete(cont, o.id)
 	for sibID := range cont {
-		_, found, err = c.game.loadRun(c.sess.Context(), sibID, actionCall)
+		_, found, err = c.game.loadRun(c.ctx, sibID, actionCall)
 		if found || err != nil {
 			return found, err
 		}
@@ -691,7 +906,7 @@ func (c *Connection) Process() error {
 	if c.user == nil {
 		return errors.New("can't process without user")
 	}
-	if has, err := c.game.storage.UserAccessToGroup(c.sess.Context(), c.user, wizardsGroup); err != nil {
+	if has, err := c.game.storage.UserAccessToGroup(c.ctx, c.user, wizardsGroup); err != nil {
 		return juicemud.WithStack(err)
 	} else if has {
 		c.wiz = true
@@ -725,6 +940,8 @@ func (c *Connection) Process() error {
 }
 
 func (c *Connection) Connect() error {
+	// Generate session ID at connection start so all audit events (including failed logins) can be correlated
+	c.ctx = storage.SetSessionID(c.ctx, storage.GenerateSessionID())
 	fmt.Fprint(c.term, "Welcome!\n\n")
 	sel := func() error {
 		return c.SelectExec(map[string]func() error{
@@ -756,7 +973,7 @@ func (c *Connection) loginUser() error {
 		if username == "abort" {
 			return juicemud.WithStack(ErrOperationAborted)
 		}
-		if user, err = c.game.storage.LoadUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
+		if user, err = c.game.storage.LoadUser(c.ctx, username); errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintln(c.term, "Username not found!")
 		} else if err != nil {
 			return juicemud.WithStack(err)
@@ -786,6 +1003,10 @@ func (c *Connection) loginUser() error {
 			lastLoginAttemptMu.Lock()
 			lastLoginAttempt[user.Name] = time.Now()
 			lastLoginAttemptMu.Unlock()
+			c.game.storage.AuditLog(c.ctx, "LOGIN_FAILED", storage.AuditLoginFailed{
+				User:   storage.Ref(user.Id, user.Name),
+				Remote: c.sess.RemoteAddr().String(),
+			})
 			fmt.Fprintln(c.term, "Incorrect password!")
 		} else {
 			// Successful login - clear any rate limit for this user
@@ -795,9 +1016,13 @@ func (c *Connection) loginUser() error {
 			c.user = user
 		}
 	}
-	storage.AuthenticateUser(c.sess.Context(), c.user)
+	c.ctx = storage.AuthenticateUser(c.ctx, c.user)
+	c.game.storage.AuditLog(c.ctx, "USER_LOGIN", storage.AuditUserLogin{
+		User:   storage.Ref(c.user.Id, c.user.Name),
+		Remote: c.sess.RemoteAddr().String(),
+	})
 	fmt.Fprintf(c.term, "Welcome back, %v!\n\n", c.user.Name)
-	if _, _, err := c.game.loadRun(c.sess.Context(), c.user.Object, &structs.AnyCall{
+	if _, _, err := c.game.loadRun(c.ctx, c.user.Object, &structs.AnyCall{
 		Name: connectedEventType,
 		Tag:  emitEventTag,
 		Content: map[string]any{
@@ -824,7 +1049,7 @@ func (c *Connection) createUser() error {
 		if username == "abort" {
 			return juicemud.WithStack(ErrOperationAborted)
 		}
-		if _, err = c.game.storage.LoadUser(c.sess.Context(), username); errors.Is(err, os.ErrNotExist) {
+		if _, err = c.game.storage.LoadUser(c.ctx, username); errors.Is(err, os.ErrNotExist) {
 			user = &storage.User{
 				Name: username,
 			}
@@ -860,20 +1085,20 @@ func (c *Connection) createUser() error {
 			fmt.Fprintln(c.term, "Passwords don't match!")
 		}
 	}
-	obj, err := structs.MakeObject(c.sess.Context())
+	obj, err := structs.MakeObject(c.ctx)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
 	obj.Unsafe.SourcePath = userSource
 	obj.Unsafe.Location = genesisID
 	user.Object = obj.Unsafe.Id
-	if err := c.game.storage.StoreUser(c.sess.Context(), user, false); err != nil {
+	if err := c.game.storage.StoreUser(c.ctx, user, false, c.sess.RemoteAddr().String()); err != nil {
 		return juicemud.WithStack(err)
 	}
-	if err := c.game.createObject(c.sess.Context(), obj); err != nil {
+	if err := c.game.createObject(c.ctx, obj); err != nil {
 		return juicemud.WithStack(err)
 	}
-	if _, err = c.game.run(c.sess.Context(), obj, &structs.AnyCall{
+	if _, err = c.game.run(c.ctx, obj, &structs.AnyCall{
 		Name: connectedEventType,
 		Tag:  emitEventTag,
 		Content: map[string]any{
@@ -885,7 +1110,11 @@ func (c *Connection) createUser() error {
 	}); err != nil {
 		return juicemud.WithStack(err)
 	}
-	storage.AuthenticateUser(c.sess.Context(), c.user)
+	c.ctx = storage.AuthenticateUser(c.ctx, c.user)
+	c.game.storage.AuditLog(c.ctx, "USER_LOGIN", storage.AuditUserLogin{
+		User:   storage.Ref(c.user.Id, c.user.Name),
+		Remote: c.sess.RemoteAddr().String(),
+	})
 	fmt.Fprintf(c.term, "Welcome %s!\n\n", c.user.Name)
 	return nil
 }
