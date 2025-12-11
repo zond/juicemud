@@ -133,13 +133,32 @@ addCallback('ping', ['emit'], (msg) => {
 });
 ```
 
-The `emit()` function sends events to all objects in the same location. Movement events are a special type of emit:
+The `emit()` function sends events to all objects in the same location.
+
+**Movement and Container Events**: When objects move between locations, two types of events are generated:
+
+1. **`movement`** events are sent to objects that successfully *detect* the moving object. These are subject to skill challenges - only objects passing perception checks receive them. Use for game/roleplay purposes where detection abilities matter:
 ```javascript
-// Movement events include: Object (moved), Source (old location), Destination (new location)
 addCallback('movement', ['emit'], (msg) => {
-    if (msg.Object && msg.Object.Unsafe) {
-        log('Object moved:', msg.Object.Unsafe.Id);
+    // msg.Object: the object that moved (as perceived by receiver)
+    // msg.Source: old location ID (or null if created)
+    // msg.Destination: new location ID (or null if removed)
+    if (msg.Object && msg.Destination) {
+        send('You notice ' + msg.Object.Unsafe.Name + ' arriving.');
     }
+});
+```
+
+2. **`received`** and **`transmitted`** events are sent directly to containers when their content changes. These are hardwired notifications, NOT subject to skill challenges - containers always receive them regardless of detection abilities. Use for programmatic bookkeeping:
+```javascript
+// Sent to container when it gains content
+addCallback('received', ['emit'], (msg) => {
+    log('Container received:', msg.Object.Unsafe.Id);
+});
+
+// Sent to container when it loses content
+addCallback('transmitted', ['emit'], (msg) => {
+    log('Container lost:', msg.Object.Unsafe.Id);
 });
 ```
 

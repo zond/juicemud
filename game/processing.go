@@ -72,7 +72,15 @@ type movement struct {
 	Destination *string
 }
 
+// contentChange represents a change in a container's content.
+type contentChange struct {
+	Object *structs.Object // the object that was added/removed
+}
+
 // emitMovement notifies all objects that can perceive the moving object about the movement.
+// Also notifies source and destination containers about content changes:
+// - source container receives "transmitted" event (lost content)
+// - destination container receives "received" event (gained content)
 // Handles observers in both source and destination locations, including through exits.
 func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *string, destination *string) error {
 	mov := &movement{
@@ -154,6 +162,40 @@ func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *st
 	if err := pushFunc(toDetectors, nil, mov.Destination); err != nil {
 		return juicemud.WithStack(err)
 	}
+
+	// Notify containers about content changes
+	change := &contentChange{Object: obj}
+
+	// Notify source container that it lost content
+	if mov.Source != nil && *mov.Source != "" {
+		if err := g.storage.Queue().Push(ctx, &structs.AnyEvent{
+			At:     at,
+			Object: *mov.Source,
+			Caller: &structs.AnyCall{
+				Name:    transmittedEventType,
+				Tag:     emitEventTag,
+				Content: change,
+			},
+		}); err != nil {
+			return juicemud.WithStack(err)
+		}
+	}
+
+	// Notify destination container that it gained content
+	if mov.Destination != nil && *mov.Destination != "" {
+		if err := g.storage.Queue().Push(ctx, &structs.AnyEvent{
+			At:     at,
+			Object: *mov.Destination,
+			Caller: &structs.AnyCall{
+				Name:    receivedEventType,
+				Tag:     emitEventTag,
+				Content: change,
+			},
+		}); err != nil {
+			return juicemud.WithStack(err)
+		}
+	}
+
 	return nil
 }
 
@@ -403,10 +445,6 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 // Note: Even if a callback returns null or undefined, the return value is true
 // because a callback was still executed. This distinction matters for command
 // handling where we need to know if the event was "handled" by JavaScript.
-//
-// TODO: Consider adding events for container objects when content changes:
-// - "received": notify container when it gains content
-// - "transmitted": notify container when it loses content
 func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller) (bool, error) {
 	id := object.GetId()
 

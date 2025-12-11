@@ -19,8 +19,22 @@ import (
 
 const (
 	connectedEventType = "connected"
-	movementEventType  = "movement"
 	createdEventType   = "created"
+
+	// movementEventType is sent to objects that successfully DETECT a moving object.
+	// Subject to skill challenges - only objects passing perception checks receive this.
+	// Use for game/roleplay purposes where detection abilities matter.
+	movementEventType = "movement"
+
+	// receivedEventType is sent to containers when they gain content.
+	// Hardwired notification, NOT subject to skill challenges.
+	// Use for programmatic bookkeeping where containers need reliable content tracking.
+	receivedEventType = "received"
+
+	// transmittedEventType is sent to containers when they lose content.
+	// Hardwired notification, NOT subject to skill challenges.
+	// Use for programmatic bookkeeping where containers need reliable content tracking.
+	transmittedEventType = "transmitted"
 )
 
 const (

@@ -116,13 +116,15 @@
 ## Code TODOs in Source
 
 ### 17a. Container Events
-**File:** `game/processing.go:407`
-```
-// TODO: Consider adding events for container objects when content changes:
-// - "received": notify container when it gains content
-// - "transmitted": notify container when it loses content
-```
-**Status:** Open - should be implemented
+**File:** `game/processing.go`
+**Issue:** Containers were not notified when their content changed.
+**Fix:** Added "received" and "transmitted" events to `emitMovement()`. Source containers receive "transmitted" when content leaves, destination containers receive "received" when content arrives. Event payload contains the object that was added/removed.
+
+**Important distinction between event types:**
+- **movement**: Subject to skill challenges. Only objects that successfully *detect* the moving object receive this event. Use for game/roleplay purposes where perception matters.
+- **transmitted/received**: Hardwired container notifications, not subject to skill challenges. Containers always receive these regardless of detection abilities. Use for programmatic bookkeeping where containers need to track their contents reliably.
+
+**Status:** Fixed
 
 ### 17b. Rename Function
 **File:** `storage/storage.go:411`
