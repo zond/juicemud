@@ -1636,5 +1636,53 @@ addCallback('trigger', ['action'], (msg) => {
 
 	fmt.Println("  /debug and log(): OK")
 
+	// === Test 15: created event ===
+	fmt.Println("Testing created event...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for created: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter genesis for created did not complete")
+	}
+
+	// Create an object that captures creator info on creation
+	createdSource := `setDescriptions([{Short: 'witness stone (waiting)'}]);
+addCallback('created', ['emit'], (msg) => {
+	if (msg.creator && msg.creator.Unsafe) {
+		setDescriptions([{Short: 'witness stone (created by ' + msg.creator.Unsafe.Id + ')'}]);
+	} else {
+		setDescriptions([{Short: 'witness stone (no creator info)'}]);
+	}
+});
+`
+	if err := dav.Put("/witness.js", createdSource); err != nil {
+		return fmt.Errorf("failed to create /witness.js: %w", err)
+	}
+
+	// The user's object ID (from Test 1) is what we expect in the creator info
+	userID := user.Object
+
+	// Create the witness object
+	if err := tc.sendLine("/create /witness.js"); err != nil {
+		return fmt.Errorf("/create witness: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create witness did not complete")
+	}
+
+	// Wait for the witness to appear with the creator's ID in its description
+	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(2*time.Second)
+		return strings.Contains(output, "witness stone (created by "+userID+")")
+	})
+	if !found {
+		return fmt.Errorf("witness should show creator ID in description: %q", output)
+	}
+
+	fmt.Println("  created event: OK")
+
 	return nil
 }

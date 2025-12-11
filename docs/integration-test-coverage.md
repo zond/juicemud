@@ -58,6 +58,7 @@ For verifying object state and waiting for object creation, tests prefer:
 | `/debug` | 14 | Attach to object console |
 | `/undebug` | 14 | Detach from object console |
 | `log()` | 14 | Console output appears when debug attached |
+| `created` event | 15 | Object receives creator info on `/create` |
 
 ## Not Tested
 
@@ -92,7 +93,6 @@ For verifying object state and waiting for object creation, tests prefer:
 
 | Event | Description | Priority |
 |-------|-------------|----------|
-| `created` | Fires on `/create` with creator info | Medium |
 | Room/sibling `action` | Action handlers on location/siblings | Medium |
 
 ### Edge Cases
@@ -107,31 +107,25 @@ For verifying object state and waiting for object creation, tests prefer:
 
 ## Suggested Next Tests
 
-### 1. `created` event (Medium Priority)
-Verify objects receive notification when created:
-- Create object source with `addCallback('created', ['emit'], ...)`
-- Use `/create` to instantiate it
-- Verify callback was invoked with creator info
-
-### 2. `look [target]` (Medium Priority)
+### 1. `look [target]` (Medium Priority)
 Test looking at specific objects:
 - Create an object with a long description
 - Use `look <object>` to examine it
 - Verify shows object name and long description
 
-### 3. Room/sibling action handlers (Medium Priority)
+### 2. Room/sibling action handlers (Medium Priority)
 Test that actions can be handled by room or siblings:
 - Create room with action handler
 - Enter room and issue action command
 - Verify room's handler is invoked
 
-### 4. State persistence (Medium Priority)
+### 3. State persistence (Medium Priority)
 Test that JS `state` object persists:
 - Create object that stores counter in `state`
 - Increment counter via command
 - Verify counter persists across multiple commands
 
-### 5. Edge cases (Lower Priority)
+### 4. Edge cases (Lower Priority)
 - `/exit` at genesis should fail gracefully
 - `/move #obj #obj` should fail (circular)
 - WebDAV access without wizard privileges
