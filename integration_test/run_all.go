@@ -1684,5 +1684,63 @@ addCallback('created', ['emit'], (msg) => {
 
 	fmt.Println("  created event: OK")
 
+	// === Test 16: look [target] ===
+	fmt.Println("Testing look [target]...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for look target: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/enter genesis for look target did not complete")
+	}
+
+	// Create an object with both Short and Long descriptions
+	tomeSource := `setDescriptions([{
+	Short: 'dusty tome',
+	Long: 'An ancient book bound in cracked leather. Strange symbols cover the spine, and the pages smell of forgotten ages.',
+}]);
+`
+	if err := dav.Put("/tome.js", tomeSource); err != nil {
+		return fmt.Errorf("failed to create /tome.js: %w", err)
+	}
+
+	// Create the tome object
+	if err := tc.sendLine("/create /tome.js"); err != nil {
+		return fmt.Errorf("/create tome: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+		return fmt.Errorf("/create tome did not complete")
+	}
+
+	// Wait for the tome to appear
+	if _, found := tc.waitForObject("*dusty*", 2*time.Second); !found {
+		return fmt.Errorf("tome was not created")
+	}
+
+	// Look at the tome using quoted Short description (spaces require quotes)
+	if err := tc.sendLine(`look "dusty tome"`); err != nil {
+		return fmt.Errorf("look dusty tome: %w", err)
+	}
+	output, ok = tc.waitForPrompt(2 * time.Second)
+	if !ok {
+		return fmt.Errorf("look dusty tome did not complete: %q", output)
+	}
+
+	// Verify the output shows the object name
+	if !strings.Contains(output, "dusty tome") {
+		return fmt.Errorf("look should show object name 'dusty tome': %q", output)
+	}
+
+	// Verify the output shows the Long description
+	if !strings.Contains(output, "ancient book bound in cracked leather") {
+		return fmt.Errorf("look should show Long description: %q", output)
+	}
+	if !strings.Contains(output, "forgotten ages") {
+		return fmt.Errorf("look should show full Long description: %q", output)
+	}
+
+	fmt.Println("  look [target]: OK")
+
 	return nil
 }
