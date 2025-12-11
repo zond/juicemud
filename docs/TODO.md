@@ -175,8 +175,8 @@
 ### 23. Missing Context Cancellation in Sync Loop
 **File:** `storage/storage.go:498-517`
 **Issue:** The `sync` function loops through FileSync entries without checking for context cancellation.
-**Fix:** Add `select { case <-ctx.Done(): return ctx.Err() default: }` in the loop.
-**Status:** Open
+**Fix:** Added `select { case <-ctx.Done(): return ctx.Err() default: }` at the start of the loop.
+**Status:** Fixed
 
 ### 24. Audit Log Panic on Encode Failure
 **File:** `storage/audit.go:225`

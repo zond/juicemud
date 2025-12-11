@@ -507,6 +507,11 @@ func (s *Storage) sync(ctx context.Context) error {
 	}
 	oldestSync, err := getOldestSync()
 	for ; err == nil && oldestSync != nil; oldestSync, err = getOldestSync() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if err := s.runSync(ctx, oldestSync); err != nil {
 			return juicemud.WithStack(err)
 		}
