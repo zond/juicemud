@@ -7,6 +7,291 @@ import (
 	"time"
 )
 
+func TestDescriptionsMatches(t *testing.T) {
+	tests := []struct {
+		name     string
+		descs    Descriptions
+		pattern  string
+		expected bool
+	}{
+		// Exact match on full Short description
+		{
+			name:     "exact match single word",
+			descs:    Descriptions{{Short: "torch"}},
+			pattern:  "torch",
+			expected: true,
+		},
+		{
+			name:     "exact match multi word",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "dusty tome",
+			expected: true,
+		},
+		{
+			name:     "no match",
+			descs:    Descriptions{{Short: "torch"}},
+			pattern:  "book",
+			expected: false,
+		},
+
+		// Word-based matching
+		{
+			name:     "match first word",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "dusty",
+			expected: true,
+		},
+		{
+			name:     "match second word",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "tome",
+			expected: true,
+		},
+		{
+			name:     "match middle word",
+			descs:    Descriptions{{Short: "old dusty tome"}},
+			pattern:  "dusty",
+			expected: true,
+		},
+		{
+			name:     "partial word no match",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "dust",
+			expected: false,
+		},
+
+		// Glob patterns on full description
+		{
+			name:     "glob star prefix",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "*tome",
+			expected: true,
+		},
+		{
+			name:     "glob star suffix",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "dusty*",
+			expected: true,
+		},
+		{
+			name:     "glob star both",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "*tome*",
+			expected: true,
+		},
+
+		// Glob patterns on individual words
+		{
+			name:     "glob on word prefix",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "dust*",
+			expected: true,
+		},
+		{
+			name:     "glob on word suffix",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "*ome",
+			expected: true,
+		},
+		{
+			name:     "glob question mark",
+			descs:    Descriptions{{Short: "dusty tome"}},
+			pattern:  "tom?",
+			expected: true,
+		},
+
+		// Multiple descriptions
+		{
+			name: "match second description",
+			descs: Descriptions{
+				{Short: "wooden box"},
+				{Short: "dusty tome"},
+			},
+			pattern:  "tome",
+			expected: true,
+		},
+
+		// Edge cases
+		{
+			name:     "empty pattern matches empty Short",
+			descs:    Descriptions{{Short: ""}},
+			pattern:  "",
+			expected: true,
+		},
+		{
+			name:     "empty descriptions",
+			descs:    Descriptions{},
+			pattern:  "torch",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.descs.Matches(tt.pattern)
+			if result != tt.expected {
+				t.Errorf("Matches(%q) = %v, want %v", tt.pattern, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestLocationIdentify(t *testing.T) {
+	// Helper to create an object with a Short description
+	makeObj := func(id, short string) *Object {
+		return &Object{
+			Unsafe: &ObjectDO{
+				Id:           id,
+				Descriptions: []Description{{Short: short}},
+			},
+		}
+	}
+
+	// Create a location with multiple objects
+	room := makeObj("room1", "dark room")
+	torch1 := makeObj("torch1", "burning torch")
+	torch2 := makeObj("torch2", "burning torch")
+	tome := makeObj("tome1", "dusty tome")
+	box := makeObj("box1", "wooden box")
+
+	loc := &Location{
+		Container: room,
+		Content: Content{
+			"torch1": torch1,
+			"torch2": torch2,
+			"tome1":  tome,
+			"box1":   box,
+		},
+	}
+
+	tests := []struct {
+		name        string
+		pattern     string
+		expectedID  string
+		expectError bool
+		errorMsg    string
+	}{
+		// Simple word matching
+		{
+			name:       "match by single word",
+			pattern:    "dusty",
+			expectedID: "tome1",
+		},
+		{
+			name:       "match by second word",
+			pattern:    "tome",
+			expectedID: "tome1",
+		},
+		{
+			name:       "match box by word",
+			pattern:    "box",
+			expectedID: "box1",
+		},
+		{
+			name:       "match box by wooden",
+			pattern:    "wooden",
+			expectedID: "box1",
+		},
+
+		// Indexed matching with word patterns
+		{
+			name:       "first torch by index",
+			pattern:    "0.torch",
+			expectedID: "torch1",
+		},
+		{
+			name:       "second torch by index",
+			pattern:    "1.torch",
+			expectedID: "torch2",
+		},
+		{
+			name:       "first burning by index",
+			pattern:    "0.burning",
+			expectedID: "torch1",
+		},
+		{
+			name:       "second burning by index",
+			pattern:    "1.burning",
+			expectedID: "torch2",
+		},
+
+		// Glob patterns
+		{
+			name:       "glob pattern dust*",
+			pattern:    "dust*",
+			expectedID: "tome1",
+		},
+		{
+			name:       "glob pattern *orch",
+			pattern:    "0.*orch",
+			expectedID: "torch1",
+		},
+
+		// Exact full description match
+		{
+			name:       "exact full description",
+			pattern:    "dusty tome",
+			expectedID: "tome1",
+		},
+		{
+			name:       "exact full description with index",
+			pattern:    "0.burning torch",
+			expectedID: "torch1",
+		},
+
+		// Container (room) matching
+		{
+			name:       "match room by word",
+			pattern:    "room",
+			expectedID: "room1",
+		},
+		{
+			name:       "match room by dark",
+			pattern:    "dark",
+			expectedID: "room1",
+		},
+
+		// Error cases
+		{
+			name:        "no match",
+			pattern:     "sword",
+			expectError: true,
+			errorMsg:    `No "sword" found`,
+		},
+		{
+			name:        "multiple matches without index",
+			pattern:     "burning",
+			expectError: true,
+			errorMsg:    `2 "burning" found, pick one`,
+		},
+		{
+			name:        "index out of range",
+			pattern:     "5.torch",
+			expectError: true,
+			errorMsg:    `Only 2 "torch" found`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := loc.Identify(tt.pattern)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
+				} else if err.Error() != tt.errorMsg {
+					t.Errorf("expected error %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				} else if result.GetId() != tt.expectedID {
+					t.Errorf("expected object %q, got %q", tt.expectedID, result.GetId())
+				}
+			}
+		})
+	}
+}
+
 func assertClose[T float64 | float32 | int | time.Duration](t *testing.T, f1, f2, delta T) {
 	t.Helper()
 	if math.Abs(float64(f1)-float64(f2)) > float64(delta) {

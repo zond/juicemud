@@ -216,8 +216,15 @@ type Descriptions []Description
 
 func (d Descriptions) Matches(pattern string) bool {
 	for _, desc := range d {
+		// First try exact/glob match against full Short description
 		if match, _ := filepath.Match(pattern, desc.Short); match {
 			return true
+		}
+		// Then try glob match against individual words
+		for _, word := range strings.Fields(desc.Short) {
+			if match, _ := filepath.Match(pattern, word); match {
+				return true
+			}
 		}
 	}
 	return false

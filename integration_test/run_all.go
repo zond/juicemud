@@ -1524,7 +1524,7 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Test 1: Without /debug, log output should NOT appear
-	if err := tc.sendLine("trigger logger stone"); err != nil {
+	if err := tc.sendLine("trigger logger"); err != nil {
 		return fmt.Errorf("trigger without debug: %w", err)
 	}
 	output, ok = tc.waitForPrompt(2*time.Second)
@@ -1574,7 +1574,7 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Trigger the logger - now log output should appear
-	if err := tc.sendLine("trigger logger stone"); err != nil {
+	if err := tc.sendLine("trigger logger"); err != nil {
 		return fmt.Errorf("trigger with debug: %w", err)
 	}
 
@@ -1623,7 +1623,7 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Trigger again - log output should NOT appear anymore
-	if err := tc.sendLine("trigger logger stone"); err != nil {
+	if err := tc.sendLine("trigger logger"); err != nil {
 		return fmt.Errorf("trigger after undebug: %w", err)
 	}
 	output, ok = tc.waitForPrompt(2*time.Second)
@@ -1718,9 +1718,9 @@ addCallback('created', ['emit'], (msg) => {
 		return fmt.Errorf("tome was not created")
 	}
 
-	// Look at the tome using quoted Short description (spaces require quotes)
-	if err := tc.sendLine(`look "dusty tome"`); err != nil {
-		return fmt.Errorf("look dusty tome: %w", err)
+	// Look at the tome using a single word from its Short description
+	if err := tc.sendLine("look tome"); err != nil {
+		return fmt.Errorf("look tome: %w", err)
 	}
 	output, ok = tc.waitForPrompt(2 * time.Second)
 	if !ok {

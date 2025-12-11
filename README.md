@@ -145,9 +145,16 @@ addCallback('movement', ['emit'], (msg) => {
 
 **Calling Other Objects**: Use `call(target, eventType, line)` to trigger actions on other objects:
 ```javascript
-// Trigger the "trigger" event on an object matching "logger stone"
-call('logger stone', 'trigger', 'with some extra args');
+// Trigger the "trigger" event on an object matching "logger"
+call('logger', 'trigger', 'with some extra args');
 ```
+
+**Object Identification**: Commands that target objects (like `look`, `call`, action commands) use pattern matching against Short descriptions:
+- **Word matching**: `tome` matches "dusty tome", `torch` matches "burning torch"
+- **Glob patterns**: `dust*` matches "dusty", `*orch` matches "torch"
+- **Full description**: `"dusty tome"` matches exactly (use quotes for multi-word patterns)
+- **Indexed selection**: When multiple objects match, use `0.torch`, `1.torch` to select which one
+- **Wizard ID syntax**: Wizards can use `#objectid` to target by internal ID
 
 **Delayed Execution**: Use `setTimeout(handler, ms)` to schedule code to run later:
 ```javascript
@@ -162,7 +169,19 @@ setTimeout(() => {
 
 **File System**: JavaScript sources stored in virtual filesystem with read/write group permissions. Files tracked in SQLite, content in tkrzw hash.
 
-**Wizard Commands**: Users in "wizards" group get access to:
+**Player Commands**: All users have access to:
+- `look` or `l`: View current room, or `look <target>` to examine a specific object
+- `scan`: View current room and neighboring rooms via exits
+
+**Command Resolution**: When a player types a command, it's processed in this order (stopping at the first handler that returns a truthy value):
+1. **Player's object** receives it as a `command` event (if registered via `addCallback('name', ['command'], ...)`)
+2. **Current room** receives it as an `action` event (if registered via `addCallback('name', ['action'], ...)`)
+3. **Exits** are checked - if an exit's name matches, the player moves through it
+4. **Sibling objects** in the room receive it as an `action` event (checked in order)
+
+Objects only receive events they've registered callbacks for with the matching tag. For example, `trigger logger` only invokes the logger's callback if it registered `addCallback('trigger', ['action'], ...)`.
+
+**Wizard Commands**: Users in "wizards" group get additional `/`-prefixed commands:
 - Object management: `/create`, `/inspect`, `/move`, `/remove`, `/enter`, `/exit`
 - Debugging: `/debug`, `/undebug`
 - File permissions: `/ls`, `/chread`, `/chwrite`
