@@ -1749,5 +1749,129 @@ addCallback('created', ['emit'], (msg) => {
 
 	fmt.Println("  look [target]: OK")
 
+	// === Test 17: /queuestats wizard command ===
+	fmt.Println("Testing /queuestats wizard command...")
+
+	// Test /queuestats summary (default)
+	if err := tc.sendLine("/queuestats"); err != nil {
+		return fmt.Errorf("/queuestats command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/queuestats command did not complete: %q", output)
+	}
+	// Verify output shows expected fields
+	if !strings.Contains(output, "Queue Statistics") {
+		return fmt.Errorf("/queuestats should show 'Queue Statistics': %q", output)
+	}
+	if !strings.Contains(output, "Total events:") {
+		return fmt.Errorf("/queuestats should show 'Total events:': %q", output)
+	}
+	if !strings.Contains(output, "Event rates:") {
+		return fmt.Errorf("/queuestats should show 'Event rates:': %q", output)
+	}
+
+	// Test /queuestats summary explicitly
+	if err := tc.sendLine("/queuestats summary"); err != nil {
+		return fmt.Errorf("/queuestats summary command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/queuestats summary did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Queue Statistics") {
+		return fmt.Errorf("/queuestats summary should show 'Queue Statistics': %q", output)
+	}
+
+	// Test /queuestats categories
+	if err := tc.sendLine("/queuestats categories"); err != nil {
+		return fmt.Errorf("/queuestats categories command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/queuestats categories did not complete: %q", output)
+	}
+	// Either shows "No errors recorded." or a table with Category header
+	if !strings.Contains(output, "No errors") && !strings.Contains(output, "Category") {
+		return fmt.Errorf("/queuestats categories should show errors or 'No errors': %q", output)
+	}
+
+	// Test /queuestats locations
+	if err := tc.sendLine("/queuestats locations"); err != nil {
+		return fmt.Errorf("/queuestats locations command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/queuestats locations did not complete: %q", output)
+	}
+	// Either shows "No errors recorded." or a table with Location header
+	if !strings.Contains(output, "No errors") && !strings.Contains(output, "Location") {
+		return fmt.Errorf("/queuestats locations should show errors or 'No errors': %q", output)
+	}
+
+	// Test /queuestats objects
+	if err := tc.sendLine("/queuestats objects"); err != nil {
+		return fmt.Errorf("/queuestats objects command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/queuestats objects did not complete: %q", output)
+	}
+	// Either shows "No objects recorded." or a table with Object header
+	if !strings.Contains(output, "No objects") && !strings.Contains(output, "Object") {
+		return fmt.Errorf("/queuestats objects should show objects or 'No objects': %q", output)
+	}
+
+	// Test /queuestats recent
+	if err := tc.sendLine("/queuestats recent"); err != nil {
+		return fmt.Errorf("/queuestats recent command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/queuestats recent did not complete: %q", output)
+	}
+	// Either shows "No recent errors." or error records
+	if !strings.Contains(output, "No recent errors") && !strings.Contains(output, "]") {
+		return fmt.Errorf("/queuestats recent should show errors or 'No recent errors': %q", output)
+	}
+
+	// Test /queuestats reset
+	if err := tc.sendLine("/queuestats reset"); err != nil {
+		return fmt.Errorf("/queuestats reset command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/queuestats reset did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Queue statistics reset") {
+		return fmt.Errorf("/queuestats reset should confirm reset: %q", output)
+	}
+
+	// Verify reset worked by checking summary shows zero errors
+	if err := tc.sendLine("/queuestats summary"); err != nil {
+		return fmt.Errorf("/queuestats summary after reset: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/queuestats summary after reset did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Total errors: 0") {
+		return fmt.Errorf("/queuestats summary after reset should show 'Total errors: 0': %q", output)
+	}
+
+	// Test /queuestats help (unknown subcommand)
+	if err := tc.sendLine("/queuestats help"); err != nil {
+		return fmt.Errorf("/queuestats help command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/queuestats help did not complete: %q", output)
+	}
+	if !strings.Contains(output, "usage:") {
+		return fmt.Errorf("/queuestats help should show usage: %q", output)
+	}
+
+	fmt.Println("  /queuestats wizard command: OK")
+
 	return nil
 }
