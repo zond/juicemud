@@ -123,6 +123,10 @@ func TestRecordErrorCategories(t *testing.T) {
 		{"not exist", os.ErrNotExist, CategoryStorage},
 		{"permission denied", os.ErrPermission, CategoryStorage},
 		{"generic error", errors.New("generic"), CategoryOther},
+		// Wrapped errors should still be classified correctly
+		{"wrapped deadline", errors.Wrap(context.DeadlineExceeded, "operation failed"), CategoryTimeout},
+		{"wrapped not exist", fmt.Errorf("loading: %w", os.ErrNotExist), CategoryStorage},
+		{"wrapped permission", errors.Wrap(os.ErrPermission, "access check"), CategoryStorage},
 	}
 
 	for _, tt := range tests {
@@ -446,8 +450,8 @@ func TestRateStatsUpdate(t *testing.T) {
 
 	// First update just sets lastUpdate
 	r.update(10)
-	if !r.lastUpdate.IsZero() == false {
-		// lastUpdate should be set
+	if r.lastUpdate.IsZero() {
+		t.Error("lastUpdate should be set after first update")
 	}
 	if r.SecondRate != 0 {
 		t.Errorf("SecondRate should be 0 on first update, got %f", r.SecondRate)
@@ -566,8 +570,12 @@ func TestEvictStaleLocked(t *testing.T) {
 	qs.objectBuckets[oldBucket] = map[string]struct{}{"obj1": {}}
 	qs.objectBucket["obj1"] = oldBucket
 
-	// Same for location
-	loc := "(unknown)"
+	// Same for location - get the actual location from byLocation
+	var loc string
+	for l := range qs.byLocation {
+		loc = l
+		break
+	}
 	currentLocBucket := qs.locationBucket[loc]
 	delete(qs.locationBuckets[currentLocBucket], loc)
 	if len(qs.locationBuckets[currentLocBucket]) == 0 {
@@ -725,6 +733,7 @@ func TestErrorLocationString(t *testing.T) {
 	line := 42
 	line0 := 0
 	col := 5
+	col0 := 0
 
 	tests := []struct {
 		name     string
@@ -732,6 +741,7 @@ func TestErrorLocationString(t *testing.T) {
 		expected string
 	}{
 		{"file:line:col", ErrorLocation{File: &file, Line: &line, Column: &col}, "test.go:42:5"},
+		{"file:line:0", ErrorLocation{File: &file, Line: &line, Column: &col0}, "test.go:42:0"},
 		{"file:line", ErrorLocation{File: &file, Line: &line}, "test.go:42"},
 		{"file:0", ErrorLocation{File: &file, Line: &line0}, "test.go:0"},
 		{"file only", ErrorLocation{File: &file}, "test.go"},
@@ -763,6 +773,10 @@ func TestParseJSLocation(t *testing.T) {
 		{"path:line:col", "/path/to/file.js:123:45", "/path/to/file.js", 123, 45, true, true},
 		{"no line", "no-line-number", "no-line-number", 0, 0, false, false},
 		{"empty", "", "", 0, 0, false, false},
+		// Windows paths
+		{"windows:line:col", `C:\path\file.js:10:5`, `C:\path\file.js`, 10, 5, true, true},
+		{"windows:line", `C:\path\file.js:10`, `C:\path\file.js`, 10, 0, true, false},
+		{"windows drive only", "C:", "C:", 0, 0, false, false},
 	}
 
 	for _, tt := range tests {

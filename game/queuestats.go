@@ -734,9 +734,6 @@ type stackTracer interface {
 	StackTrace() errors.StackTrace
 }
 
-// jsLocationRE parses JS error locations like "/user.js:10:5" or "user.js:10"
-var jsLocationRE = regexp.MustCompile(`^(.+?):(\d+)(?::(\d+))?$`)
-
 // classifyError extracts category, location, and message from an error.
 func classifyError(err error) (ErrorCategory, ErrorLocation, string) {
 	if err == nil {
@@ -780,21 +777,51 @@ func classifyError(err error) (ErrorCategory, ErrorLocation, string) {
 	return CategoryOther, extractGoLocation(err), err.Error()
 }
 
+// parseJSLocation parses JS error locations like "/user.js:10:5", "user.js:10",
+// or Windows paths like "C:\path\file.js:10:5". Parses from right to left to
+// handle colons in Windows drive letters.
 func parseJSLocation(loc string) ErrorLocation {
-	if matches := jsLocationRE.FindStringSubmatch(loc); matches != nil {
-		file := matches[1]
-		line, _ := strconv.Atoi(matches[2])
-		result := ErrorLocation{File: &file, Line: &line}
-		if matches[3] != "" {
-			col, _ := strconv.Atoi(matches[3])
-			result.Column = &col
-		}
-		return result
+	if loc == "" {
+		return ErrorLocation{}
 	}
-	if loc != "" {
+
+	// Parse from right: look for :col (optional) then :line
+	// Format: file:line or file:line:col
+	lastColon := strings.LastIndex(loc, ":")
+	if lastColon == -1 {
+		// No colon, just a file name
 		return ErrorLocation{File: &loc}
 	}
-	return ErrorLocation{}
+
+	// Check if the part after last colon is a number
+	afterLast := loc[lastColon+1:]
+	num1, err1 := strconv.Atoi(afterLast)
+	if err1 != nil {
+		// Not a number, treat whole thing as file (e.g., "C:" alone)
+		return ErrorLocation{File: &loc}
+	}
+
+	// Look for second-to-last colon
+	beforeLast := loc[:lastColon]
+	secondColon := strings.LastIndex(beforeLast, ":")
+	if secondColon == -1 {
+		// Only one colon with number: file:line
+		file := beforeLast
+		return ErrorLocation{File: &file, Line: &num1}
+	}
+
+	// Check if part between colons is a number
+	between := beforeLast[secondColon+1:]
+	num2, err2 := strconv.Atoi(between)
+	if err2 != nil {
+		// Second part not a number: file:line (e.g., "C:\path:10")
+		file := beforeLast
+		return ErrorLocation{File: &file, Line: &num1}
+	}
+
+	// Both are numbers: file:line:col
+	file := beforeLast[:secondColon]
+	return ErrorLocation{File: &file, Line: &num2, Column: &num1}
 }
 
 // goLocationRE parses Go stack frame strings like "file.go:123"
