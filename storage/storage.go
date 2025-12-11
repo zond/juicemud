@@ -284,6 +284,9 @@ func (s *Storage) CountSourceObjects(ctx context.Context, path string) (int, err
 // It also performs cleanup: if an object no longer exists but is still indexed under this
 // source path, it removes the stale index entry. The iteration must collect IDs first
 // because SubEach holds a read lock, and deletion requires a write lock.
+//
+// Errors are yielded to callers but do not stop iteration - callers may receive errors
+// interspersed with valid IDs and should handle both.
 func (s *Storage) EachSourceObject(ctx context.Context, path string) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
 		// Collect IDs during iteration since we can't delete while SubEach holds its read lock.
