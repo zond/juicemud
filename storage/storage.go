@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"iter"
@@ -112,12 +113,12 @@ func (s *Storage) StartObjects(_ context.Context) error {
 	return s.objects.Start()
 }
 
-func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, sql string, params ...any) error {
-	if err := sqlx.GetContext(ctx, db, d, sql, params...); err != nil {
-		if err.Error() == "sql: no rows in result set" {
+func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, query string, params ...any) error {
+	if err := sqlx.GetContext(ctx, db, d, query, params...); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return juicemud.WithStack(os.ErrNotExist)
 		}
-		return errors.Wrapf(err, "Executing %q(%+v):", sql, params)
+		return errors.Wrapf(err, "Executing %q(%+v):", query, params)
 	}
 	return nil
 }
@@ -1045,21 +1046,9 @@ func (s *Storage) LoadUser(ctx context.Context, name string) (*User, error) {
 }
 
 func (s *Storage) UserGroups(ctx context.Context, user *User) (Groups, error) {
-	members := []GroupMember{}
-	if err := s.sql.SelectContext(ctx, &members, "SELECT * FROM GroupMember WHERE User = ?", user.Id); err != nil {
+	result := Groups{}
+	if err := s.sql.SelectContext(ctx, &result, "SELECT g.* FROM `Group` g INNER JOIN GroupMember gm ON g.Id = gm.`Group` WHERE gm.User = ?", user.Id); err != nil {
 		return nil, juicemud.WithStack(err)
-	}
-	ids := map[int64]bool{}
-	for _, member := range members {
-		ids[member.Group] = true
-	}
-	result := make(Groups, 0, len(ids))
-	for id := range ids {
-		group, err := s.loadGroupByID(ctx, s.sql, id)
-		if err != nil {
-			return nil, juicemud.WithStack(err)
-		}
-		result = append(result, *group)
 	}
 	return result, nil
 }
@@ -1238,30 +1227,6 @@ func (s *Storage) AddUserToGroup(ctx context.Context, user *User, groupName stri
 	return nil
 }
 
-// validGroupName checks if a group name meets the naming constraints.
-// Rules: 1-16 chars, starts with letter, rest can be letters/digits/hyphen/underscore.
-// Reserved names like "owner" are rejected.
-func validGroupName(name string) bool {
-	if len(name) < 1 || len(name) > 16 {
-		return false
-	}
-	if name == "owner" {
-		return false
-	}
-	for i, r := range name {
-		if i == 0 {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
-				return false
-			}
-		} else {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // validateGroup checks that a group's state satisfies all invariants.
 // This should be called before committing any group create or edit operation.
 // Invariants checked:
@@ -1272,9 +1237,12 @@ func validGroupName(name string) bool {
 //
 // Permission checks are NOT done here - they belong in each operation.
 func (s *Storage) validateGroup(ctx context.Context, tx *sqly.Tx, g *Group) error {
-	// Name constraints
-	if !validGroupName(g.Name) {
-		return errors.Errorf("invalid group name %q", g.Name)
+	// Name constraints: must match pattern and not be reserved
+	if err := juicemud.ValidateName(g.Name, "group name"); err != nil {
+		return err
+	}
+	if g.Name == "owner" {
+		return errors.Errorf("group name %q is reserved", g.Name)
 	}
 
 	// OwnerGroup must exist (if non-zero)

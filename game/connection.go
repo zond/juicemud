@@ -113,13 +113,19 @@ func (l *loginRateLimiterT) clearFailure(username string) {
 
 func addConsole(id string, term *term.Terminal) {
 	consoleByObjectID.WithLock(id, func() {
-		consoleByObjectID.Set(id, consoleByObjectID.Get(id).Push(term))
+		if f := consoleByObjectID.Get(id); f != nil {
+			f.Push(term)
+		} else {
+			consoleByObjectID.Set(id, NewFanout(term))
+		}
 	})
 }
 
 func delConsole(id string, term *term.Terminal) {
 	consoleByObjectID.WithLock(id, func() {
-		consoleByObjectID.Set(id, consoleByObjectID.Get(id).Drop(term))
+		if f := consoleByObjectID.Get(id); f != nil {
+			f.Drop(term)
+		}
 	})
 }
 
@@ -1117,6 +1123,10 @@ func (c *Connection) createUser() error {
 		}
 		if username == "abort" {
 			return juicemud.WithStack(ErrOperationAborted)
+		}
+		if err := juicemud.ValidateName(username, "username"); err != nil {
+			fmt.Fprintln(c.term, err.Error())
+			continue
 		}
 		if _, err = c.game.storage.LoadUser(c.ctx, username); errors.Is(err, os.ErrNotExist) {
 			user = &storage.User{

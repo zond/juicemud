@@ -1,46 +1,69 @@
 package game
 
 import (
+	"sync"
+
 	"github.com/zond/juicemud"
 	"golang.org/x/term"
 )
 
-type Fanout map[*term.Terminal]bool
-
-func (f *Fanout) Push(t *term.Terminal) *Fanout {
-	if f == nil {
-		return &Fanout{t: true}
-	}
-	(*f)[t] = true
-	return f
+// Fanout broadcasts writes to multiple terminals concurrently.
+type Fanout struct {
+	mu        sync.RWMutex
+	terminals map[*term.Terminal]bool
 }
 
-func (f *Fanout) Drop(t *term.Terminal) *Fanout {
-	if f == nil {
-		return nil
+// NewFanout creates a new Fanout with the given terminal.
+func NewFanout(t *term.Terminal) *Fanout {
+	return &Fanout{
+		terminals: map[*term.Terminal]bool{t: true},
 	}
-	delete(*f, t)
-	return f
+}
+
+func (f *Fanout) Push(t *term.Terminal) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.terminals[t] = true
+}
+
+func (f *Fanout) Drop(t *term.Terminal) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.terminals, t)
 }
 
 func (f *Fanout) Write(b []byte) (int, error) {
 	if f == nil {
 		return len(b), nil
 	}
-	errs := errs{}
-	max := 0
-	for t := range *f {
-		if written, err := t.Write(b); err != nil {
-			delete(*f, t)
-			errs = append(errs, err)
-		} else {
-			if written > max {
-				max = written
-			}
+	f.mu.RLock()
+	// Copy terminals slice to avoid holding lock during writes
+	terminals := make([]*term.Terminal, 0, len(f.terminals))
+	for t := range f.terminals {
+		terminals = append(terminals, t)
+	}
+	f.mu.RUnlock()
+
+	var toRemove []*term.Terminal
+	var writeErrs errs
+	for _, t := range terminals {
+		if _, err := t.Write(b); err != nil {
+			toRemove = append(toRemove, t)
+			writeErrs = append(writeErrs, err)
 		}
 	}
-	if len(errs) > 0 {
-		return max, juicemud.WithStack(errs)
+
+	// Remove failed terminals
+	if len(toRemove) > 0 {
+		f.mu.Lock()
+		for _, t := range toRemove {
+			delete(f.terminals, t)
+		}
+		f.mu.Unlock()
 	}
-	return max, nil
+
+	if len(writeErrs) > 0 {
+		return len(b), juicemud.WithStack(writeErrs)
+	}
+	return len(b), nil
 }

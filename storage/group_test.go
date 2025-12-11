@@ -67,9 +67,9 @@ func userContext(user *User) context.Context {
 	return AuthenticateUser(context.Background(), user)
 }
 
-// === Group Name Validation Tests ===
+// === Name Validation Tests ===
 
-func TestValidGroupName(t *testing.T) {
+func TestValidateName(t *testing.T) {
 	tests := []struct {
 		name  string
 		valid bool
@@ -87,7 +87,6 @@ func TestValidGroupName(t *testing.T) {
 		{"1wizards", false},          // starts with digit
 		{"-wizards", false},          // starts with hyphen
 		{"_wizards", false},          // starts with underscore
-		{"owner", false},             // reserved
 		{"wiz@rds", false},           // invalid char
 		{"wiz ards", false},          // space
 		{"abcdefghijklmnopq", false}, // 17 chars - too long
@@ -95,9 +94,10 @@ func TestValidGroupName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := validGroupName(tt.name)
+			err := juicemud.ValidateName(tt.name, "test name")
+			got := err == nil
 			if got != tt.valid {
-				t.Errorf("validGroupName(%q) = %v, want %v", tt.name, got, tt.valid)
+				t.Errorf("ValidateName(%q) = %v (err=%v), want valid=%v", tt.name, got, err, tt.valid)
 			}
 		})
 	}

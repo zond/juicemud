@@ -304,7 +304,7 @@ func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
 	callbacks["setSkillConfigs"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 1 || !args[0].IsObject() {
-			return rc.Throw("setSkillConfigss takes [Object] arguments")
+			return rc.Throw("setSkillConfigs takes [Object] arguments")
 		}
 		if err := rc.Copy(&structs.SkillConfigs, args[0]); err != nil {
 			return rc.Throw("trying to convert %v to structs.SkillConfigs: %v", args[0], err)
