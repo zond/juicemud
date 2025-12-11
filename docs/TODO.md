@@ -114,7 +114,5 @@
 
 ### 17b. Rename Function
 **File:** `storage/storage.go:411`
-```
-// TODO: Rename to AccessObject
-```
-**Status:** Open - simple rename refactor
+**Issue:** Function needed renaming to AccessObject.
+**Status:** Fixed - function already renamed, removed stale TODO comment

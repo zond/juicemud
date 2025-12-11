@@ -409,8 +409,7 @@ func (s *Storage) LoadObjects(ctx context.Context, ids map[string]bool, ref Refr
 	return res, nil
 }
 
-// TODO: Rename to AccessObject
-// Loads the object with the given ID. If a Refresh is given, it will be run if the
+// AccessObject loads the object with the given ID. If a Refresh is given, it will be run if the
 // object source is newer than the last run of the object.
 func (s *Storage) AccessObject(ctx context.Context, id string, ref Refresh) (*structs.Object, error) {
 	res, err := s.objects.Get(id)
