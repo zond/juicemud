@@ -64,9 +64,8 @@
 ### 10. Missing Context Cancellation in Queue
 **File:** `storage/queue/queue.go:109-144`
 **Issue:** Queue's Start loop doesn't check for context cancellation.
-**Analysis:** The queue uses `q.closed` flag and `q.cond.Wait()` for shutdown. Context cancellation would allow external cancellation (e.g., server shutdown timeout). Currently, closing the queue is the only way to stop it.
-**Question:** Should the context be respected? It would require checking `ctx.Done()` in the loop and broadcasting on cancellation.
-**Status:** Open - needs design decision
+**Fix:** Added context cancellation checking in Start(). A goroutine broadcasts on ctx.Done() to wake the loop, and the loop checks ctx.Err() before waiting.
+**Status:** Fixed
 
 ### 11. Lock Token Validation Pattern
 **File:** `dav/dav.go:195-209`

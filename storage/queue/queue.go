@@ -105,8 +105,13 @@ func (q *Queue) Push(ctx context.Context, eventer structs.Eventer) error {
 type EventHandler func(context.Context, *structs.Event)
 
 // Start runs the event loop, calling handler for each event when its time arrives.
-// Blocks until the queue is closed.
+// Blocks until the queue is closed or context is cancelled. Remaining events are
+// drained before returning, even after cancellation.
 func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
+	if ctx.Err() != nil {
+		return juicemud.WithStack(ctx.Err())
+	}
+
 	var err error
 	if q.nextEvent, err = q.peekFirst(ctx); err != nil {
 		return juicemud.WithStack(err)
@@ -114,10 +119,28 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 	if q.nextEvent != nil {
 		q.offset = structs.Timestamp(q.nextEvent.At)
 	}
+
+	// Wake up the loop when context is cancelled. The done channel prevents
+	// this goroutine from leaking if Start() returns before ctx is cancelled.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			q.cond.Broadcast()
+		case <-done:
+		}
+	}()
+
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 	q.started = true
-	for !q.closed || q.nextEvent != nil {
+	// Continue while: (queue is open AND context is valid) OR (there are pending events to drain)
+	for (!q.closed && ctx.Err() == nil) || q.nextEvent != nil {
+		// Exit if context cancelled and no more events
+		if ctx.Err() != nil && q.nextEvent == nil {
+			break
+		}
 		for q.nextEvent != nil && structs.Timestamp(q.nextEvent.At) <= q.Now() {
 			handler(ctx, q.nextEvent)
 			if err := q.tree.Del(q.nextEvent.Key); err != nil {
@@ -135,10 +158,13 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 				}()
 			}
 		}
-		if !q.closed {
+		if !q.closed && ctx.Err() == nil {
 			q.cond.Wait()
 		}
 	}
 	q.cond.Broadcast()
+	if ctx.Err() != nil {
+		return juicemud.WithStack(ctx.Err())
+	}
 	return nil
 }
