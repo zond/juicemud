@@ -510,8 +510,7 @@ func (c *Connection) wizCommands() commands {
 				for _, g := range groups {
 					groupNames[g.Id] = g.Name
 				}
-				t := table.New("Name", "OwnerGroup", "Supergroup")
-				t.WithWriter(c.term)
+				t := table.New("Name", "OwnerGroup", "Supergroup").WithWriter(c.term)
 				for _, g := range groups {
 					ownerName := "owner"
 					if g.OwnerGroup != 0 {

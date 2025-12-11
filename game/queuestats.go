@@ -22,6 +22,10 @@ const (
 	recentErrorsBufferSize = 10000
 	// maxErrorMessageLength is the maximum length of error messages stored in recent errors.
 	maxErrorMessageLength = 128
+	// statsTTL is how long to keep stats for inactive objects/locations before eviction.
+	statsTTL = 7 * 24 * time.Hour // 7 days
+	// evictionInterval is how often to run the eviction check.
+	evictionInterval = time.Hour
 )
 
 // ErrorCategory classifies the source of an error.
@@ -82,15 +86,9 @@ type RateStats struct {
 func (r *RateStats) update(count uint64) {
 	now := time.Now()
 	if r.lastUpdate.IsZero() {
+		// First update: just record the time, rates start at 0 and will
+		// naturally build up. This avoids inflated initial rates.
 		r.lastUpdate = now
-		// Initialize rates with the count, assuming ~1 second elapsed
-		if count > 0 {
-			rate := float64(count)
-			r.SecondRate = rate
-			r.MinuteRate = rate
-			r.HourRate = rate
-			r.DayRate = rate
-		}
 		return
 	}
 
@@ -118,10 +116,12 @@ func (r *RateStats) update(count uint64) {
 }
 
 // ObjectStats tracks per-object event and error statistics.
+// "Events" counts all event executions (attempts), while "Errors" counts failed executions.
+// Successful executions = Events - Errors.
 type ObjectStats struct {
-	Events     uint64
-	Errors     uint64
-	LastEvent  time.Time
+	Events     uint64    // Total event execution attempts
+	Errors     uint64    // Failed executions
+	LastEvent  time.Time // Last event attempt (used for TTL eviction)
 	LastError  time.Time
 	ByCategory map[ErrorCategory]uint64
 	ByLocation map[string]uint64 // location string -> count
@@ -141,6 +141,8 @@ func newObjectStats() *ObjectStats {
 }
 
 // QueueStats tracks in-memory statistics for queue event processing.
+// It tracks both event execution attempts and errors, with per-object granularity.
+// Stale entries (no activity for statsTTL) are automatically evicted.
 type QueueStats struct {
 	mu sync.RWMutex
 
@@ -151,11 +153,21 @@ type QueueStats struct {
 	byCategory map[ErrorCategory]*ErrorStats
 	byLocation map[string]*ErrorStats // location string -> stats
 
+	// Time-bucketed tracking for efficient eviction (hour -> set of keys).
+	// When an entry is updated, it's moved to the current hour's bucket.
+	// Eviction deletes all entries in buckets older than statsTTL.
+	objectBuckets   map[time.Time]map[string]struct{}
+	locationBuckets map[time.Time]map[string]struct{}
+
+	// Track which bucket each entry is currently in (for efficient moves)
+	objectBucket   map[string]time.Time
+	locationBucket map[string]time.Time
+
 	// Recent errors circular buffer for debugging
 	recentErrors []ErrorRecord
 	recentIndex  int
 
-	// Global counters
+	// Global counters (these are cumulative and never reset by eviction)
 	totalEvents uint64
 	totalErrors uint64
 	startTime   time.Time
@@ -166,6 +178,9 @@ type QueueStats struct {
 	prevEvents uint64
 	prevErrors uint64
 
+	// Eviction tracking
+	lastEviction time.Time
+
 	// Lifecycle
 	closeCh   chan struct{}
 	closeOnce sync.Once
@@ -173,13 +188,19 @@ type QueueStats struct {
 
 // NewQueueStats creates a new QueueStats tracker.
 func NewQueueStats() *QueueStats {
+	now := time.Now()
 	return &QueueStats{
-		objects:      make(map[string]*ObjectStats),
-		byCategory:   make(map[ErrorCategory]*ErrorStats),
-		byLocation:   make(map[string]*ErrorStats),
-		recentErrors: make([]ErrorRecord, recentErrorsBufferSize),
-		startTime:    time.Now(),
-		closeCh:      make(chan struct{}),
+		objects:         make(map[string]*ObjectStats),
+		byCategory:      make(map[ErrorCategory]*ErrorStats),
+		byLocation:      make(map[string]*ErrorStats),
+		objectBuckets:   make(map[time.Time]map[string]struct{}),
+		locationBuckets: make(map[time.Time]map[string]struct{}),
+		objectBucket:    make(map[string]time.Time),
+		locationBucket:  make(map[string]time.Time),
+		recentErrors:    make([]ErrorRecord, recentErrorsBufferSize),
+		startTime:       now,
+		lastEviction:    now,
+		closeCh:         make(chan struct{}),
 	}
 }
 
@@ -204,12 +225,15 @@ func (q *QueueStats) Close() {
 	})
 }
 
-// RecordEvent records a successful event execution for an object.
+// RecordEvent records an event execution attempt for an object.
+// This should be called for every event processed, regardless of success or failure.
+// The error rate is calculated as Errors/Events, representing the failure percentage.
 func (q *QueueStats) RecordEvent(objectID string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	q.totalEvents++
+	now := time.Now()
 
 	s := q.objects[objectID]
 	if s == nil {
@@ -217,10 +241,74 @@ func (q *QueueStats) RecordEvent(objectID string) {
 		q.objects[objectID] = s
 	}
 	s.Events++
-	s.LastEvent = time.Now()
+	s.LastEvent = now
+
+	// Update time bucket for efficient eviction
+	q.touchObjectLocked(objectID, now)
+}
+
+// touchObjectLocked updates the time bucket for an object. Must be called with q.mu held.
+func (q *QueueStats) touchObjectLocked(objectID string, now time.Time) {
+	bucket := now.Truncate(time.Hour)
+	oldBucket, exists := q.objectBucket[objectID]
+
+	// If already in the current bucket, nothing to do
+	if exists && oldBucket == bucket {
+		return
+	}
+
+	// Remove from old bucket if exists
+	if exists {
+		if oldSet := q.objectBuckets[oldBucket]; oldSet != nil {
+			delete(oldSet, objectID)
+			if len(oldSet) == 0 {
+				delete(q.objectBuckets, oldBucket)
+			}
+		}
+	}
+
+	// Add to new bucket
+	newSet := q.objectBuckets[bucket]
+	if newSet == nil {
+		newSet = make(map[string]struct{})
+		q.objectBuckets[bucket] = newSet
+	}
+	newSet[objectID] = struct{}{}
+	q.objectBucket[objectID] = bucket
+}
+
+// touchLocationLocked updates the time bucket for a location. Must be called with q.mu held.
+func (q *QueueStats) touchLocationLocked(location string, now time.Time) {
+	bucket := now.Truncate(time.Hour)
+	oldBucket, exists := q.locationBucket[location]
+
+	// If already in the current bucket, nothing to do
+	if exists && oldBucket == bucket {
+		return
+	}
+
+	// Remove from old bucket if exists
+	if exists {
+		if oldSet := q.locationBuckets[oldBucket]; oldSet != nil {
+			delete(oldSet, location)
+			if len(oldSet) == 0 {
+				delete(q.locationBuckets, oldBucket)
+			}
+		}
+	}
+
+	// Add to new bucket
+	newSet := q.locationBuckets[bucket]
+	if newSet == nil {
+		newSet = make(map[string]struct{})
+		q.locationBuckets[bucket] = newSet
+	}
+	newSet[location] = struct{}{}
+	q.locationBucket[location] = bucket
 }
 
 // RecordError records a failed event execution for an object.
+// This should be called when an event execution fails, after RecordEvent was called.
 func (q *QueueStats) RecordError(objectID string, err error) {
 	category, location, message := classifyError(err)
 
@@ -241,6 +329,10 @@ func (q *QueueStats) RecordError(objectID string, err error) {
 	s.LastError = now
 	s.ByCategory[category]++
 	s.ByLocation[locStr]++
+
+	// Update time buckets for efficient eviction
+	q.touchObjectLocked(objectID, now)
+	q.touchLocationLocked(locStr, now)
 
 	// Update global category stats
 	cs := q.byCategory[category]
@@ -272,9 +364,12 @@ func (q *QueueStats) RecordError(objectID string, err error) {
 }
 
 // UpdateRates should be called periodically to update EMA rate calculations.
+// It also triggers eviction of stale entries if enough time has passed.
 func (q *QueueStats) UpdateRates() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	now := time.Now()
 
 	// Update global rates
 	eventDelta := q.totalEvents - q.prevEvents
@@ -293,6 +388,44 @@ func (q *QueueStats) UpdateRates() {
 		s.prevEvents = s.Events
 		s.prevErrors = s.Errors
 	}
+
+	// Run eviction periodically
+	if now.Sub(q.lastEviction) >= evictionInterval {
+		q.evictStaleLocked(now)
+		q.lastEviction = now
+	}
+}
+
+// evictStaleLocked removes entries that haven't been updated within statsTTL.
+// Uses time-bucketed tracking for O(expired buckets) complexity instead of O(total entries).
+// Must be called with q.mu held.
+func (q *QueueStats) evictStaleLocked(now time.Time) {
+	cutoff := now.Add(-statsTTL).Truncate(time.Hour)
+
+	// Evict stale object buckets
+	for bucket, ids := range q.objectBuckets {
+		if bucket.Before(cutoff) {
+			for id := range ids {
+				delete(q.objects, id)
+				delete(q.objectBucket, id)
+			}
+			delete(q.objectBuckets, bucket)
+		}
+	}
+
+	// Evict stale location buckets
+	for bucket, locs := range q.locationBuckets {
+		if bucket.Before(cutoff) {
+			for loc := range locs {
+				delete(q.byLocation, loc)
+				delete(q.locationBucket, loc)
+			}
+			delete(q.locationBuckets, bucket)
+		}
+	}
+
+	// Note: byCategory is not evicted since there are only 5 categories
+	// and they represent useful historical data
 }
 
 // Snapshot types for query results
@@ -569,14 +702,20 @@ func (q *QueueStats) Reset() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	now := time.Now()
 	q.objects = make(map[string]*ObjectStats)
 	q.byCategory = make(map[ErrorCategory]*ErrorStats)
 	q.byLocation = make(map[string]*ErrorStats)
+	q.objectBuckets = make(map[time.Time]map[string]struct{})
+	q.locationBuckets = make(map[time.Time]map[string]struct{})
+	q.objectBucket = make(map[string]time.Time)
+	q.locationBucket = make(map[string]time.Time)
 	q.recentErrors = make([]ErrorRecord, recentErrorsBufferSize)
 	q.recentIndex = 0
 	q.totalEvents = 0
 	q.totalErrors = 0
-	q.startTime = time.Now()
+	q.startTime = now
+	q.lastEviction = now
 	q.eventRate = RateStats{}
 	q.errorRate = RateStats{}
 	q.prevEvents = 0
