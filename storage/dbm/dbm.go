@@ -111,6 +111,7 @@ func (h *Hash) Del(k string) error {
 // - All other methods use only one mutex at a time.
 type LiveTypeHash[T any, S structs.Snapshottable[T]] struct {
 	closed       chan bool
+	closeOnce    sync.Once
 	hash         *TypeHash[T, S]
 	stage        map[string]*T
 	stageMutex   sync.RWMutex
@@ -151,11 +152,16 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 	return nil
 }
 
+// Close flushes pending writes and closes the hash. Safe to call multiple times.
 func (l *LiveTypeHash[T, S]) Close() error {
-	if err := l.Flush(); err != nil {
-		return juicemud.WithStack(err)
+	var flushErr error
+	l.closeOnce.Do(func() {
+		flushErr = l.Flush()
+		close(l.closed)
+	})
+	if flushErr != nil {
+		return juicemud.WithStack(flushErr)
 	}
-	close(l.closed)
 	return juicemud.WithStack(l.hash.Close())
 }
 

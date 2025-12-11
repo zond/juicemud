@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	cryptossh "golang.org/x/crypto/ssh"
@@ -19,12 +20,13 @@ var debugSSH = os.Getenv("INTEGRATION_DEBUG_SSH") == "1"
 
 // terminalClient wraps an SSH session for testing.
 type terminalClient struct {
-	conn    *cryptossh.Client
-	session *cryptossh.Session
-	stdin   io.WriteCloser
-	stdout  io.Reader
-	readCh  chan readResult
-	done    chan struct{}
+	conn      *cryptossh.Client
+	session   *cryptossh.Session
+	stdin     io.WriteCloser
+	stdout    io.Reader
+	readCh    chan readResult
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // readResult holds data from the background reader goroutine.
@@ -173,7 +175,9 @@ func (tc *terminalClient) waitForPrompt(timeout time.Duration) (string, bool) {
 }
 
 func (tc *terminalClient) Close() {
-	close(tc.done)
+	tc.closeOnce.Do(func() {
+		close(tc.done)
+	})
 	tc.stdin.Close()
 	tc.session.Close()
 	tc.conn.Close()

@@ -52,6 +52,7 @@ type Handler struct {
 	locks      map[string]*Lock
 	lockMutex  sync.Mutex
 	closeCh    chan struct{}
+	closeOnce  sync.Once
 }
 
 func New(fs FileSystem) *Handler {
@@ -64,9 +65,11 @@ func New(fs FileSystem) *Handler {
 	return h
 }
 
-// Close shuts down the handler's background goroutines.
+// Close shuts down the handler's background goroutines. Safe to call multiple times.
 func (h *Handler) Close() {
-	close(h.closeCh)
+	h.closeOnce.Do(func() {
+		close(h.closeCh)
+	})
 }
 
 // cleanupExpiredLocks periodically removes expired locks to prevent memory exhaustion.

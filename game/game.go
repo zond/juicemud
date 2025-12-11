@@ -104,7 +104,8 @@ func initialObjects() map[string]*structs.ObjectDO {
 }
 
 type Game struct {
-	storage *storage.Storage
+	storage    *storage.Storage
+	queueStats *QueueStats
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
@@ -136,13 +137,15 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		}
 	}
 	g := &Game{
-		storage: s,
+		storage:    s,
+		queueStats: NewQueueStats(),
 	}
 	go func() {
 		if err := g.storage.StartObjects(ctx); err != nil {
 			log.Panic(err)
 		}
 	}()
+	go g.queueStats.Start()
 	go func() {
 		if err := g.storage.Queue().Start(ctx, func(ctx context.Context, ev *structs.Event) {
 			var call structs.Caller
@@ -150,7 +153,9 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 				call = &ev.Call
 			}
 			go func() {
+				g.queueStats.RecordEvent(ev.Object)
 				if _, _, err := g.loadRun(ctx, ev.Object, call); err != nil {
+					g.queueStats.RecordError(ev.Object, err)
 					log.Printf("trying to execute %+v: %v", ev, err)
 					log.Printf("%v", juicemud.StackTrace(err))
 				}
@@ -183,6 +188,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 // Close stops any background goroutines associated with the Game.
 func (g *Game) Close() {
 	loginRateLimiter.Close()
+	g.queueStats.Close()
 }
 
 func (g *Game) HandleSession(sess ssh.Session) {

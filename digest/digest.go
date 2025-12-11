@@ -48,9 +48,10 @@ type DigestAuth struct {
 	UserStore UserStore
 	Opaque    string
 
-	noncesMu sync.Mutex
-	nonces   map[string]nonceEntry
-	closeCh  chan struct{}
+	noncesMu  sync.Mutex
+	nonces    map[string]nonceEntry
+	closeCh   chan struct{}
+	closeOnce sync.Once
 }
 
 func NewDigestAuth(realm string, userStore UserStore) *DigestAuth {
@@ -65,9 +66,11 @@ func NewDigestAuth(realm string, userStore UserStore) *DigestAuth {
 	return da
 }
 
-// Close stops the cleanup goroutine.
+// Close stops the cleanup goroutine. Safe to call multiple times.
 func (da *DigestAuth) Close() {
-	close(da.closeCh)
+	da.closeOnce.Do(func() {
+		close(da.closeCh)
+	})
 }
 
 // cleanupNonces periodically removes expired nonces.

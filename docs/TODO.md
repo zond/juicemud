@@ -27,7 +27,20 @@
 - Retry with exponential backoff for transient errors
 - Dead-letter queue for persistent failures
 - At minimum, metrics/alerting on failed events
-**Status:** Open - needs design decision
+**Fix:** Implemented comprehensive in-memory queue statistics tracking:
+- Created `QueueStats` in `game/queuestats.go` with per-object and global event/error tracking
+- Error classification by category (js, storage, timeout, json, other) and location (file:line)
+- Exponential Moving Average (EMA) rate calculations over second/minute/hour/day windows
+- Circular buffer of 10k recent errors for debugging
+- Added `/queuestats` wizard command with subcommands:
+  - `summary`: global stats and rates
+  - `categories`: errors by category
+  - `locations [n]`: top error locations
+  - `objects [sort] [n]`: top objects by errors/events/rate
+  - `object <id>`: per-object details
+  - `recent [n]`: recent error messages
+  - `reset`: clear statistics
+**Status:** Fixed
 
 ### 5. Unbounded V8 Memory
 **File:** `js/js.go:47-61`
