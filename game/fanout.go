@@ -11,12 +11,14 @@ import (
 type Fanout struct {
 	mu        sync.RWMutex
 	terminals map[*term.Terminal]bool
+	onEmpty   func() // called when fanout becomes empty due to write failures
 }
 
-// NewFanout creates a new Fanout with the given terminal.
-func NewFanout(t *term.Terminal) *Fanout {
+// NewFanout creates a new Fanout with the given terminal and optional empty callback.
+func NewFanout(t *term.Terminal, onEmpty func()) *Fanout {
 	return &Fanout{
 		terminals: map[*term.Terminal]bool{t: true},
+		onEmpty:   onEmpty,
 	}
 }
 
@@ -66,7 +68,11 @@ func (f *Fanout) Write(b []byte) (int, error) {
 		for _, t := range toRemove {
 			delete(f.terminals, t)
 		}
+		empty := len(f.terminals) == 0
 		f.mu.Unlock()
+		if empty && f.onEmpty != nil {
+			f.onEmpty()
+		}
 	}
 
 	if len(writeErrs) > 0 {

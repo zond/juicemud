@@ -116,7 +116,10 @@ func addConsole(id string, term *term.Terminal) {
 		if f := consoleByObjectID.Get(id); f != nil {
 			f.Push(term)
 		} else {
-			consoleByObjectID.Set(id, NewFanout(term))
+			consoleByObjectID.Set(id, NewFanout(term, func() {
+				// Cleanup callback when fanout becomes empty due to write failures
+				consoleByObjectID.Del(id)
+			}))
 		}
 	})
 }

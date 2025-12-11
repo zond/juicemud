@@ -58,7 +58,7 @@
 ### 9b. Memory Leak in Fanout Cleanup
 **File:** `game/connection.go:124-132`
 **Issue:** Empty Fanout objects were not cleaned up from `consoleByObjectID` when the last terminal was removed.
-**Fix:** Added `Len()` method to Fanout and cleanup logic in `delConsole()` to delete empty Fanout objects.
+**Fix:** Added `Len()` method to Fanout and cleanup logic in `delConsole()` to delete empty Fanout objects. Also added `onEmpty` callback to handle cleanup when Write() removes failed terminals.
 **Status:** Fixed
 
 ### 10. Missing Context Cancellation in Queue
