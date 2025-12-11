@@ -103,6 +103,12 @@ func (h *Hash) Del(k string) error {
 
 // LiveTypeHash is an in-memory cache over a TypeHash that automatically flushes
 // dirty entries to disk every second. Objects are tracked for changes via PostUnlock.
+//
+// Lock ordering note: stageMutex and updatesMutex are never held simultaneously.
+// - Flush() acquires updatesMutex, releases it, then acquires stageMutex sequentially.
+// - The updated() callback acquires updatesMutex but is called from user code via
+//   PostUnlock (after the object's own mutex is released), outside any LiveTypeHash lock.
+// - All other methods use only one mutex at a time.
 type LiveTypeHash[T any, S structs.Snapshottable[T]] struct {
 	closed       chan bool
 	hash         *TypeHash[T, S]
@@ -119,6 +125,8 @@ func (l *LiveTypeHash[T, S]) Age() time.Duration {
 	return time.Since(l.lastUpdate)
 }
 
+// Flush writes all dirty entries to disk.
+// Note: updatesMutex is released before stageMutex is acquired to avoid deadlock.
 func (l *LiveTypeHash[T, S]) Flush() error {
 	toUpdate := []string{}
 	l.updatesMutex.Lock()
@@ -128,6 +136,7 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 	l.lastUpdate = time.Now()
 	l.updates = map[string]bool{}
 	l.updatesMutex.Unlock()
+	// updatesMutex released above before acquiring stageMutex below
 	for _, key := range toUpdate {
 		l.stageMutex.RLock()
 		obj, found := l.stage[key]
@@ -180,6 +189,8 @@ func (l *LiveTypeHash[T, S]) Start() error {
 	}
 }
 
+// updated marks an object as dirty. Called via PostUnlock from user code
+// after the object's own mutex is released, so stageMutex is never held here.
 func (l *LiveTypeHash[T, S]) updated(t *T) {
 	l.updatesMutex.Lock()
 	defer l.updatesMutex.Unlock()

@@ -125,6 +125,9 @@ func delConsole(id string, term *term.Terminal) {
 	consoleByObjectID.WithLock(id, func() {
 		if f := consoleByObjectID.Get(id); f != nil {
 			f.Drop(term)
+			if f.Len() == 0 {
+				consoleByObjectID.Del(id)
+			}
 		}
 	})
 }

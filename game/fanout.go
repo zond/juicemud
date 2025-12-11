@@ -32,6 +32,13 @@ func (f *Fanout) Drop(t *term.Terminal) {
 	delete(f.terminals, t)
 }
 
+// Len returns the number of terminals in the fanout.
+func (f *Fanout) Len() int {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return len(f.terminals)
+}
+
 func (f *Fanout) Write(b []byte) (int, error) {
 	if f == nil {
 		return len(b), nil

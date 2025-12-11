@@ -13,8 +13,12 @@
 ### 3. Potential Deadlock in LiveTypeHash
 **File:** `storage/dbm/dbm.go:122-143`
 **Issue:** Lock ordering between `updatesMutex` and `stageMutex` may be inconsistent across methods.
-**Analysis needed:** Review all methods to verify lock ordering is consistent.
-**Status:** Open - needs investigation
+**Analysis:** After thorough review, no deadlock is possible:
+1. `Flush()` acquires `updatesMutex`, releases it, then acquires `stageMutex` - sequential, not nested.
+2. All other methods use only one of the two mutexes.
+3. The `updated()` callback (which acquires `updatesMutex`) is called from `PostUnlock` which is invoked from user code *after* the object's own mutex is released, completely outside any LiveTypeHash lock scope.
+**Fix:** Added clarifying comments to the type definition, `Flush()`, and `updated()` methods.
+**Status:** Won't fix - no deadlock risk, added documentation
 
 ### 4. Error Swallowing in Queue Event Handler
 **File:** `game/game.go:152-157`
@@ -49,6 +53,12 @@
 **File:** `game/fanout.go:26-46`
 **Issue:** Returns max bytes written to any single terminal, which violates `io.Writer` contract (should return len(b) on success).
 **Fix:** Now returns `len(b)` on success since all terminals receive the same data.
+**Status:** Fixed
+
+### 9b. Memory Leak in Fanout Cleanup
+**File:** `game/connection.go:124-132`
+**Issue:** Empty Fanout objects were not cleaned up from `consoleByObjectID` when the last terminal was removed.
+**Fix:** Added `Len()` method to Fanout and cleanup logic in `delConsole()` to delete empty Fanout objects.
 **Status:** Fixed
 
 ### 10. Missing Context Cancellation in Queue
