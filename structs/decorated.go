@@ -18,6 +18,8 @@ func (f PostUnlockObject) call(v *Object) {
 }
 
 type Object struct {
+	// Unsafe permits direct unsynchronized access to the underlying data.
+	// Use Get*/Set* methods for thread-safe access, or Lock()/RLock() when accessing Unsafe directly.
 	Unsafe     *ObjectDO
 	PostUnlock PostUnlockObject `faker:"-" json:"-"`
 	mutex      sync.RWMutex

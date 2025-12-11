@@ -280,29 +280,40 @@ func (s *Storage) CountSourceObjects(ctx context.Context, path string) (int, err
 	return c, nil
 }
 
+// EachSourceObject iterates over all object IDs created from the given source file path.
+// It also performs cleanup: if an object no longer exists but is still indexed under this
+// source path, it removes the stale index entry. The iteration must collect IDs first
+// because SubEach holds a read lock, and deletion requires a write lock.
 func (s *Storage) EachSourceObject(ctx context.Context, path string) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
-		entries := []withError[dbm.BEntry]{}
+		// Collect IDs during iteration since we can't delete while SubEach holds its read lock.
+		var validIDs []string
+		var staleIDs []string
 		for entry, err := range s.sourceObjects.SubEach(path) {
-			entries = append(entries, withError[dbm.BEntry]{T: entry, E: err})
-		}
-		for _, entry := range entries {
-			if entry.E != nil {
-				if !yield("", juicemud.WithStack(entry.E)) {
-					break
+			if err != nil {
+				if !yield("", juicemud.WithStack(err)) {
+					return
 				}
+				continue
+			}
+			if s.objects.Has(entry.K) {
+				validIDs = append(validIDs, entry.K)
 			} else {
-				if s.objects.Has(entry.T.K) {
-					if !yield(entry.T.K, nil) {
-						break
-					}
-				} else {
-					if err := s.sourceObjects.SubDel(path, entry.T.K); err != nil {
-						if !yield("", juicemud.WithStack(err)) {
-							break
-						}
-					}
+				staleIDs = append(staleIDs, entry.K)
+			}
+		}
+		// Clean up stale entries (objects that no longer exist)
+		for _, id := range staleIDs {
+			if err := s.sourceObjects.SubDel(path, id); err != nil {
+				if !yield("", juicemud.WithStack(err)) {
+					return
 				}
+			}
+		}
+		// Yield valid object IDs
+		for _, id := range validIDs {
+			if !yield(id, nil) {
+				return
 			}
 		}
 	}

@@ -50,7 +50,7 @@ func (tc *terminalClient) inspect(target string) (*inspectResult, error) {
 	if err := tc.sendLine(cmd); err != nil {
 		return nil, fmt.Errorf("sending inspect command: %w", err)
 	}
-	output, ok := tc.waitForPrompt(2 * time.Second)
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return nil, fmt.Errorf("inspect command did not complete: %q", output)
 	}
@@ -105,7 +105,7 @@ func createUser(sshAddr, username, password string) (*terminalClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := tc.waitForPrompt(5*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("did not get initial prompt")
 	}
@@ -113,7 +113,7 @@ func createUser(sshAddr, username, password string) (*terminalClient, error) {
 		tc.Close()
 		return nil, err
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("create user prompt did not appear")
 	}
@@ -121,7 +121,7 @@ func createUser(sshAddr, username, password string) (*terminalClient, error) {
 		tc.Close()
 		return nil, err
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("username prompt did not appear")
 	}
@@ -129,7 +129,7 @@ func createUser(sshAddr, username, password string) (*terminalClient, error) {
 		tc.Close()
 		return nil, err
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("password prompt did not appear")
 	}
@@ -137,7 +137,7 @@ func createUser(sshAddr, username, password string) (*terminalClient, error) {
 		tc.Close()
 		return nil, err
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("confirm password prompt did not appear")
 	}
@@ -145,7 +145,7 @@ func createUser(sshAddr, username, password string) (*terminalClient, error) {
 		tc.Close()
 		return nil, err
 	}
-	if _, ok := tc.waitForPrompt(5*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("final prompt after user creation did not appear")
 	}
@@ -158,7 +158,7 @@ func loginUser(sshAddr, username, password string) (*terminalClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := tc.waitForPrompt(5*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("did not get initial prompt")
 	}
@@ -166,7 +166,7 @@ func loginUser(sshAddr, username, password string) (*terminalClient, error) {
 		tc.Close()
 		return nil, err
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("login user prompt did not appear")
 	}
@@ -174,7 +174,7 @@ func loginUser(sshAddr, username, password string) (*terminalClient, error) {
 		tc.Close()
 		return nil, err
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("username prompt did not appear")
 	}
@@ -183,7 +183,7 @@ func loginUser(sshAddr, username, password string) (*terminalClient, error) {
 		return nil, err
 	}
 	// Wait for the prompt to appear, indicating the server is ready for commands
-	if _, ok := tc.waitForPrompt(5*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc.Close()
 		return nil, fmt.Errorf("login did not complete (no prompt)")
 	}

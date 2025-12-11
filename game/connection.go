@@ -847,14 +847,18 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintf(c.term, "Error: %v\n", err)
 					return nil
 				}
+				// Build a map of group IDs to names to avoid N+1 queries
+				groupNames := make(map[int64]string, len(groups))
+				for _, g := range groups {
+					groupNames[g.Id] = g.Name
+				}
 				t := table.New("Name", "OwnerGroup", "Supergroup")
 				t.WithWriter(c.term)
 				for _, g := range groups {
 					ownerName := "owner"
 					if g.OwnerGroup != 0 {
-						owner, err := c.game.storage.LoadGroupByID(c.ctx, g.OwnerGroup)
-						if err == nil {
-							ownerName = owner.Name
+						if name, ok := groupNames[g.OwnerGroup]; ok {
+							ownerName = name
 						} else {
 							ownerName = fmt.Sprintf("#%d", g.OwnerGroup)
 						}
@@ -889,9 +893,6 @@ func (c *Connection) basicCommands() commands {
 							if descs[0].Long != "" {
 								fmt.Fprintln(c.term)
 								fmt.Fprintln(c.term, descs[0].Long)
-							} else if descs[1].Short != "" {
-								fmt.Fprintln(c.term)
-								fmt.Fprintln(c.term, descs[0].Short)
 							}
 						}
 					}

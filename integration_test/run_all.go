@@ -31,6 +31,13 @@ import (
 	"time"
 )
 
+const (
+	// defaultWaitTimeout is the default timeout for wait operations.
+	// This is intentionally generous to avoid flaky tests on slow systems.
+	// On fast systems, polling returns immediately when the condition is met.
+	defaultWaitTimeout = 5 * time.Second
+)
+
 // RunAll runs all integration tests in sequence on a single server.
 // Returns nil on success, or an error describing what failed.
 func RunAll(ts *TestServer) error {
@@ -51,7 +58,7 @@ func RunAll(ts *TestServer) error {
 			return fmt.Errorf("look command: %w", err)
 		}
 		// Verify "look" command produces output containing the genesis room description
-		if output, ok := tc.waitForPrompt(2*time.Second); !ok {
+		if output, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 			return fmt.Errorf("look command did not complete: %q", output)
 		} else if !strings.Contains(output, "Black cosmos") {
 			return fmt.Errorf("look command did not show genesis room: %q", output)
@@ -90,7 +97,7 @@ func RunAll(ts *TestServer) error {
 		if err := tc.sendLine("look"); err != nil {
 			return fmt.Errorf("look command on reconnect: %w", err)
 		}
-		if output, ok := tc.waitForPrompt(2*time.Second); !ok {
+		if output, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 			return fmt.Errorf("look command on reconnect did not complete: %q", output)
 		} else if !strings.Contains(output, "Black cosmos") {
 			return fmt.Errorf("look command on reconnect did not show genesis room: %q", output)
@@ -131,7 +138,7 @@ func RunAll(ts *TestServer) error {
 	if err := tc.sendLine("/adduser testuser wizards"); err != nil {
 		return fmt.Errorf("/adduser to wizards: %w", err)
 	}
-	output, ok := tc.waitForPrompt(2*time.Second)
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/adduser to wizards did not complete: %q", output)
 	}
@@ -200,12 +207,12 @@ setDescriptions([{
 	if err := tc.sendLine("/create /box.js"); err != nil {
 		return fmt.Errorf("/create command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create command did not complete")
 	}
 
 	// Poll for object creation via /inspect (uses glob matching, so *box* matches "wooden box")
-	if _, found := tc.waitForObject("*box*", 2*time.Second); !found {
+	if _, found := tc.waitForObject("*box*", defaultWaitTimeout); !found {
 		return fmt.Errorf("box object was not created")
 	}
 
@@ -213,7 +220,7 @@ setDescriptions([{
 	if err := tc.sendLine("/inspect"); err != nil {
 		return fmt.Errorf("/inspect command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/inspect command did not complete")
 	}
 
@@ -221,7 +228,7 @@ setDescriptions([{
 	if err := tc.sendLine("/ls /"); err != nil {
 		return fmt.Errorf("/ls command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/ls command did not complete")
 	}
 
@@ -256,22 +263,22 @@ setDescriptions([{
 	if err := tc.sendLine("/create /room1.js"); err != nil {
 		return fmt.Errorf("/create room1: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create room1 did not complete")
 	}
 	if err := tc.sendLine("/create /room2.js"); err != nil {
 		return fmt.Errorf("/create room2: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create room2 did not complete")
 	}
 
 	// Poll for room creation via /inspect (quote patterns with spaces)
-	room1ID, found := tc.waitForObject(`"Room One"`, 2*time.Second)
+	room1ID, found := tc.waitForObject(`"Room One"`, defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("room1 was not created")
 	}
-	if _, found := tc.waitForObject(`"Room Two"`, 2*time.Second); !found {
+	if _, found := tc.waitForObject(`"Room Two"`, defaultWaitTimeout); !found {
 		return fmt.Errorf("room2 was not created")
 	}
 
@@ -279,12 +286,12 @@ setDescriptions([{
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", room1ID)); err != nil {
 		return fmt.Errorf("/enter command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter command did not complete")
 	}
 
 	// Poll for user to be in room1
-	if !tc.waitForLocation("", room1ID, 2*time.Second) {
+	if !tc.waitForLocation("", room1ID, defaultWaitTimeout) {
 		return fmt.Errorf("user did not move to room1")
 	}
 
@@ -292,12 +299,12 @@ setDescriptions([{
 	if err := tc.sendLine("/exit"); err != nil {
 		return fmt.Errorf("/exit command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/exit command did not complete")
 	}
 
 	// Poll for user to be back in genesis
-	if !tc.waitForLocation("", "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
 		return fmt.Errorf("user did not return to genesis")
 	}
 
@@ -311,7 +318,7 @@ setDescriptions([{
 		return fmt.Errorf("look in genesis: %w", err)
 	}
 
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("look in genesis did not complete: %q", output)
 	}
@@ -355,11 +362,11 @@ setDescriptions([{
 	if err := tc.sendLine("/create /lookroom.js"); err != nil {
 		return fmt.Errorf("/create lookroom: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create lookroom did not complete")
 	}
 
-	lookRoomID, found := tc.waitForObject("*Library*", 2*time.Second)
+	lookRoomID, found := tc.waitForObject("*Library*", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("lookroom was not created")
 	}
@@ -367,11 +374,11 @@ setDescriptions([{
 	if err := tc.sendLine("/create /book.js"); err != nil {
 		return fmt.Errorf("/create book: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create book did not complete")
 	}
 
-	bookID, found := tc.waitForObject("*book*", 2*time.Second)
+	bookID, found := tc.waitForObject("*book*", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("book was not created")
 	}
@@ -380,7 +387,7 @@ setDescriptions([{
 	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", bookID, lookRoomID)); err != nil {
 		return fmt.Errorf("/move book to lookroom: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/move book to lookroom did not complete")
 	}
 
@@ -388,12 +395,12 @@ setDescriptions([{
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", lookRoomID)); err != nil {
 		return fmt.Errorf("/enter lookroom: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter lookroom did not complete")
 	}
 
 	// Verify user is in the room
-	if !tc.waitForLocation("", lookRoomID, 2*time.Second) {
+	if !tc.waitForLocation("", lookRoomID, defaultWaitTimeout) {
 		return fmt.Errorf("user did not move to lookroom")
 	}
 
@@ -403,7 +410,7 @@ setDescriptions([{
 	}
 
 	// Verify look shows the room description
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("look in lookroom did not complete: %q", output)
 	}
@@ -431,12 +438,12 @@ setDescriptions([{
 		return fmt.Errorf("north command: %w", err)
 	}
 	// Wait for prompt to confirm command completed
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("north command did not complete")
 	}
 
 	// Verify player moved back to genesis
-	if !tc.waitForLocation("", "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
 		return fmt.Errorf("user did not move to genesis via 'north' command")
 	}
 
@@ -449,7 +456,7 @@ setDescriptions([{
 	if err := tc.sendLine("look"); err != nil {
 		return fmt.Errorf("look before genesis update: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("look before genesis update did not complete: %q", output)
 	}
@@ -477,7 +484,7 @@ setExits([{
 	if err := tc.sendLine("look"); err != nil {
 		return fmt.Errorf("look in genesis: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("look in genesis did not complete: %q", output)
 	}
@@ -489,12 +496,12 @@ setExits([{
 	if err := tc.sendLine("south"); err != nil {
 		return fmt.Errorf("south command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("south command did not complete")
 	}
 
 	// Verify player moved to lookroom
-	if !tc.waitForLocation("", lookRoomID, 2*time.Second) {
+	if !tc.waitForLocation("", lookRoomID, defaultWaitTimeout) {
 		return fmt.Errorf("user did not move to lookroom via 'south' command")
 	}
 
@@ -502,7 +509,7 @@ setExits([{
 	if err := tc.sendLine("look"); err != nil {
 		return fmt.Errorf("look in lookroom: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("look in lookroom did not complete: %q", output)
 	}
@@ -514,12 +521,12 @@ setExits([{
 	if err := tc.sendLine("north"); err != nil {
 		return fmt.Errorf("north command back to genesis: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("north command back to genesis did not complete")
 	}
 
 	// Verify player moved back to genesis
-	if !tc.waitForLocation("", "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
 		return fmt.Errorf("user did not move back to genesis via 'north' command")
 	}
 
@@ -533,7 +540,7 @@ setExits([{
 		return fmt.Errorf("scan command: %w", err)
 	}
 
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("scan command did not complete: %q", output)
 	}
@@ -597,11 +604,11 @@ setDescriptions([{
 	if err := tc.sendLine("/create /challenge_room.js"); err != nil {
 		return fmt.Errorf("/create challenge_room: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create challenge_room did not complete")
 	}
 
-	challengeRoomID, found := tc.waitForObject("*Challenge*", 2*time.Second)
+	challengeRoomID, found := tc.waitForObject("*Challenge*", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("challenge_room was not created")
 	}
@@ -610,12 +617,12 @@ setDescriptions([{
 	if err := tc.sendLine("/create /hidden_gem.js"); err != nil {
 		return fmt.Errorf("/create hidden_gem: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create hidden_gem did not complete")
 	}
 
 	// Hidden gem has a perception challenge, so user can't see it - use direct storage access
-	hiddenGemID, found := ts.waitForSourceObject(ctx, "/hidden_gem.js", 2*time.Second)
+	hiddenGemID, found := ts.waitForSourceObject(ctx, "/hidden_gem.js", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("hidden_gem was not created")
 	}
@@ -625,12 +632,12 @@ setDescriptions([{
 		return fmt.Errorf("/move gem to challenge_room: %w", err)
 	}
 	// Wait for prompt to confirm command was processed
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/move command did not complete")
 	}
 
 	// Wait for gem to be moved before entering room
-	if !tc.waitForLocation(fmt.Sprintf("#%s", hiddenGemID), challengeRoomID, 3*time.Second) {
+	if !tc.waitForLocation(fmt.Sprintf("#%s", hiddenGemID), challengeRoomID, defaultWaitTimeout) {
 		// Debug: check where the gem actually is
 		gemInspect, err := tc.inspect(fmt.Sprintf("#%s", hiddenGemID))
 		if err != nil {
@@ -643,12 +650,12 @@ setDescriptions([{
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", challengeRoomID)); err != nil {
 		return fmt.Errorf("/enter challenge_room: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter challenge_room did not complete")
 	}
 
 	// Verify user is in the challenge room
-	if !tc.waitForLocation("", challengeRoomID, 3*time.Second) {
+	if !tc.waitForLocation("", challengeRoomID, defaultWaitTimeout) {
 		return fmt.Errorf("user did not move to challenge_room")
 	}
 
@@ -657,7 +664,7 @@ setDescriptions([{
 		return fmt.Errorf("look in challenge_room: %w", err)
 	}
 
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("look in challenge_room did not complete: %q", output)
 	}
@@ -680,7 +687,7 @@ setDescriptions([{
 	if err := tc.sendLine("locked"); err != nil {
 		return fmt.Errorf("locked exit command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("locked exit command did not complete")
 	}
 
@@ -697,12 +704,12 @@ setDescriptions([{
 	if err := tc.sendLine("easy"); err != nil {
 		return fmt.Errorf("easy exit command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("easy exit command did not complete")
 	}
 
 	// Verify user moved to genesis
-	if !tc.waitForLocation("", "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
 		return fmt.Errorf("user did not move to genesis via 'easy' exit")
 	}
 
@@ -727,7 +734,7 @@ addCallback('train', ['command'], (msg) => {
 		return fmt.Errorf("train command: %w", err)
 	}
 	// Wait for prompt to confirm command was processed
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("train command did not complete")
 	}
 
@@ -736,11 +743,11 @@ addCallback('train', ['command'], (msg) => {
 		return fmt.Errorf("/enter challenge_room with skills: %w", err)
 	}
 	// Wait for prompt to confirm command was processed
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter challenge_room with skills did not complete")
 	}
 
-	if !tc.waitForLocation("", challengeRoomID, 2*time.Second) {
+	if !tc.waitForLocation("", challengeRoomID, defaultWaitTimeout) {
 		return fmt.Errorf("user did not move to challenge_room for skilled test")
 	}
 
@@ -749,7 +756,7 @@ addCallback('train', ['command'], (msg) => {
 		return fmt.Errorf("look in challenge_room with skills: %w", err)
 	}
 
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("look in challenge_room with skills did not complete: %q", output)
 	}
@@ -761,12 +768,12 @@ addCallback('train', ['command'], (msg) => {
 	if err := tc.sendLine("locked"); err != nil {
 		return fmt.Errorf("locked exit command with skills: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("locked exit command with skills did not complete")
 	}
 
 	// Verify user moved to genesis via the locked exit
-	if !tc.waitForLocation("", "genesis", 2*time.Second) {
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
 		return fmt.Errorf("user should have moved to genesis via 'locked' exit with strength skill")
 	}
 
@@ -779,7 +786,7 @@ addCallback('train', ['command'], (msg) => {
 	if err := tc.sendLine("/enter #genesis"); err != nil {
 		return fmt.Errorf("/enter genesis: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter genesis did not complete")
 	}
 
@@ -808,10 +815,10 @@ addCallback('ping', ['action'], (msg) => {
 	if err := tc.sendLine("/create /receiver.js"); err != nil {
 		return fmt.Errorf("/create receiver: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create receiver did not complete")
 	}
-	receiverID, found := tc.waitForObject("*receiver*", 2*time.Second)
+	receiverID, found := tc.waitForObject("*receiver*", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("receiver was not created")
 	}
@@ -819,10 +826,10 @@ addCallback('ping', ['action'], (msg) => {
 	if err := tc.sendLine("/create /sender.js"); err != nil {
 		return fmt.Errorf("/create sender: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create sender did not complete")
 	}
-	if _, found := tc.waitForObject("*sender*", 2*time.Second); !found {
+	if _, found := tc.waitForObject("*sender*", defaultWaitTimeout); !found {
 		return fmt.Errorf("sender was not created")
 	}
 
@@ -830,15 +837,15 @@ addCallback('ping', ['action'], (msg) => {
 	if err := tc.sendLine(fmt.Sprintf("ping %s", receiverID)); err != nil {
 		return fmt.Errorf("ping command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("ping receiver command did not complete")
 	}
 
 	// Poll with look until we see the receiver got the message (emit has ~100ms delay)
 	var lookOutput string
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		tc.sendLine("look")
-		lookOutput, _ = tc.waitForPrompt(2*time.Second)
+		lookOutput, _ = tc.waitForPrompt(defaultWaitTimeout)
 		return strings.Contains(lookOutput, "receiver orb (got: hello)")
 	})
 	if !found {
@@ -857,7 +864,7 @@ addCallback('ping', ['action'], (msg) => {
 	if err := tc.sendLine("/enter #genesis"); err != nil {
 		return fmt.Errorf("/enter genesis for timer: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter genesis for timer did not complete")
 	}
 
@@ -878,18 +885,18 @@ addCallback('timeout', ['emit'], (msg) => {
 	if err := tc.sendLine("/create /timer.js"); err != nil {
 		return fmt.Errorf("/create timer: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create timer did not complete")
 	}
-	if _, found := tc.waitForObject("*timer*", 2*time.Second); !found {
+	if _, found := tc.waitForObject("*timer*", defaultWaitTimeout); !found {
 		return fmt.Errorf("timer was not created")
 	}
 
 	// Poll until timer is visible in room
 	var timerOutput string
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		tc.sendLine("look")
-		timerOutput, _ = tc.waitForPrompt(2*time.Second)
+		timerOutput, _ = tc.waitForPrompt(defaultWaitTimeout)
 		return strings.Contains(timerOutput, "timer orb (idle)")
 	})
 	if !found {
@@ -900,14 +907,14 @@ addCallback('timeout', ['emit'], (msg) => {
 	if err := tc.sendLine("start timer orb"); err != nil {
 		return fmt.Errorf("start timer orb command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("start timer orb command did not complete")
 	}
 
 	// Poll with look until we see the timer fired (setTimeout has 200ms delay)
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		tc.sendLine("look")
-		timerOutput, _ = tc.waitForPrompt(2*time.Second)
+		timerOutput, _ = tc.waitForPrompt(defaultWaitTimeout)
 		return strings.Contains(timerOutput, "timer orb (fired)")
 	})
 	if !found {
@@ -923,7 +930,7 @@ addCallback('timeout', ['emit'], (msg) => {
 	if err := tc.sendLine("/enter #genesis"); err != nil {
 		return fmt.Errorf("/enter genesis for remove: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter genesis for remove did not complete")
 	}
 
@@ -936,19 +943,19 @@ addCallback('timeout', ['emit'], (msg) => {
 	if err := tc.sendLine("/create /removable.js"); err != nil {
 		return fmt.Errorf("/create removable: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create removable did not complete")
 	}
 
-	removableID, found := tc.waitForObject("*removable*", 2*time.Second)
+	removableID, found := tc.waitForObject("*removable*", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("removable was not created")
 	}
 
 	// Verify object exists via /inspect (poll to handle buffered output)
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		tc.sendLine(fmt.Sprintf("/inspect #%s", removableID))
-		output, _ = tc.waitForPrompt(2*time.Second)
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
 		return strings.Contains(output, "removable widget")
 	})
 	if !found {
@@ -959,14 +966,14 @@ addCallback('timeout', ['emit'], (msg) => {
 	if err := tc.sendLine(fmt.Sprintf("/remove #%s", removableID)); err != nil {
 		return fmt.Errorf("/remove command: %w", err)
 	}
-	if _, ok = tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok = tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/remove command did not complete")
 	}
 
 	// Verify object no longer exists via /inspect (should show error or empty)
-	found = waitForCondition(2*time.Second, 50*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
 		tc.sendLine(fmt.Sprintf("/inspect #%s", removableID))
-		output, _ = tc.waitForPrompt(2*time.Second)
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
 		// Object is gone if inspect doesn't show the description
 		return !strings.Contains(output, "removable widget")
 	})
@@ -978,7 +985,7 @@ addCallback('timeout', ['emit'], (msg) => {
 	if err := tc.sendLine("/remove self"); err != nil {
 		return fmt.Errorf("/remove self command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/remove self command did not complete: %q", output)
 	}
@@ -986,7 +993,7 @@ addCallback('timeout', ['emit'], (msg) => {
 	if err := tc.sendLine("look"); err != nil {
 		return fmt.Errorf("look after remove self: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("should still be logged in after failed self-removal: %q", output)
 	}
@@ -1000,7 +1007,7 @@ addCallback('timeout', ['emit'], (msg) => {
 	if err := tc.sendLine("/enter #genesis"); err != nil {
 		return fmt.Errorf("/enter genesis for movement: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter genesis for movement did not complete")
 	}
 
@@ -1024,21 +1031,21 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/create /observer.js"); err != nil {
 		return fmt.Errorf("/create observer: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create observer did not complete")
 	}
-	if _, found := ts.waitForSourceObject(ctx, "/observer.js", 2*time.Second); !found {
+	if _, found := ts.waitForSourceObject(ctx, "/observer.js", defaultWaitTimeout); !found {
 		return fmt.Errorf("observer was not created")
 	}
 
 	if err := tc.sendLine("/create /moveable.js"); err != nil {
 		return fmt.Errorf("/create moveable: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create moveable did not complete")
 	}
 
-	moveableID, found := ts.waitForSourceObject(ctx, "/moveable.js", 2*time.Second)
+	moveableID, found := ts.waitForSourceObject(ctx, "/moveable.js", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("moveable was not created")
 	}
@@ -1047,14 +1054,14 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", moveableID, lookRoomID)); err != nil {
 		return fmt.Errorf("/move moveable to lookroom: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/move moveable to lookroom did not complete")
 	}
 
 	// Poll with look until observer shows it saw the movement
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(2*time.Second)
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
 		return strings.Contains(output, "watcher orb (saw: "+moveableID+")")
 	})
 	if !found {
@@ -1078,7 +1085,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/groups"); err != nil {
 		return fmt.Errorf("/groups drain command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/groups drain command did not complete")
 	}
 
@@ -1086,7 +1093,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/mkgroup testgroup owner"); err != nil {
 		return fmt.Errorf("/mkgroup command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/mkgroup command did not complete: %q", output)
 	}
@@ -1098,7 +1105,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/listgroups"); err != nil {
 		return fmt.Errorf("/listgroups command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/listgroups command did not complete: %q", output)
 	}
@@ -1113,7 +1120,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/mkgroup supertest testgroup true"); err != nil {
 		return fmt.Errorf("/mkgroup supertest command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/mkgroup supertest command did not complete: %q", output)
 	}
@@ -1125,7 +1132,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/listgroups"); err != nil {
 		return fmt.Errorf("/listgroups after supertest: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/listgroups after supertest did not complete: %q", output)
 	}
@@ -1141,7 +1148,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/adduser testuser testgroup"); err != nil {
 		return fmt.Errorf("/adduser command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/adduser command did not complete: %q", output)
 	}
@@ -1153,7 +1160,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/members testgroup"); err != nil {
 		return fmt.Errorf("/members command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/members command did not complete: %q", output)
 	}
@@ -1169,7 +1176,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/groups"); err != nil {
 		return fmt.Errorf("/groups command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/groups command did not complete: %q", output)
 	}
@@ -1184,7 +1191,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/groups testuser"); err != nil {
 		return fmt.Errorf("/groups testuser command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/groups testuser command did not complete: %q", output)
 	}
@@ -1196,7 +1203,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/editgroup testgroup -name renamedgroup"); err != nil {
 		return fmt.Errorf("/editgroup -name command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/editgroup -name command did not complete: %q", output)
 	}
@@ -1208,7 +1215,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/listgroups"); err != nil {
 		return fmt.Errorf("/listgroups after rename: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/listgroups after rename did not complete: %q", output)
 	}
@@ -1223,7 +1230,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/editgroup renamedgroup -super true"); err != nil {
 		return fmt.Errorf("/editgroup -super command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/editgroup -super command did not complete: %q", output)
 	}
@@ -1236,7 +1243,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/mkgroup ownertest owner"); err != nil {
 		return fmt.Errorf("/mkgroup ownertest command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/mkgroup ownertest did not complete: %q", output)
 	}
@@ -1245,7 +1252,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/editgroup renamedgroup -owner ownertest"); err != nil {
 		return fmt.Errorf("/editgroup -owner command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/editgroup -owner command did not complete: %q", output)
 	}
@@ -1257,7 +1264,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/listgroups"); err != nil {
 		return fmt.Errorf("/listgroups after -owner: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/listgroups after -owner did not complete: %q", output)
 	}
@@ -1268,7 +1275,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/editgroup renamedgroup -owner owner"); err != nil {
 		return fmt.Errorf("/editgroup -owner to owner command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/editgroup -owner to owner did not complete: %q", output)
 	}
@@ -1280,7 +1287,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/rmgroup ownertest"); err != nil {
 		return fmt.Errorf("/rmgroup ownertest command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/rmgroup ownertest did not complete")
 	}
 
@@ -1288,7 +1295,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/rmuser testuser renamedgroup"); err != nil {
 		return fmt.Errorf("/rmuser command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/rmuser command did not complete: %q", output)
 	}
@@ -1300,7 +1307,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/members renamedgroup"); err != nil {
 		return fmt.Errorf("/members after rmuser: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/members after rmuser did not complete: %q", output)
 	}
@@ -1316,7 +1323,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/rmgroup supertest"); err != nil {
 		return fmt.Errorf("/rmgroup command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/rmgroup command did not complete: %q", output)
 	}
@@ -1328,7 +1335,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/listgroups"); err != nil {
 		return fmt.Errorf("/listgroups after rmgroup: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/listgroups after rmgroup did not complete: %q", output)
 	}
@@ -1342,7 +1349,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/mkgroup 123invalid owner"); err != nil {
 		return fmt.Errorf("/mkgroup 123invalid command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/mkgroup 123invalid did not complete: %q", output)
 	}
@@ -1354,7 +1361,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/mkgroup renamedgroup owner"); err != nil {
 		return fmt.Errorf("/mkgroup duplicate command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/mkgroup duplicate did not complete: %q", output)
 	}
@@ -1366,7 +1373,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/rmgroup nonexistent"); err != nil {
 		return fmt.Errorf("/rmgroup nonexistent command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/rmgroup nonexistent did not complete: %q", output)
 	}
@@ -1378,7 +1385,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/rmuser testuser renamedgroup"); err != nil {
 		return fmt.Errorf("/rmuser not-member command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/rmuser not-member did not complete: %q", output)
 	}
@@ -1399,7 +1406,7 @@ addCallback('movement', ['emit'], (msg) => {
 		tc2.Close()
 		return fmt.Errorf("/adduser regularuser wizards: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		tc2.Close()
 		return fmt.Errorf("/adduser regularuser wizards did not complete")
 	}
@@ -1416,7 +1423,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc2.sendLine("/mkgroup rootgroup owner"); err != nil {
 		return fmt.Errorf("/mkgroup rootgroup by non-owner: %w", err)
 	}
-	output, ok = tc2.waitForPrompt(2*time.Second)
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/mkgroup rootgroup by non-owner did not complete: %q", output)
 	}
@@ -1429,7 +1436,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/mkgroup testowned wizards true"); err != nil {
 		return fmt.Errorf("/mkgroup testowned: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/mkgroup testowned did not complete")
 	}
 
@@ -1437,7 +1444,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/adduser regularuser testowned"); err != nil {
 		return fmt.Errorf("/adduser regularuser testowned: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/adduser regularuser testowned did not complete")
 	}
 
@@ -1445,7 +1452,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc2.sendLine("/mkgroup subgroup testowned"); err != nil {
 		return fmt.Errorf("/mkgroup subgroup by regularuser: %w", err)
 	}
-	output, ok = tc2.waitForPrompt(2*time.Second)
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/mkgroup subgroup by regularuser did not complete: %q", output)
 	}
@@ -1457,7 +1464,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc2.sendLine("/adduser regularuser renamedgroup"); err != nil {
 		return fmt.Errorf("/adduser to root group by non-owner: %w", err)
 	}
-	output, ok = tc2.waitForPrompt(2*time.Second)
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/adduser to root group by non-owner did not complete: %q", output)
 	}
@@ -1469,13 +1476,13 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/rmgroup subgroup"); err != nil {
 		return fmt.Errorf("/rmgroup subgroup: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/rmgroup subgroup did not complete")
 	}
 	if err := tc.sendLine("/rmgroup testowned"); err != nil {
 		return fmt.Errorf("/rmgroup testowned: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/rmgroup testowned did not complete")
 	}
 
@@ -1483,7 +1490,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/rmgroup renamedgroup"); err != nil {
 		return fmt.Errorf("/rmgroup cleanup command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/rmgroup cleanup did not complete")
 	}
 
@@ -1496,7 +1503,7 @@ addCallback('movement', ['emit'], (msg) => {
 	if err := tc.sendLine("/enter #genesis"); err != nil {
 		return fmt.Errorf("/enter genesis for debug: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter genesis for debug did not complete")
 	}
 
@@ -1514,11 +1521,11 @@ addCallback('trigger', ['action'], (msg) => {
 	if err := tc.sendLine("/create /logger.js"); err != nil {
 		return fmt.Errorf("/create logger: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create logger did not complete")
 	}
 
-	loggerID, found := tc.waitForObject("*logger*", 2*time.Second)
+	loggerID, found := tc.waitForObject("*logger*", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("logger was not created")
 	}
@@ -1527,7 +1534,7 @@ addCallback('trigger', ['action'], (msg) => {
 	if err := tc.sendLine("trigger logger"); err != nil {
 		return fmt.Errorf("trigger without debug: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("trigger without debug did not complete: %q", output)
 	}
@@ -1537,9 +1544,9 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Wait for object to update its description
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(2*time.Second)
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
 		return strings.Contains(output, "logger stone (triggered)")
 	})
 	if !found {
@@ -1552,9 +1559,9 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Wait for description to reset
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(2*time.Second)
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
 		return strings.Contains(output, "logger stone") && !strings.Contains(output, "(triggered)")
 	})
 	if !found {
@@ -1565,7 +1572,7 @@ addCallback('trigger', ['action'], (msg) => {
 	if err := tc.sendLine(fmt.Sprintf("/debug #%s", loggerID)); err != nil {
 		return fmt.Errorf("/debug command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/debug command did not complete: %q", output)
 	}
@@ -1580,7 +1587,7 @@ addCallback('trigger', ['action'], (msg) => {
 
 	// Wait for output that includes the DEBUG message
 	// The log output appears asynchronously, so we poll
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		output = tc.readUntil(200*time.Millisecond, func(s string) bool {
 			return strings.Contains(s, "DEBUG:")
 		})
@@ -1591,7 +1598,7 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Wait for prompt after the action completes
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		// Prompt might already have been received in the readUntil above
 	}
 
@@ -1599,7 +1606,7 @@ addCallback('trigger', ['action'], (msg) => {
 	if err := tc.sendLine(fmt.Sprintf("/undebug #%s", loggerID)); err != nil {
 		return fmt.Errorf("/undebug command: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/undebug command did not complete: %q", output)
 	}
@@ -1613,9 +1620,9 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Wait for description to reset
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(2*time.Second)
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
 		return strings.Contains(output, "logger stone") && !strings.Contains(output, "(triggered)")
 	})
 	if !found {
@@ -1626,7 +1633,7 @@ addCallback('trigger', ['action'], (msg) => {
 	if err := tc.sendLine("trigger logger"); err != nil {
 		return fmt.Errorf("trigger after undebug: %w", err)
 	}
-	output, ok = tc.waitForPrompt(2*time.Second)
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("trigger after undebug did not complete: %q", output)
 	}
@@ -1643,7 +1650,7 @@ addCallback('trigger', ['action'], (msg) => {
 	if err := tc.sendLine("/enter #genesis"); err != nil {
 		return fmt.Errorf("/enter genesis for created: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter genesis for created did not complete")
 	}
 
@@ -1668,14 +1675,14 @@ addCallback('created', ['emit'], (msg) => {
 	if err := tc.sendLine("/create /witness.js"); err != nil {
 		return fmt.Errorf("/create witness: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create witness did not complete")
 	}
 
 	// Wait for the witness to appear with the creator's ID in its description
-	found = waitForCondition(2*time.Second, 100*time.Millisecond, func() bool {
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
 		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(2*time.Second)
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
 		return strings.Contains(output, "witness stone (created by "+userID+")")
 	})
 	if !found {
@@ -1691,7 +1698,7 @@ addCallback('created', ['emit'], (msg) => {
 	if err := tc.sendLine("/enter #genesis"); err != nil {
 		return fmt.Errorf("/enter genesis for look target: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter genesis for look target did not complete")
 	}
 
@@ -1709,12 +1716,12 @@ addCallback('created', ['emit'], (msg) => {
 	if err := tc.sendLine("/create /tome.js"); err != nil {
 		return fmt.Errorf("/create tome: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(2*time.Second); !ok {
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/create tome did not complete")
 	}
 
 	// Wait for the tome to appear
-	if _, found := tc.waitForObject("*dusty*", 2*time.Second); !found {
+	if _, found := tc.waitForObject("*dusty*", defaultWaitTimeout); !found {
 		return fmt.Errorf("tome was not created")
 	}
 

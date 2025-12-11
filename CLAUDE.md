@@ -20,6 +20,7 @@ Instructions for Claude Code when working with this repository.
 - Always make sure functions have doc comments, if they are too complex for their name to fully describe what they do.
   This will make sure readers and authors of our code know what they functions are supposed to do, and have an
   easier time learning about them.
+- Always ask your agent to review each new git commit.
 
 ### Integration tests
 - Integration tests should use the SSH and WebDAV interfaces for all interactions with the server, except when it's

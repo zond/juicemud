@@ -18,6 +18,8 @@ import (
 
 const (
 	defaultReactionDelay = 100 * time.Millisecond
+	// jsExecutionTimeout is the maximum time allowed for a single JavaScript execution.
+	jsExecutionTimeout = 200 * time.Millisecond
 )
 
 type RWMutex interface {
@@ -362,10 +364,6 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		}
 		return nil
 	}
-	callbacks["setInterval"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		// TODO: Set repeating events in the future - or is that too risky?
-		return nil
-	}
 	callbacks["emit"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 3 || !args[0].IsString() || !args[1].IsString() {
@@ -456,7 +454,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		Callbacks: callbacks,
 		Console:   consoleByObjectID.Get(object.GetId()),
 	}
-	res, err := target.Run(ctx, caller, 200*time.Millisecond)
+	res, err := target.Run(ctx, caller, jsExecutionTimeout)
 	if err != nil {
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {

@@ -82,7 +82,6 @@ For verifying object state and waiting for object creation, tests prefer:
 | `removeCallback()` | Unregister a callback | Low |
 | `getSkillConfig()` / `setSkillConfig()` | Individual skill configuration | Low |
 | `getSkillConfigs()` / `setSkillConfigs()` | Bulk skill configuration | Low |
-| `setInterval()` | Repeating timed events (currently no-op) | Low |
 | `getLocation()` / `setLocation()` | Direct location manipulation | Low |
 | `getContent()` / `setContent()` | Direct content manipulation | Low |
 | `getSourcePath()` / `setSourcePath()` | Source path access | Low |

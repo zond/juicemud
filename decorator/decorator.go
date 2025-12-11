@@ -67,6 +67,11 @@ func main() {
 						),
 					)
 					fields := []jen.Code{}
+					// Unsafe permits direct unsynchronized access to the underlying data.
+					// Use Get*/Set* methods for thread-safe access, or Lock()/RLock() when
+					// accessing Unsafe directly.
+					fields = append(fields, jen.Comment("Unsafe permits direct unsynchronized access to the underlying data."))
+					fields = append(fields, jen.Comment("Use Get*/Set* methods for thread-safe access, or Lock()/RLock() when accessing Unsafe directly."))
 					fields = append(fields, jen.Id("Unsafe").Op("*").Id(match[0]))
 					fields = append(fields, jen.Id("PostUnlock").Id(postUnlockTypeName).Tag(map[string]string{"json": "-", "faker": "-"}))
 					fields = append(fields, jen.Id("mutex").Qual("sync", "RWMutex"))
