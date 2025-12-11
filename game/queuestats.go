@@ -39,20 +39,25 @@ const (
 	CategoryOther   ErrorCategory = "other"
 )
 
-// ErrorLocation represents where an error occurred (file:line).
+// ErrorLocation represents where an error occurred (file:line:column).
+// All fields are optional - nil/empty means not available.
 type ErrorLocation struct {
-	File string
-	Line int
+	File   *string
+	Line   *int
+	Column *int
 }
 
 func (l ErrorLocation) String() string {
-	if l.Line > 0 {
-		return fmt.Sprintf("%s:%d", l.File, l.Line)
+	if l.File == nil {
+		return "(unknown)"
 	}
-	if l.File != "" {
-		return l.File
+	if l.Line == nil {
+		return *l.File
 	}
-	return "(unknown)"
+	if l.Column == nil {
+		return fmt.Sprintf("%s:%d", *l.File, *l.Line)
+	}
+	return fmt.Sprintf("%s:%d:%d", *l.File, *l.Line, *l.Column)
 }
 
 // ErrorRecord captures a single error occurrence with full context.
@@ -730,7 +735,7 @@ type stackTracer interface {
 }
 
 // jsLocationRE parses JS error locations like "/user.js:10:5" or "user.js:10"
-var jsLocationRE = regexp.MustCompile(`^(.+):(\d+)(?::\d+)?$`)
+var jsLocationRE = regexp.MustCompile(`^(.+?):(\d+)(?::(\d+))?$`)
 
 // classifyError extracts category, location, and message from an error.
 func classifyError(err error) (ErrorCategory, ErrorLocation, string) {
@@ -777,10 +782,19 @@ func classifyError(err error) (ErrorCategory, ErrorLocation, string) {
 
 func parseJSLocation(loc string) ErrorLocation {
 	if matches := jsLocationRE.FindStringSubmatch(loc); matches != nil {
+		file := matches[1]
 		line, _ := strconv.Atoi(matches[2])
-		return ErrorLocation{File: matches[1], Line: line}
+		result := ErrorLocation{File: &file, Line: &line}
+		if matches[3] != "" {
+			col, _ := strconv.Atoi(matches[3])
+			result.Column = &col
+		}
+		return result
 	}
-	return ErrorLocation{File: loc}
+	if loc != "" {
+		return ErrorLocation{File: &loc}
+	}
+	return ErrorLocation{}
 }
 
 // goLocationRE parses Go stack frame strings like "file.go:123"
@@ -801,8 +815,9 @@ func extractGoLocation(err error) ErrorLocation {
 	frameStr := fmt.Sprintf("%+s:%d", frames[0], frames[0])
 
 	if matches := goLocationRE.FindStringSubmatch(frameStr); matches != nil {
+		file := matches[1]
 		line, _ := strconv.Atoi(matches[2])
-		return ErrorLocation{File: matches[1], Line: line}
+		return ErrorLocation{File: &file, Line: &line}
 	}
 
 	return ErrorLocation{}
