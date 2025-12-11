@@ -122,9 +122,64 @@
 // - "received": notify container when it gains content
 // - "transmitted": notify container when it loses content
 ```
-**Status:** Future feature consideration
+**Status:** Open - should be implemented
 
 ### 17b. Rename Function
 **File:** `storage/storage.go:411`
 **Issue:** Function needed renaming to AccessObject.
 **Status:** Fixed - function already renamed, removed stale TODO comment
+
+## New Findings (Code Review 2025-12)
+
+### 18. Queue Redesign Needed
+**Files:** `storage/queue/queue.go:153-159`, `game/game.go:155-162`
+**Issues:**
+1. Each sleep spawns a goroutine that isn't tracked or cancelled. High event churn creates thousands of sleeping goroutines.
+2. Each queue event spawns a goroutine without limit or backpressure. Event storms could spawn millions of goroutines.
+**Fix:** Redesign queue to use `time.AfterFunc` with cancellation for sleeps, and a worker pool with semaphore for event handling.
+**Status:** Open
+
+### 19. Login Attempt Map Unbounded
+**File:** `game/connection.go:41-112`
+**Issue:** `loginRateLimiter.attempts` map has no maximum size. An attacker could exhaust memory by attempting logins with unique usernames.
+**Options:**
+- Add a maximum size with LRU eviction
+- Use a probabilistic data structure (bloom filter)
+- Rate limit by IP address instead/additionally
+**Status:** Open - needs discussion
+
+### 20. WebDAV Lock Map Unbounded
+**File:** `dav/dav.go:491-539`
+**Issue:** Lock map has no cap. Rapid LOCK requests on unique paths could exhaust memory.
+**Options:**
+- Add a maximum lock count
+- Rate limit LOCK requests per user
+- Require authentication for LOCK (already required?)
+**Status:** Open - needs discussion
+
+### 21. Race Condition in Console Fanout onEmpty Callback
+**File:** `game/connection.go:114-136` (old), now `game/switchboard.go`
+**Issue:** The `onEmpty` callback in `NewFanout` runs outside the lock when `Write()` removes failed terminals, potentially causing concurrent modifications to `consoleByObjectID`.
+**Fix:** Replaced complex Fanout + consoleByObjectID design with a simpler Switchboard struct. The Switchboard manages all console connections in a single map protected by a single RWMutex. Writers hold the lock while cleaning up failed terminals, eliminating the race.
+**Status:** Fixed
+
+### 22. SkillConfigs Race Condition
+**File:** `game/processing.go:304-341`
+**Issue:** `structs.SkillConfigs` is a global `SyncMap` that can be modified by any JavaScript code via `setSkillConfigs`. The get-modify-set pattern isn't atomic, so concurrent modifications could lose updates.
+**Options:**
+- Add a `CompareAndSwap` or merge operation
+- Make skill configs per-object rather than global
+- Document that skill configs should only be set during initialization
+**Status:** Open - needs discussion
+
+### 23. Missing Context Cancellation in Sync Loop
+**File:** `storage/storage.go:498-517`
+**Issue:** The `sync` function loops through FileSync entries without checking for context cancellation.
+**Fix:** Add `select { case <-ctx.Done(): return ctx.Err() default: }` in the loop.
+**Status:** Open
+
+### 24. Audit Log Panic on Encode Failure
+**File:** `storage/audit.go:225`
+**Issue:** The audit logger panics if JSON encoding fails.
+**Analysis:** This is intentional and documented in the code comment. Audit logging is critical for security compliance - if we can't audit, we shouldn't continue operating. The panic ensures the issue is noticed immediately rather than silently losing audit records. Encoding failures should be extremely rare (only possible with custom types that fail to marshal, which we don't use).
+**Status:** Won't fix - intentional design for security compliance

@@ -452,13 +452,13 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		Origin:    object.GetSourcePath(),
 		State:     object.GetState(),
 		Callbacks: callbacks,
-		Console:   consoleByObjectID.Get(object.GetId()),
+		Console:   consoleSwitchboard.Writer(object.GetId()),
 	}
 	res, err := target.Run(ctx, caller, jsExecutionTimeout)
 	if err != nil {
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {
-			log.New(consoleByObjectID.Get(string(object.GetId())), "", 0).Printf("---- error in %s ----\n%s\n%s", jserr.Location, jserr.Message, jserr.StackTrace)
+			log.New(consoleSwitchboard.Writer(object.GetId()), "", 0).Printf("---- error in %s ----\n%s\n%s", jserr.Location, jserr.Message, jserr.StackTrace)
 		}
 		return false, juicemud.WithStack(err)
 	}

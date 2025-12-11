@@ -172,7 +172,7 @@ func (c *Connection) wizCommands() commands {
 			names: m("/debug"),
 			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
 				for _, target := range targets {
-					addConsole(target.GetId(), c.term)
+					consoleSwitchboard.Attach(target.GetId(), c.term)
 					fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), target.GetId())
 				}
 				return nil
@@ -182,7 +182,7 @@ func (c *Connection) wizCommands() commands {
 			names: m("/undebug"),
 			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
 				for _, target := range targets {
-					delConsole(target.GetId(), c.term)
+					consoleSwitchboard.Detach(target.GetId(), c.term)
 					fmt.Fprintf(c.term, "#%s/%s disconnected from console\n", target.Name(), target.GetId())
 				}
 				return nil

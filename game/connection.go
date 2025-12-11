@@ -28,7 +28,7 @@ var (
 
 var (
 	connectionByObjectID = juicemud.NewSyncMap[string, *Connection]()
-	consoleByObjectID    = juicemud.NewSyncMap[string, *Fanout]()
+	consoleSwitchboard   = NewSwitchboard()
 )
 
 const (
@@ -109,30 +109,6 @@ func (l *loginRateLimiterT) clearFailure(username string) {
 	l.mu.Lock()
 	delete(l.attempts, username)
 	l.mu.Unlock()
-}
-
-func addConsole(id string, term *term.Terminal) {
-	consoleByObjectID.WithLock(id, func() {
-		if f := consoleByObjectID.Get(id); f != nil {
-			f.Push(term)
-		} else {
-			consoleByObjectID.Set(id, NewFanout(term, func() {
-				// Cleanup callback when fanout becomes empty due to write failures
-				consoleByObjectID.Del(id)
-			}))
-		}
-	})
-}
-
-func delConsole(id string, term *term.Terminal) {
-	consoleByObjectID.WithLock(id, func() {
-		if f := consoleByObjectID.Get(id); f != nil {
-			f.Drop(term)
-			if f.Len() == 0 {
-				consoleByObjectID.Del(id)
-			}
-		}
-	})
 }
 
 type errs []error
