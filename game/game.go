@@ -179,7 +179,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			call = &ev.Call
 		}
 		g.queueStats.RecordEvent(ev.Object)
-		if _, _, err := g.loadRun(ctx, ev.Object, call); err != nil {
+		if _, _, err := g.loadRun(queueCtx, ev.Object, call); err != nil {
 			g.queueStats.RecordError(ev.Object, err)
 			log.Printf("trying to execute %+v: %v", ev, err)
 			log.Printf("%v", juicemud.StackTrace(err))
