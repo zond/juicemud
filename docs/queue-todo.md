@@ -28,39 +28,18 @@
 
 ---
 
-## Remaining
-
 ### 6. Replace Close() Pattern Across Codebase
+**Status:** Done - refactored to context-based lifecycle management
 
-**Status:** Needs investigation and implementation
+Components now follow these rules:
+- Components with only goroutines (DigestAuth, QueueStats, loginRateLimiter) are controlled by context cancellation
+- Components with resources (Storage) have Close() methods
+- Components with goroutines that need waiting (LiveTypeHash, Game) have Close() or Wait() that blocks until goroutines exit
+- Server has a blocking Start() that handles all lifecycle management internally
 
-**Issue:** Other background tasks in the codebase use the Close() + context dual pattern.
-
-**Action:**
-1. Search codebase for background tasks with Close() functions
-2. Replace with context-only shutdown pattern where appropriate
-3. Owner creates child context, passes to background task
-4. To shut down: cancel context and wait for task to complete
-
-**Pattern to follow:**
-```go
-// Owner creates child context
-taskCtx, taskCancel := context.WithCancel(parentCtx)
-
-// Start background task
-var wg sync.WaitGroup
-wg.Add(1)
-go func() {
-    defer wg.Done()
-    backgroundTask(taskCtx)
-}()
-
-// To shut down:
-taskCancel()
-wg.Wait()  // Wait for task to complete
-```
-
-**Files to investigate:**
-- `game/connection.go` - loginRateLimiter.Close()
-- `game/queuestats.go` - QueueStats.Close()
-- Any other background goroutines with Close() methods
+Changes:
+- `game/connection.go` - loginRateLimiter now per-Game, context-controlled
+- `game/queuestats.go` - QueueStats.Close() removed, context-controlled
+- `digest/digest.go` - DigestAuth.Close() removed, context-controlled
+- `game/game.go` - Game.Close() replaced with Wait()
+- `server/server.go` - Server.Start() now blocking, manages its own context
