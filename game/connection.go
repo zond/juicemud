@@ -37,7 +37,10 @@ const (
 )
 
 // loginRateLimiter tracks failed login attempts per username for rate limiting.
-// Entries older than loginAttemptInterval are periodically cleaned up.
+// Entries older than loginAttemptInterval are periodically cleaned up every
+// loginAttemptCleanup interval. This bounds memory usage: even if an attacker
+// spams unique usernames, entries expire within ~70 seconds (10s interval + 60s
+// cleanup period). At typical network speeds, this limits the map to manageable size.
 type loginRateLimiter struct {
 	mu       sync.RWMutex
 	attempts map[string]time.Time

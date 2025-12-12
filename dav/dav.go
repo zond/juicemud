@@ -47,38 +47,33 @@ type FileSystem interface {
 }
 
 // Handler provides WebDAV functionality over the given FileSystem.
+// The locks map is bounded by expiration: locks default to 10 minutes and are
+// cleaned up every 5 minutes. Since WebDAV access requires wizard authentication,
+// only trusted users can create locks, limiting abuse potential.
 type Handler struct {
 	fileSystem FileSystem
 	locks      map[string]*Lock
 	lockMutex  sync.Mutex
-	closeCh    chan struct{}
-	closeOnce  sync.Once
 }
 
-func New(fs FileSystem) *Handler {
+// New creates a new WebDAV handler. The cleanup goroutine runs until the
+// context is cancelled.
+func New(ctx context.Context, fs FileSystem) *Handler {
 	h := &Handler{
 		fileSystem: fs,
 		locks:      map[string]*Lock{},
-		closeCh:    make(chan struct{}),
 	}
-	go h.cleanupExpiredLocks()
+	go h.cleanupExpiredLocks(ctx)
 	return h
 }
 
-// Close shuts down the handler's background goroutines. Safe to call multiple times.
-func (h *Handler) Close() {
-	h.closeOnce.Do(func() {
-		close(h.closeCh)
-	})
-}
-
-// cleanupExpiredLocks periodically removes expired locks to prevent memory exhaustion.
-func (h *Handler) cleanupExpiredLocks() {
+// cleanupExpiredLocks periodically removes expired locks until context is cancelled.
+func (h *Handler) cleanupExpiredLocks(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-h.closeCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			h.lockMutex.Lock()

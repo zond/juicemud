@@ -222,8 +222,7 @@ func (s *Server) startWithListeners(ctx context.Context, sshLn, httpLn, httpsLn 
 
 	// Create WebDAV handler with auth
 	fsys := &fs.Fs{Storage: store}
-	davHandler := dav.New(fsys)
-	defer davHandler.Close()
+	davHandler := dav.New(ctx, fsys)
 	digestAuth := digest.NewDigestAuth(ctx, juicemud.DAVAuthRealm, store)
 	auth := digestAuth.Wrap(davHandler)
 

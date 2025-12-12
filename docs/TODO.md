@@ -46,7 +46,7 @@
 **File:** `js/js.go:47-61`
 **Issue:** V8 memory is unconstrained during execution. Malicious script could exhaust server memory before timeout fires.
 **Note:** v8go doesn't expose V8's ResourceConstraints API.
-**Status:** Open - no easy fix available
+**Status:** Won't fix - documented in code comment at js/js.go:48-51
 
 ## Medium
 
@@ -147,20 +147,14 @@
 ### 19. Login Attempt Map Unbounded
 **File:** `game/connection.go:41-112`
 **Issue:** `loginRateLimiter.attempts` map has no maximum size. An attacker could exhaust memory by attempting logins with unique usernames.
-**Options:**
-- Add a maximum size with LRU eviction
-- Use a probabilistic data structure (bloom filter)
-- Rate limit by IP address instead/additionally
-**Status:** Open - needs discussion
+**Analysis:** The map is bounded by time: entries expire after 10 seconds and cleanup runs every 60 seconds. In the worst case (~70 seconds), an attacker at typical network speeds can create a bounded number of entries before cleanup. This is acceptable.
+**Status:** Won't fix - documented in code comment at game/connection.go:39-43
 
 ### 20. WebDAV Lock Map Unbounded
 **File:** `dav/dav.go:491-539`
 **Issue:** Lock map has no cap. Rapid LOCK requests on unique paths could exhaust memory.
-**Options:**
-- Add a maximum lock count
-- Rate limit LOCK requests per user
-- Require authentication for LOCK (already required?)
-**Status:** Open - needs discussion
+**Analysis:** Locks expire after 10 minutes (default) and are cleaned up every 5 minutes. More importantly, WebDAV access requires wizard authentication via digest auth, so only trusted users can create locks. This limits abuse potential.
+**Status:** Won't fix - documented in code comment at dav/dav.go:49-52
 
 ### 21. Race Condition in Console Fanout onEmpty Callback
 **File:** `game/connection.go:114-136` (old), now `game/switchboard.go`
