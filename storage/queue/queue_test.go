@@ -19,9 +19,13 @@ func TestQueue(t *testing.T) {
 		got := []string{}
 		mut := &sync.Mutex{}
 		q := New(ctx, tr)
+
+		// Start the queue first to ensure offset is initialized.
 		runWG := &sync.WaitGroup{}
 		runWG.Add(1)
+		started := make(chan struct{})
 		go func() {
+			close(started)
 			if err := q.Start(ctx, func(_ context.Context, ev *structs.Event) {
 				mut.Lock()
 				defer mut.Unlock()
@@ -31,6 +35,9 @@ func TestQueue(t *testing.T) {
 			}
 			runWG.Done()
 		}()
+		<-started
+		time.Sleep(10 * time.Millisecond) // Ensure Start() is in its loop
+
 		if err := q.Push(ctx, &structs.Event{
 			At:     uint64(q.After(100 * time.Millisecond)),
 			Object: "a",

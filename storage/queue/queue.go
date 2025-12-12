@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
@@ -26,10 +27,10 @@ import (
 // need to run until year 2554 for current time alone to overflow int64.
 type Queue struct {
 	tree    *dbm.TypeTree[structs.Event, *structs.Event]
-	offset  structs.Timestamp
+	offset  atomic.Int64  // Nanosecond offset for time adjustment on restart
 	wake    chan struct{} // Buffered(1), signals new event or state change
 	done    chan struct{} // Closed when Start() exits
-	mu      sync.Mutex    // Protects closed and started flags
+	mu      sync.RWMutex  // Protects closed and started flags
 	closed  bool
 	started bool
 }
@@ -43,15 +44,15 @@ func New(ctx context.Context, t *dbm.TypeTree[structs.Event, *structs.Event]) *Q
 }
 
 func (q *Queue) After(dur time.Duration) structs.Timestamp {
-	return structs.Timestamp(time.Now().Add(dur).UnixNano()) + q.offset
+	return structs.Timestamp(time.Now().Add(dur).UnixNano() + q.offset.Load())
 }
 
 func (q *Queue) At(t time.Time) structs.Timestamp {
-	return structs.Timestamp(t.UnixNano()) + q.offset
+	return structs.Timestamp(t.UnixNano() + q.offset.Load())
 }
 
 func (q *Queue) Now() structs.Timestamp {
-	return structs.Timestamp(time.Now().UnixNano()) + q.offset
+	return structs.Timestamp(time.Now().UnixNano() + q.offset.Load())
 }
 
 func (q *Queue) until(at structs.Timestamp) time.Duration {
@@ -101,8 +102,8 @@ func (q *Queue) Push(ctx context.Context, eventer structs.Eventer) error {
 	}
 	ev.CreateKey()
 
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.mu.RLock()
+	defer q.mu.RUnlock()
 
 	if q.closed {
 		return errors.Errorf("queue is closed")
@@ -135,21 +136,16 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 		return juicemud.WithStack(err)
 	}
 	if next != nil {
-		q.offset = structs.Timestamp(next.At)
+		q.offset.Store(int64(next.At))
 	}
 
+	// Create a dummy timer that won't fire until we stop it.
 	timer := time.NewTimer(time.Hour)
 	timer.Stop()
+	// Make sure that it will stop after we are done even if we start it again.
 	defer timer.Stop()
 
 	for {
-		q.mu.Lock()
-		closed := q.closed
-		q.mu.Unlock()
-		if closed {
-			return nil
-		}
-
 		// Process all due events.
 		for next != nil && structs.Timestamp(next.At) <= q.Now() {
 			handler(ctx, next)
@@ -161,6 +157,13 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 			}
 		}
 
+		q.mu.RLock()
+		closed := q.closed
+		q.mu.RUnlock()
+		if closed {
+			return nil
+		}
+
 		// Determine what to wait on.
 		var timerC <-chan time.Time
 		if next != nil {
@@ -168,6 +171,7 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 				timer.Reset(d)
 				timerC = timer.C
 			} else {
+				// Next became due between "Process all due events" and now, let's restart the loop.
 				continue
 			}
 		}
