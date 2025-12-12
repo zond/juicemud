@@ -134,12 +134,15 @@
 ## New Findings (Code Review 2025-12)
 
 ### 18. Queue Redesign Needed
-**Files:** `storage/queue/queue.go:153-159`, `game/game.go:155-162`
+**Files:** `storage/queue/queue.go`, `game/game.go`
 **Issues:**
-1. Each sleep spawns a goroutine that isn't tracked or cancelled. High event churn creates thousands of sleeping goroutines.
-2. Each queue event spawns a goroutine without limit or backpressure. Event storms could spawn millions of goroutines.
-**Fix:** Redesign queue to use `time.AfterFunc` with cancellation for sleeps, and a worker pool with semaphore for event handling.
-**Status:** Open
+1. Each sleep spawned a goroutine that wasn't tracked or cancelled. High event churn created thousands of sleeping goroutines.
+2. Each queue event spawned a goroutine without limit or backpressure. Event storms could spawn millions of goroutines.
+**Fix:**
+1. Replaced `sync.Cond` with channel-based coordination (`wake` channel, buffered(1)). Single reusable `time.Timer` instead of spawning goroutines for each sleep. Clean select loop handles timer, wake signals, and context cancellation.
+2. Added semaphore (`maxConcurrentHandlers = 64`) to limit concurrent event handlers. Handlers acquire a slot before processing, respecting context cancellation while waiting.
+**Behavior change:** On shutdown, only due events are processed; future events remain in the persistent B-tree for the next startup (previously all events were drained).
+**Status:** Fixed
 
 ### 19. Login Attempt Map Unbounded
 **File:** `game/connection.go:41-112`

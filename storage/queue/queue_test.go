@@ -48,6 +48,8 @@ func TestQueue(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
+		// Wait for all events to fire before closing.
+		time.Sleep(250 * time.Millisecond)
 		if err := q.Close(); err != nil {
 			t.Fatal(err)
 		}

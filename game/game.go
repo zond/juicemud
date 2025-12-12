@@ -63,6 +63,12 @@ const (
 	wizardsGroup = "wizards"
 )
 
+const (
+	// maxConcurrentHandlers limits how many event handlers can run simultaneously.
+	// Handlers beyond this limit block until a slot is available, providing backpressure.
+	maxConcurrentHandlers = 64
+)
+
 var (
 	initialDirectories = []string{
 		root,
@@ -161,12 +167,21 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	}()
 	go g.queueStats.Start()
 	go func() {
+		handlerSem := make(chan struct{}, maxConcurrentHandlers)
 		if err := g.storage.Queue().Start(ctx, func(ctx context.Context, ev *structs.Event) {
 			var call structs.Caller
 			if ev.Call.Name != "" {
 				call = &ev.Call
 			}
 			go func() {
+				// Acquire semaphore slot, respecting context cancellation.
+				select {
+				case handlerSem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-handlerSem }()
+
 				g.queueStats.RecordEvent(ev.Object)
 				if _, _, err := g.loadRun(ctx, ev.Object, call); err != nil {
 					g.queueStats.RecordError(ev.Object, err)
