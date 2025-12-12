@@ -172,20 +172,6 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		queueCancel: queueCancel,
 	}
 
-	// processEvent handles a single event. Extracted to avoid duplication.
-	processEvent := func(ev *structs.Event) {
-		var call structs.Caller
-		if ev.Call.Name != "" {
-			call = &ev.Call
-		}
-		g.queueStats.RecordEvent(ev.Object)
-		if _, _, err := g.loadRun(queueCtx, ev.Object, call); err != nil {
-			g.queueStats.RecordError(ev.Object, err)
-			log.Printf("trying to execute %+v: %v", ev, err)
-			log.Printf("%v", juicemud.StackTrace(err))
-		}
-	}
-
 	// Start event workers. They process events until context is cancelled.
 	for i := 0; i < maxEventWorkers; i++ {
 		g.workerWG.Add(1)
@@ -194,7 +180,16 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			for {
 				select {
 				case ev := <-g.workChan:
-					processEvent(ev)
+					var call structs.Caller
+					if ev.Call.Name != "" {
+						call = &ev.Call
+					}
+					g.queueStats.RecordEvent(ev.Object)
+					if _, _, err := g.loadRun(queueCtx, ev.Object, call); err != nil {
+						g.queueStats.RecordError(ev.Object, err)
+						log.Printf("trying to execute %+v: %v", ev, err)
+						log.Printf("%v", juicemud.StackTrace(err))
+					}
 				case <-queueCtx.Done():
 					return
 				}
