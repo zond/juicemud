@@ -76,9 +76,8 @@ type Storage struct {
 }
 
 func (s *Storage) Close() error {
-	if err := s.queue.Close(); err != nil {
-		return juicemud.WithStack(err)
-	}
+	// Note: Queue shutdown is handled by context cancellation, not Close().
+	// The caller (Game) is responsible for cancelling the queue context.
 	if err := s.sql.Close(); err != nil {
 		return juicemud.WithStack(err)
 	}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gliderlabs/ssh"
@@ -64,9 +65,10 @@ const (
 )
 
 const (
-	// maxConcurrentHandlers limits how many event handlers can run simultaneously.
-	// Handlers beyond this limit block until a slot is available, providing backpressure.
-	maxConcurrentHandlers = 64
+	// maxEventWorkers is the number of worker goroutines that process queue events.
+	// This provides natural backpressure: if all workers are busy, the queue handler
+	// blocks until a worker is available to receive the event.
+	maxEventWorkers = 64
 )
 
 var (
@@ -124,8 +126,11 @@ func initialObjects() map[string]*structs.ObjectDO {
 }
 
 type Game struct {
-	storage    *storage.Storage
-	queueStats *QueueStats
+	storage      *storage.Storage
+	queueStats   *QueueStats
+	workChan     chan *structs.Event // Unbuffered channel for event handoff to workers
+	workerWG     sync.WaitGroup      // Tracks in-flight event workers
+	queueCancel  context.CancelFunc  // Cancels queue context to initiate shutdown
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
@@ -156,43 +161,60 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 			return nil, juicemud.WithStack(err)
 		}
 	}
-	g := &Game{
-		storage:    s,
-		queueStats: NewQueueStats(),
-	}
-	go func() {
-		if err := g.storage.StartObjects(ctx); err != nil {
-			log.Panic(err)
-		}
-	}()
-	go g.queueStats.Start()
-	go func() {
-		handlerSem := make(chan struct{}, maxConcurrentHandlers)
-		if err := g.storage.Queue().Start(ctx, func(ctx context.Context, ev *structs.Event) {
-			var call structs.Caller
-			if ev.Call.Name != "" {
-				call = &ev.Call
-			}
-			go func() {
-				// Acquire semaphore slot, respecting context cancellation.
-				select {
-				case handlerSem <- struct{}{}:
-				case <-ctx.Done():
-					return
-				}
-				defer func() { <-handlerSem }()
 
+	// Create child context for queue - cancelling this stops the queue.
+	queueCtx, queueCancel := context.WithCancel(ctx)
+
+	g := &Game{
+		storage:     s,
+		queueStats:  NewQueueStats(),
+		workChan:    make(chan *structs.Event), // Unbuffered for synchronous handoff
+		queueCancel: queueCancel,
+	}
+
+	// Start event workers. They process events until workChan is closed.
+	for i := 0; i < maxEventWorkers; i++ {
+		g.workerWG.Add(1)
+		go func() {
+			defer g.workerWG.Done()
+			for ev := range g.workChan {
+				var call structs.Caller
+				if ev.Call.Name != "" {
+					call = &ev.Call
+				}
 				g.queueStats.RecordEvent(ev.Object)
 				if _, _, err := g.loadRun(ctx, ev.Object, call); err != nil {
 					g.queueStats.RecordError(ev.Object, err)
 					log.Printf("trying to execute %+v: %v", ev, err)
 					log.Printf("%v", juicemud.StackTrace(err))
 				}
-			}()
-		}); err != nil {
+			}
+		}()
+	}
+
+	go func() {
+		if err := g.storage.StartObjects(ctx); err != nil {
 			log.Panic(err)
 		}
 	}()
+	go g.queueStats.Start()
+
+	// Start the queue. The handler sends events to workers via unbuffered channel,
+	// blocking until a worker receives. This provides natural backpressure.
+	go func() {
+		err := g.storage.Queue().Start(queueCtx, func(ctx context.Context, ev *structs.Event) error {
+			select {
+			case g.workChan <- ev:
+				return nil // Successfully handed off to worker
+			case <-ctx.Done():
+				return ctx.Err() // Shutdown requested, event stays in queue
+			}
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			log.Panic(err)
+		}
+	}()
+
 	bootJS, _, err := g.storage.LoadSource(ctx, bootSource)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
@@ -214,8 +236,16 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	return g, nil
 }
 
-// Close stops any background goroutines associated with the Game.
+// Close stops any background goroutines associated with the Game and waits
+// for in-flight event handlers to complete.
 func (g *Game) Close() {
+	// Cancel queue context to stop accepting new events.
+	g.queueCancel()
+	// Close work channel to signal workers to stop after draining.
+	close(g.workChan)
+	// Wait for all in-flight event handlers to complete.
+	g.workerWG.Wait()
+
 	loginRateLimiter.Close()
 	g.queueStats.Close()
 }

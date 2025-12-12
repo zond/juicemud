@@ -3,7 +3,6 @@ package queue
 import (
 	"context"
 	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,8 +16,9 @@ import (
 // Events are processed in timestamp order. The offset field handles time jumps
 // on restart by adjusting all timestamps relative to the earliest queued event.
 //
-// Coordination uses channels instead of sync.Cond for clean integration with
-// timers and context cancellation in a single select loop.
+// Shutdown is context-based: cancel the context passed to Start() to stop processing.
+// Events pushed after context cancellation may be persisted but not processed in
+// the current session; they will be processed on next startup.
 //
 // Timestamp overflow analysis: Timestamps are uint64 nanoseconds. Current Unix
 // time is ~1.7e18 ns. JavaScript's MAX_SAFE_INTEGER (2^53-1 ≈ 9e15) as milliseconds
@@ -26,20 +26,15 @@ import (
 // 1.7e18 + 9e18 ≈ 1.1e19, well within uint64's 1.8e19 limit. The system would
 // need to run until year 2554 for current time alone to overflow int64.
 type Queue struct {
-	tree    *dbm.TypeTree[structs.Event, *structs.Event]
-	offset  atomic.Int64  // Nanosecond offset for time adjustment on restart
-	wake    chan struct{} // Buffered(1), signals new event or state change
-	done    chan struct{} // Closed when Start() exits
-	mu      sync.RWMutex  // Protects closed and started flags
-	closed  bool
-	started bool
+	tree   *dbm.TypeTree[structs.Event, *structs.Event]
+	offset atomic.Int64  // Nanosecond offset for time adjustment on restart
+	wake   chan struct{} // Buffered(1), signals new event pushed
 }
 
-func New(ctx context.Context, t *dbm.TypeTree[structs.Event, *structs.Event]) *Queue {
+func New(_ context.Context, t *dbm.TypeTree[structs.Event, *structs.Event]) *Queue {
 	return &Queue{
 		tree: t,
 		wake: make(chan struct{}, 1),
-		done: make(chan struct{}),
 	}
 }
 
@@ -77,37 +72,15 @@ func (q *Queue) signal() {
 	}
 }
 
-// Close signals the queue to stop and waits for Start() to exit.
-// Safe to call even if Start() was never called.
-func (q *Queue) Close() error {
-	q.mu.Lock()
-	if q.closed {
-		q.mu.Unlock()
-		return nil
-	}
-	q.closed = true
-	started := q.started
-	q.mu.Unlock()
-	q.signal()
-	if started {
-		<-q.done
-	}
-	return nil
-}
-
-func (q *Queue) Push(ctx context.Context, eventer structs.Eventer) error {
+// Push adds an event to the queue. The event will be processed when its
+// timestamp arrives. Safe to call concurrently and while Start() is running.
+func (q *Queue) Push(_ context.Context, eventer structs.Eventer) error {
 	ev, err := eventer.Event()
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
 	ev.CreateKey()
 
-	q.mu.RLock()
-	defer q.mu.RUnlock()
-
-	if q.closed {
-		return errors.Errorf("queue is closed")
-	}
 	if err := q.tree.Set(ev.Key, ev, false); err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -116,17 +89,19 @@ func (q *Queue) Push(ctx context.Context, eventer structs.Eventer) error {
 	return nil
 }
 
-type EventHandler func(context.Context, *structs.Event)
+// EventHandler processes an event. Returns nil if the event was successfully
+// handed off for processing (and should be deleted from the queue), or an error
+// if the handoff failed (event should remain in queue for next startup).
+type EventHandler func(context.Context, *structs.Event) error
 
 // Start runs the event loop, calling handler for each event when its time arrives.
-// Blocks until the queue is closed or context is cancelled.
-// Due events are processed before returning; future events remain in the queue.
+// Blocks until context is cancelled. Due events are processed before returning;
+// future events remain in the queue for next startup.
+//
+// If handler returns an error, the event is NOT deleted from the queue and Start
+// returns immediately with that error. This allows handlers to reject events
+// (e.g., during shutdown) while preserving them for the next startup.
 func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
-	q.mu.Lock()
-	q.started = true
-	q.mu.Unlock()
-	defer close(q.done)
-
 	if ctx.Err() != nil {
 		return juicemud.WithStack(ctx.Err())
 	}
@@ -139,29 +114,25 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 		q.offset.Store(int64(next.At))
 	}
 
-	// Create a dummy timer that won't fire until we stop it.
+	// Create a stopped timer for reuse.
 	timer := time.NewTimer(time.Hour)
 	timer.Stop()
-	// Make sure that it will stop after we are done even if we start it again.
 	defer timer.Stop()
 
 	for {
 		// Process all due events.
 		for next != nil && structs.Timestamp(next.At) <= q.Now() {
-			handler(ctx, next)
+			if err := handler(ctx, next); err != nil {
+				// Handler rejected event (e.g., context cancelled during handoff).
+				// Don't delete - event stays in queue for next startup.
+				return juicemud.WithStack(err)
+			}
 			if err := q.tree.Del(next.Key); err != nil {
 				return juicemud.WithStack(err)
 			}
 			if next, err = q.peekFirst(); err != nil {
 				return juicemud.WithStack(err)
 			}
-		}
-
-		q.mu.RLock()
-		closed := q.closed
-		q.mu.RUnlock()
-		if closed {
-			return nil
 		}
 
 		// Determine what to wait on.
@@ -171,16 +142,17 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 				timer.Reset(d)
 				timerC = timer.C
 			} else {
-				// Next became due between "Process all due events" and now, let's restart the loop.
+				// Event became due, restart loop.
 				continue
 			}
 		}
+		// If next == nil, timerC is nil, so select blocks on wake/ctx only.
 
 		select {
 		case <-timerC:
 			// Timer fired, loop to process.
 		case <-q.wake:
-			// New event or close requested. Stop timer, drain if fired.
+			// New event pushed. Stop timer, drain if fired.
 			if !timer.Stop() {
 				select {
 				case <-timer.C:

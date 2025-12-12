@@ -2,7 +2,6 @@ package queue
 
 import (
 	"context"
-	"log"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -14,7 +13,9 @@ import (
 )
 
 func TestQueue(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
 		got := []string{}
 		mut := &sync.Mutex{}
@@ -26,13 +27,12 @@ func TestQueue(t *testing.T) {
 		started := make(chan struct{})
 		go func() {
 			close(started)
-			if err := q.Start(ctx, func(_ context.Context, ev *structs.Event) {
+			q.Start(ctx, func(_ context.Context, ev *structs.Event) error {
 				mut.Lock()
 				defer mut.Unlock()
 				got = append(got, ev.Object)
-			}); err != nil {
-				log.Fatal(err)
-			}
+				return nil
+			})
 			runWG.Done()
 		}()
 		<-started
@@ -56,11 +56,9 @@ func TestQueue(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		// Wait for all events to fire before closing.
+		// Wait for all events to fire before cancelling.
 		time.Sleep(250 * time.Millisecond)
-		if err := q.Close(); err != nil {
-			t.Fatal(err)
-		}
+		cancel()
 		runWG.Wait()
 		want := []string{"b", "a", "c"}
 		if !reflect.DeepEqual(got, want) {
@@ -70,7 +68,9 @@ func TestQueue(t *testing.T) {
 }
 
 func TestQueueFutureEventsNotDrained(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
 		var handlerCalls atomic.Int32
 		q := New(ctx, tr)
@@ -83,11 +83,10 @@ func TestQueueFutureEventsNotDrained(t *testing.T) {
 		started := make(chan struct{})
 		go func() {
 			close(started)
-			if err := q.Start(ctx, func(_ context.Context, ev *structs.Event) {
+			q.Start(ctx, func(_ context.Context, ev *structs.Event) error {
 				handlerCalls.Add(1)
-			}); err != nil {
-				log.Fatal(err)
-			}
+				return nil
+			})
 			runWG.Done()
 		}()
 		<-started
@@ -110,10 +109,8 @@ func TestQueueFutureEventsNotDrained(t *testing.T) {
 		// Wait for immediate event to fire.
 		time.Sleep(50 * time.Millisecond)
 
-		// Close should NOT wait for or process the future event.
-		if err := q.Close(); err != nil {
-			t.Fatal(err)
-		}
+		// Cancel context - should NOT wait for or process the future event.
+		cancel()
 		runWG.Wait()
 
 		// Only the immediate event should have been processed.
@@ -134,33 +131,103 @@ func TestQueueFutureEventsNotDrained(t *testing.T) {
 	})
 }
 
-func TestQueueCloseWithoutStart(t *testing.T) {
-	ctx := context.Background()
+func TestQueueHandlerError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
 		q := New(ctx, tr)
 
-		// Push an event but never call Start().
+		// Start the queue.
+		runWG := &sync.WaitGroup{}
+		runWG.Add(1)
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			// Handler returns error on first event.
+			q.Start(ctx, func(_ context.Context, ev *structs.Event) error {
+				return context.Canceled // Simulate handoff failure
+			})
+			runWG.Done()
+		}()
+		<-started
+		time.Sleep(10 * time.Millisecond)
+
+		// Push an immediate event.
 		if err := q.Push(ctx, &structs.Event{
-			At:     uint64(q.After(time.Hour)),
-			Object: "orphan",
+			At:     uint64(q.After(10 * time.Millisecond)),
+			Object: "test",
 		}); err != nil {
 			t.Fatal(err)
 		}
 
-		// Close should not block even though Start() was never called.
-		done := make(chan struct{})
-		go func() {
-			if err := q.Close(); err != nil {
-				t.Error(err)
-			}
-			close(done)
-		}()
+		// Wait for event to be processed (or rejected).
+		runWG.Wait()
 
-		select {
-		case <-done:
-			// Success - Close returned.
-		case <-time.After(100 * time.Millisecond):
-			t.Error("Close() blocked without Start() being called")
+		// Event should still be in tree since handler returned error.
+		ev, err := tr.First()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev == nil {
+			t.Error("event should still be in tree after handler error")
+		} else if ev.Object != "test" {
+			t.Errorf("remaining event is %q, want %q", ev.Object, "test")
+		}
+	})
+}
+
+func TestQueueConcurrentPush(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
+		var processed atomic.Int32
+		q := New(ctx, tr)
+
+		// Start the queue.
+		runWG := &sync.WaitGroup{}
+		runWG.Add(1)
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			q.Start(ctx, func(_ context.Context, ev *structs.Event) error {
+				processed.Add(1)
+				return nil
+			})
+			runWG.Done()
+		}()
+		<-started
+		time.Sleep(10 * time.Millisecond)
+
+		// Push 100 events from 10 goroutines concurrently.
+		const numGoroutines = 10
+		const eventsPerGoroutine = 10
+		var pushWG sync.WaitGroup
+		for i := 0; i < numGoroutines; i++ {
+			pushWG.Add(1)
+			go func(id int) {
+				defer pushWG.Done()
+				for j := 0; j < eventsPerGoroutine; j++ {
+					if err := q.Push(ctx, &structs.Event{
+						At:     uint64(q.After(10 * time.Millisecond)),
+						Object: "event",
+					}); err != nil {
+						t.Error(err)
+					}
+				}
+			}(i)
+		}
+		pushWG.Wait()
+
+		// Wait for all events to be processed.
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+		runWG.Wait()
+
+		// All events should have been processed.
+		if got := processed.Load(); got != numGoroutines*eventsPerGoroutine {
+			t.Errorf("processed %d events, want %d", got, numGoroutines*eventsPerGoroutine)
 		}
 	})
 }
