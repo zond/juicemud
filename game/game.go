@@ -126,11 +126,11 @@ func initialObjects() map[string]*structs.ObjectDO {
 }
 
 type Game struct {
-	storage     *storage.Storage
-	queueStats  *QueueStats
-	workChan    chan *structs.Event // Unbuffered channel for event handoff to workers
-	workerWG    sync.WaitGroup      // Tracks in-flight event workers
-	queueCancel context.CancelFunc  // Cancels queue context to initiate shutdown
+	storage          *storage.Storage
+	queueStats       *QueueStats
+	loginRateLimiter *loginRateLimiter
+	workChan         chan *structs.Event // Unbuffered channel for event handoff to workers
+	workerWG         sync.WaitGroup      // Tracks in-flight event workers
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
@@ -162,14 +162,11 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		}
 	}
 
-	// Create child context for queue - cancelling this stops the queue.
-	queueCtx, queueCancel := context.WithCancel(ctx)
-
 	g := &Game{
-		storage:     s,
-		queueStats:  NewQueueStats(),
-		workChan:    make(chan *structs.Event), // Unbuffered for synchronous handoff
-		queueCancel: queueCancel,
+		storage:          s,
+		queueStats:       NewQueueStats(ctx),
+		loginRateLimiter: newLoginRateLimiter(ctx),
+		workChan:         make(chan *structs.Event), // Unbuffered for synchronous handoff
 	}
 
 	// Start event workers. They process events until context is cancelled.
@@ -185,29 +182,24 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 						call = &ev.Call
 					}
 					g.queueStats.RecordEvent(ev.Object)
-					if _, _, err := g.loadRun(queueCtx, ev.Object, call); err != nil {
+					if _, _, err := g.loadRun(ctx, ev.Object, call); err != nil {
 						g.queueStats.RecordError(ev.Object, err)
 						log.Printf("trying to execute %+v: %v", ev, err)
 						log.Printf("%v", juicemud.StackTrace(err))
 					}
-				case <-queueCtx.Done():
+				case <-ctx.Done():
 					return
 				}
 			}
 		}()
 	}
 
-	go func() {
-		if err := g.storage.StartObjects(ctx); err != nil {
-			log.Panic(err)
-		}
-	}()
-	go g.queueStats.Start()
-
 	// Start the queue. The handler sends events to workers via unbuffered channel,
 	// blocking until a worker receives. This provides natural backpressure.
+	g.workerWG.Add(1)
 	go func() {
-		err := g.storage.Queue().Start(queueCtx, func(ctx context.Context, ev *structs.Event) error {
+		defer g.workerWG.Done()
+		err := g.storage.Queue().Start(ctx, func(ctx context.Context, ev *structs.Event) error {
 			select {
 			case g.workChan <- ev:
 				return nil // Successfully handed off to worker
@@ -241,16 +233,10 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	return g, nil
 }
 
-// Close stops any background goroutines associated with the Game and waits
-// for in-flight event handlers to complete.
-func (g *Game) Close() {
-	// Cancel queue context. This stops the queue and all workers.
-	g.queueCancel()
-	// Wait for all workers to complete their current event.
+// Wait blocks until all Game goroutines have stopped.
+// The caller must cancel the context first to signal shutdown.
+func (g *Game) Wait() {
 	g.workerWG.Wait()
-
-	loginRateLimiter.Close()
-	g.queueStats.Close()
 }
 
 func (g *Game) HandleSession(sess ssh.Session) {

@@ -31,7 +31,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	objects, err := dbm.OpenLiveTypeHash[structs.Object](filepath.Join(dir, "objects"))
+	objects, err := dbm.OpenLiveTypeHash[structs.Object](ctx, filepath.Join(dir, "objects"))
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
@@ -108,9 +108,6 @@ func (s *Storage) AuditLog(ctx context.Context, event string, data AuditData) {
 	s.audit.Log(ctx, event, data)
 }
 
-func (s *Storage) StartObjects(_ context.Context) error {
-	return s.objects.Start()
-}
 
 func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, query string, params ...any) error {
 	if err := sqlx.GetContext(ctx, db, d, query, params...); err != nil {

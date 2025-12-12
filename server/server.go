@@ -88,23 +88,17 @@ func DefaultConfig() Config {
 
 // Server represents a running JuiceMUD server instance.
 type Server struct {
-	config        Config
-	storage       *storage.Storage
-	game          *game.Game
-	sshServer     *ssh.Server
-	httpsServer   *http.Server
-	httpServer    *http.Server
-	sshListener   net.Listener
-	httpListener  net.Listener
-	httpsListener net.Listener
-	crypto        crypto.Crypto
-	davHandler    *dav.Handler
-	digestAuth    *digest.DigestAuth
+	config  Config
+	crypto  crypto.Crypto
+	signer  gossh.Signer
+	storage *storage.Storage // Set during Start, nil before/after
+	game    *game.Game       // Set during Start, nil before/after
 }
 
 // New creates a new server with the given configuration.
-// It initializes storage, game, and all listeners but does not start serving.
-func New(ctx context.Context, config Config) (*Server, error) {
+// It sets up the directory and crypto keys but does not start any goroutines.
+// Call Start() to actually run the server.
+func New(config Config) (*Server, error) {
 	if config.Hostname == "" {
 		config.Hostname = config.HTTPSAddr
 	}
@@ -140,29 +134,89 @@ func New(ctx context.Context, config Config) (*Server, error) {
 		return nil, err
 	}
 
-	// Initialize storage and game
-	store, err := storage.New(ctx, config.Dir)
+	return &Server{
+		config: config,
+		crypto: cr,
+		signer: signer,
+	}, nil
+}
+
+// Start begins serving on all configured addresses.
+// This function blocks until the context is cancelled or a server error occurs.
+// All resources are cleaned up when Start returns.
+func (s *Server) Start(ctx context.Context) error {
+	sshLn, err := net.Listen("tcp", s.config.SSHAddr)
 	if err != nil {
-		return nil, err
+		return juicemud.WithStack(err)
+	}
+	defer sshLn.Close()
+
+	httpsLn, err := net.Listen("tcp", s.config.HTTPSAddr)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	defer httpsLn.Close()
+
+	var httpLn net.Listener
+	if s.config.EnableHTTP {
+		httpLn, err = net.Listen("tcp", s.config.HTTPAddr)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		defer httpLn.Close()
 	}
 
+	return s.startWithListeners(ctx, sshLn, httpLn, httpsLn)
+}
+
+// StartWithListeners starts the server using the provided listeners.
+// This is useful for testing where you want to use random ports.
+// The httpLn listener is only used if EnableHTTP is true in the config.
+// This function blocks until the context is cancelled or a server error occurs.
+// The caller is responsible for closing the listeners after this returns.
+func (s *Server) StartWithListeners(ctx context.Context, sshLn, httpLn, httpsLn net.Listener) error {
+	return s.startWithListeners(ctx, sshLn, httpLn, httpsLn)
+}
+
+func (s *Server) startWithListeners(ctx context.Context, sshLn, httpLn, httpsLn net.Listener) error {
+	// Create cancellable context - defer cancel ensures cleanup on any exit
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Initialize storage
+	store, err := storage.New(ctx, s.config.Dir)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	defer store.Close()
+
+	// Initialize game
 	g, err := game.New(ctx, store)
 	if err != nil {
-		store.Close()
-		return nil, err
+		return juicemud.WithStack(err)
 	}
+	defer g.Wait()
+
+	// Set fields for accessor methods
+	s.storage = store
+	s.game = g
+	defer func() {
+		s.storage = nil
+		s.game = nil
+	}()
 
 	// Create SSH server
 	sshServer := &ssh.Server{
-		Addr:    config.SSHAddr,
+		Addr:    s.config.SSHAddr,
 		Handler: g.HandleSession,
 	}
-	sshServer.AddHostKey(signer)
+	sshServer.AddHostKey(s.signer)
 
 	// Create WebDAV handler with auth
 	fsys := &fs.Fs{Storage: store}
 	davHandler := dav.New(fsys)
-	digestAuth := digest.NewDigestAuth(juicemud.DAVAuthRealm, store)
+	defer davHandler.Close()
+	digestAuth := digest.NewDigestAuth(ctx, juicemud.DAVAuthRealm, store)
 	auth := digestAuth.Wrap(davHandler)
 
 	logger := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,69 +230,16 @@ func New(ctx context.Context, config Config) (*Server, error) {
 	})
 
 	httpsServer := &http.Server{
-		Addr:    config.HTTPSAddr,
+		Addr:    s.config.HTTPSAddr,
 		Handler: logger,
 	}
 
 	httpServer := &http.Server{
-		Addr:    config.HTTPAddr,
+		Addr:    s.config.HTTPAddr,
 		Handler: logger,
 	}
 
-	return &Server{
-		config:      config,
-		storage:     store,
-		game:        g,
-		sshServer:   sshServer,
-		httpsServer: httpsServer,
-		httpServer:  httpServer,
-		crypto:      cr,
-		davHandler:  davHandler,
-		digestAuth:  digestAuth,
-	}, nil
-}
-
-// Start begins serving on all configured addresses.
-// This function blocks until the server is shut down.
-func (s *Server) Start() error {
-	sshLn, err := net.Listen("tcp", s.config.SSHAddr)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-
-	httpsLn, err := net.Listen("tcp", s.config.HTTPSAddr)
-	if err != nil {
-		sshLn.Close()
-		return juicemud.WithStack(err)
-	}
-
-	var httpLn net.Listener
-	if s.config.EnableHTTP {
-		httpLn, err = net.Listen("tcp", s.config.HTTPAddr)
-		if err != nil {
-			sshLn.Close()
-			httpsLn.Close()
-			return juicemud.WithStack(err)
-		}
-	}
-
-	return s.StartWithListeners(sshLn, httpLn, httpsLn)
-}
-
-// StartWithListeners starts the server using the provided listeners.
-// This is useful for testing where you want to use random ports.
-// The httpLn listener is only used if EnableHTTP is true in the config.
-func (s *Server) StartWithListeners(sshLn, httpLn, httpsLn net.Listener) error {
-	s.sshListener = sshLn
-	s.httpListener = httpLn
-	s.httpsListener = httpsLn
-
-	fingerprint := ""
-	if pemBytes, err := os.ReadFile(s.crypto.PrivKeyPath); err == nil {
-		if signer, err := gossh.ParsePrivateKey(pemBytes); err == nil {
-			fingerprint = gossh.FingerprintSHA256(signer.PublicKey())
-		}
-	}
+	fingerprint := gossh.FingerprintSHA256(s.signer.PublicKey())
 
 	log.Printf("Serving SSH on %q with public key %q", sshLn.Addr(), fingerprint)
 	log.Printf("Serving HTTPS on %q with public key %q", httpsLn.Addr(), fingerprint)
@@ -252,81 +253,43 @@ func (s *Server) StartWithListeners(sshLn, httpLn, httpsLn net.Listener) error {
 	errCh := make(chan error, numServers)
 
 	go func() {
-		errCh <- s.httpsServer.ServeTLS(httpsLn, s.crypto.HTTPSCertPath, s.crypto.PrivKeyPath)
+		errCh <- httpsServer.ServeTLS(httpsLn, s.crypto.HTTPSCertPath, s.crypto.PrivKeyPath)
 	}()
 
 	if s.config.EnableHTTP && httpLn != nil {
 		go func() {
-			errCh <- s.httpServer.Serve(httpLn)
+			errCh <- httpServer.Serve(httpLn)
 		}()
 	}
 
 	go func() {
-		errCh <- s.sshServer.Serve(sshLn)
+		errCh <- sshServer.Serve(sshLn)
 	}()
 
-	return <-errCh
-}
+	// Wait for context cancellation or server error
+	select {
+	case err := <-errCh:
+		return juicemud.WithStack(err)
+	case <-ctx.Done():
+		// Graceful shutdown
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
 
-// Close shuts down all servers and closes storage.
-func (s *Server) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	var errs []error
-
-	if err := s.sshServer.Shutdown(ctx); err != nil {
-		errs = append(errs, err)
+		sshServer.Shutdown(shutdownCtx)
+		httpsServer.Shutdown(shutdownCtx)
+		httpServer.Shutdown(shutdownCtx)
+		return nil
 	}
-	if err := s.httpsServer.Shutdown(ctx); err != nil {
-		errs = append(errs, err)
-	}
-	if err := s.httpServer.Shutdown(ctx); err != nil {
-		errs = append(errs, err)
-	}
-	s.davHandler.Close()
-	s.digestAuth.Close()
-	s.game.Close()
-	if err := s.storage.Close(); err != nil {
-		errs = append(errs, err)
-	}
-
-	if len(errs) > 0 {
-		return errs[0]
-	}
-	return nil
-}
-
-// SSHAddr returns the actual SSH address (useful when using port 0).
-func (s *Server) SSHAddr() string {
-	if s.sshListener != nil {
-		return s.sshListener.Addr().String()
-	}
-	return s.config.SSHAddr
-}
-
-// HTTPAddr returns the actual HTTP address (useful when using port 0).
-func (s *Server) HTTPAddr() string {
-	if s.httpListener != nil {
-		return s.httpListener.Addr().String()
-	}
-	return s.config.HTTPAddr
-}
-
-// HTTPSAddr returns the actual HTTPS address (useful when using port 0).
-func (s *Server) HTTPSAddr() string {
-	if s.httpsListener != nil {
-		return s.httpsListener.Addr().String()
-	}
-	return s.config.HTTPSAddr
 }
 
 // Storage returns the server's storage instance.
+// Only valid while the server is running (after Start returns, before shutdown).
 func (s *Server) Storage() *storage.Storage {
 	return s.storage
 }
 
 // Game returns the server's game instance.
+// Only valid while the server is running (after Start returns, before shutdown).
 func (s *Server) Game() *game.Game {
 	return s.game
 }

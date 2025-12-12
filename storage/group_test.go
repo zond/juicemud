@@ -17,13 +17,16 @@ func testStorage(t *testing.T) (*Storage, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := juicemud.MakeMainContext(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = juicemud.MakeMainContext(ctx)
 	s, err := New(ctx, dir)
 	if err != nil {
+		cancel()
 		os.RemoveAll(dir)
 		t.Fatal(err)
 	}
 	cleanup := func() {
+		cancel() // Cancel context first to stop goroutines
 		s.Close()
 		os.RemoveAll(dir)
 	}

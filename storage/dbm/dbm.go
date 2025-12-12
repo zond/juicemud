@@ -2,10 +2,12 @@ package dbm
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"iter"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -110,14 +112,13 @@ func (h *Hash) Del(k string) error {
 //   PostUnlock (after the object's own mutex is released), outside any LiveTypeHash lock.
 // - All other methods use only one mutex at a time.
 type LiveTypeHash[T any, S structs.Snapshottable[T]] struct {
-	closed       chan bool
-	closeOnce    sync.Once
 	hash         *TypeHash[T, S]
 	stage        map[string]*T
 	stageMutex   sync.RWMutex
 	updates      map[string]bool
 	lastUpdate   time.Time
 	updatesMutex sync.RWMutex
+	done         chan struct{} // Closed when flush goroutine exits
 }
 
 func (l *LiveTypeHash[T, S]) Age() time.Duration {
@@ -152,15 +153,11 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 	return nil
 }
 
-// Close flushes pending writes and closes the hash. Safe to call multiple times.
+// Close waits for the flush goroutine to stop, then flushes and closes the file.
 func (l *LiveTypeHash[T, S]) Close() error {
-	var flushErr error
-	l.closeOnce.Do(func() {
-		flushErr = l.Flush()
-		close(l.closed)
-	})
-	if flushErr != nil {
-		return juicemud.WithStack(flushErr)
+	<-l.done // Wait for flush goroutine to stop
+	if err := l.Flush(); err != nil {
+		return juicemud.WithStack(err)
 	}
 	return juicemud.WithStack(l.hash.Close())
 }
@@ -180,17 +177,19 @@ func (l *LiveTypeHash[T, S]) Each() iter.Seq2[*T, error] {
 	}
 }
 
-func (l *LiveTypeHash[T, S]) Start() error {
-	timer := time.NewTicker(time.Second)
+// runFlushLoop periodically flushes dirty entries to disk until context is cancelled.
+func (l *LiveTypeHash[T, S]) runFlushLoop(ctx context.Context) {
+	defer close(l.done)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		select {
-		case <-timer.C:
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 			if err := l.Flush(); err != nil {
-				return err
+				log.Printf("LiveTypeHash flush error: %v", err)
 			}
-		case <-l.closed:
-			timer.Stop()
-			return nil
 		}
 	}
 }
@@ -680,17 +679,21 @@ func OpenTypeHash[T any, S structs.Serializable[T]](path string) (*TypeHash[T, S
 	return &TypeHash[T, S]{h}, nil
 }
 
-func OpenLiveTypeHash[T any, S structs.Snapshottable[T]](path string) (*LiveTypeHash[T, S], error) {
+// OpenLiveTypeHash opens a LiveTypeHash and starts the flush goroutine.
+// The goroutine stops when the context is cancelled.
+func OpenLiveTypeHash[T any, S structs.Snapshottable[T]](ctx context.Context, path string) (*LiveTypeHash[T, S], error) {
 	h, err := OpenHash(path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	return &LiveTypeHash[T, S]{
-		closed:  make(chan bool),
+	l := &LiveTypeHash[T, S]{
 		hash:    &TypeHash[T, S]{h},
 		stage:   map[string]*T{},
 		updates: map[string]bool{},
-	}, nil
+		done:    make(chan struct{}),
+	}
+	go l.runFlushLoop(ctx)
+	return l, nil
 }
 
 func OpenTree(path string) (*Tree, error) {

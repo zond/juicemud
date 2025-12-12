@@ -17,6 +17,8 @@ type TestServer struct {
 	sshListener   net.Listener
 	httpListener  net.Listener
 	httpsListener net.Listener
+	cancel        context.CancelFunc
+	done          chan struct{} // closed when server goroutine exits
 }
 
 // NewTestServer creates a new test server with random ports.
@@ -26,7 +28,6 @@ func NewTestServer() (*TestServer, error) {
 		return nil, err
 	}
 
-	ctx := context.Background()
 	config := server.Config{
 		SSHAddr:    "127.0.0.1:0",
 		HTTPSAddr:  "127.0.0.1:0",
@@ -36,7 +37,7 @@ func NewTestServer() (*TestServer, error) {
 		Dir:        tmpDir,
 	}
 
-	srv, err := server.New(ctx, config)
+	srv, err := server.New(config)
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		return nil, err
@@ -45,7 +46,6 @@ func NewTestServer() (*TestServer, error) {
 	// Create listeners with random ports
 	sshLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		srv.Close()
 		os.RemoveAll(tmpDir)
 		return nil, err
 	}
@@ -53,7 +53,6 @@ func NewTestServer() (*TestServer, error) {
 	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		sshLn.Close()
-		srv.Close()
 		os.RemoveAll(tmpDir)
 		return nil, err
 	}
@@ -62,10 +61,12 @@ func NewTestServer() (*TestServer, error) {
 	if err != nil {
 		httpLn.Close()
 		sshLn.Close()
-		srv.Close()
 		os.RemoveAll(tmpDir)
 		return nil, err
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 
 	ts := &TestServer{
 		Server:        srv,
@@ -73,11 +74,14 @@ func NewTestServer() (*TestServer, error) {
 		sshListener:   sshLn,
 		httpListener:  httpLn,
 		httpsListener: httpsLn,
+		cancel:        cancel,
+		done:          done,
 	}
 
 	// Start server in background
 	go func() {
-		srv.StartWithListeners(sshLn, httpLn, httpsLn)
+		defer close(done)
+		srv.StartWithListeners(ctx, sshLn, httpLn, httpsLn)
 	}()
 
 	// Wait for server to be ready by polling the SSH port
@@ -99,7 +103,11 @@ func NewTestServer() (*TestServer, error) {
 
 // Close shuts down the test server and cleans up.
 func (ts *TestServer) Close() {
-	ts.Server.Close()
+	ts.cancel()
+	<-ts.done // wait for server to fully shut down
+	ts.sshListener.Close()
+	ts.httpListener.Close()
+	ts.httpsListener.Close()
 	os.RemoveAll(ts.tmpDir)
 }
 

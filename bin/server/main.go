@@ -22,11 +22,10 @@ func main() {
 
 	flag.Parse()
 
-	ctx := context.Background()
-	srv, err := server.New(ctx, config)
+	srv, err := server.New(config)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Fatal(srv.Start())
+	log.Fatal(srv.Start(context.Background()))
 }

@@ -36,40 +36,30 @@ const (
 	loginAttemptCleanup  = 1 * time.Minute
 )
 
-// loginRateLimiterT tracks failed login attempts per username for rate limiting.
+// loginRateLimiter tracks failed login attempts per username for rate limiting.
 // Entries older than loginAttemptInterval are periodically cleaned up.
-type loginRateLimiterT struct {
-	mu        sync.Mutex
-	attempts  map[string]time.Time
-	closeCh   chan struct{}
-	closeOnce sync.Once
+type loginRateLimiter struct {
+	mu       sync.RWMutex
+	attempts map[string]time.Time
 }
 
-var loginRateLimiter = newLoginRateLimiter()
-
-func newLoginRateLimiter() *loginRateLimiterT {
-	l := &loginRateLimiterT{
+// newLoginRateLimiter creates a new login rate limiter and starts the cleanup
+// loop. The loop runs until the context is cancelled.
+func newLoginRateLimiter(ctx context.Context) *loginRateLimiter {
+	l := &loginRateLimiter{
 		attempts: make(map[string]time.Time),
-		closeCh:  make(chan struct{}),
 	}
-	go l.cleanup()
+	go l.runCleanupLoop(ctx)
 	return l
 }
 
-// Close stops the cleanup goroutine. Safe to call multiple times.
-func (l *loginRateLimiterT) Close() {
-	l.closeOnce.Do(func() {
-		close(l.closeCh)
-	})
-}
-
-// cleanup periodically removes expired login attempt entries.
-func (l *loginRateLimiterT) cleanup() {
+// runCleanupLoop periodically removes expired login attempt entries.
+func (l *loginRateLimiter) runCleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(loginAttemptCleanup)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-l.closeCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			l.mu.Lock()
@@ -85,10 +75,10 @@ func (l *loginRateLimiterT) cleanup() {
 }
 
 // waitIfNeeded blocks if a recent failed attempt exists for the username.
-func (l *loginRateLimiterT) waitIfNeeded(username string, term *term.Terminal) {
-	l.mu.Lock()
+func (l *loginRateLimiter) waitIfNeeded(username string, term *term.Terminal) {
+	l.mu.RLock()
 	last, ok := l.attempts[username]
-	l.mu.Unlock()
+	l.mu.RUnlock()
 	if ok {
 		if wait := loginAttemptInterval - time.Since(last); wait > 0 {
 			fmt.Fprintf(term, "Please wait %v before trying again.\n", wait.Round(time.Second))
@@ -98,14 +88,14 @@ func (l *loginRateLimiterT) waitIfNeeded(username string, term *term.Terminal) {
 }
 
 // recordFailure records a failed login attempt for rate limiting.
-func (l *loginRateLimiterT) recordFailure(username string) {
+func (l *loginRateLimiter) recordFailure(username string) {
 	l.mu.Lock()
 	l.attempts[username] = time.Now()
 	l.mu.Unlock()
 }
 
 // clearFailure removes the rate limit entry on successful login.
-func (l *loginRateLimiterT) clearFailure(username string) {
+func (l *loginRateLimiter) clearFailure(username string) {
 	l.mu.Lock()
 	delete(l.attempts, username)
 	l.mu.Unlock()
@@ -517,7 +507,7 @@ func (c *Connection) loginUser() error {
 		}
 
 		// Rate limit login attempts per username (only after failed attempts)
-		loginRateLimiter.waitIfNeeded(username, c.term)
+		c.game.loginRateLimiter.waitIfNeeded(username, c.term)
 
 		fmt.Fprint(c.term, "Enter password or [abort]:\n")
 		password, err := c.term.ReadPassword("> ")
@@ -531,7 +521,7 @@ func (c *Connection) loginUser() error {
 		user, err := c.game.storage.LoadUser(c.ctx, username)
 		if errors.Is(err, os.ErrNotExist) {
 			// User doesn't exist - add delay to prevent timing-based enumeration
-			loginRateLimiter.recordFailure(username)
+			c.game.loginRateLimiter.recordFailure(username)
 			c.game.storage.AuditLog(c.ctx, "LOGIN_FAILED", storage.AuditLoginFailed{
 				User:   storage.Ref(0, username),
 				Remote: c.sess.RemoteAddr().String(),
@@ -545,7 +535,7 @@ func (c *Connection) loginUser() error {
 		ha1 := digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
 		if subtle.ConstantTimeCompare([]byte(ha1), []byte(user.PasswordHash)) != 1 {
 			// Record failed attempt for rate limiting
-			loginRateLimiter.recordFailure(user.Name)
+			c.game.loginRateLimiter.recordFailure(user.Name)
 			c.game.storage.AuditLog(c.ctx, "LOGIN_FAILED", storage.AuditLoginFailed{
 				User:   storage.Ref(user.Id, user.Name),
 				Remote: c.sess.RemoteAddr().String(),
@@ -553,7 +543,7 @@ func (c *Connection) loginUser() error {
 			fmt.Fprintln(c.term, "Invalid credentials!")
 		} else {
 			// Successful login - clear any rate limit for this user
-			loginRateLimiter.clearFailure(user.Name)
+			c.game.loginRateLimiter.clearFailure(user.Name)
 			c.user = user
 		}
 	}

@@ -13,8 +13,9 @@ import (
 )
 
 func TestNewQueueStats(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	if qs.objects == nil {
 		t.Error("objects map should be initialized")
@@ -43,8 +44,9 @@ func TestNewQueueStats(t *testing.T) {
 }
 
 func TestRecordEvent(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordEvent("obj1")
 	qs.RecordEvent("obj1")
@@ -75,8 +77,9 @@ func TestRecordEvent(t *testing.T) {
 }
 
 func TestRecordError(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	err := errors.New("test error")
 	qs.RecordError("obj1", err)
@@ -108,9 +111,6 @@ func TestRecordError(t *testing.T) {
 }
 
 func TestRecordErrorCategories(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
-
 	tests := []struct {
 		name     string
 		err      error
@@ -140,8 +140,9 @@ func TestRecordErrorCategories(t *testing.T) {
 }
 
 func TestRecentErrors(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Record some errors
 	for i := 0; i < 5; i++ {
@@ -163,8 +164,9 @@ func TestRecentErrors(t *testing.T) {
 }
 
 func TestRecentErrorsForObject(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordError("obj1", errors.New("err1"))
 	qs.RecordError("obj2", errors.New("err2"))
@@ -183,8 +185,9 @@ func TestRecentErrorsForObject(t *testing.T) {
 }
 
 func TestRecentErrorsCircularBuffer(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Fill the buffer and overflow
 	for i := 0; i < recentErrorsBufferSize+100; i++ {
@@ -205,8 +208,9 @@ func TestRecentErrorsCircularBuffer(t *testing.T) {
 }
 
 func TestGlobalSnapshot(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordEvent("obj1")
 	qs.RecordEvent("obj1")
@@ -229,8 +233,9 @@ func TestGlobalSnapshot(t *testing.T) {
 }
 
 func TestObjectSnapshot(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordEvent("obj1")
 	qs.RecordEvent("obj1")
@@ -258,8 +263,9 @@ func TestObjectSnapshot(t *testing.T) {
 }
 
 func TestTopCategories(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordError("obj", errors.New("generic1"))
 	qs.RecordError("obj", errors.New("generic2"))
@@ -282,8 +288,9 @@ func TestTopCategories(t *testing.T) {
 }
 
 func TestTopLocations(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Record errors - they'll all be at "(unknown)" location since we're using simple errors
 	for i := 0; i < 5; i++ {
@@ -300,8 +307,9 @@ func TestTopLocations(t *testing.T) {
 }
 
 func TestTopObjects(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// obj1: 10 events, 2 errors (20% error rate)
 	for i := 0; i < 10; i++ {
@@ -362,8 +370,9 @@ func createTestError(msg string) error {
 }
 
 func TestObjectsAtLocation(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Use a helper to create errors at a common location
 	err1 := createTestError("err1")
@@ -397,8 +406,9 @@ func TestObjectsAtLocation(t *testing.T) {
 }
 
 func TestReset(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordEvent("obj1")
 	qs.RecordError("obj1", errors.New("err"))
@@ -423,8 +433,9 @@ func TestReset(t *testing.T) {
 }
 
 func TestUpdateRates(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Record some events
 	for i := 0; i < 10; i++ {
@@ -468,8 +479,9 @@ func TestRateStatsUpdate(t *testing.T) {
 }
 
 func TestTimeBucketTracking(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordEvent("obj1")
 
@@ -497,8 +509,9 @@ func TestTimeBucketTracking(t *testing.T) {
 }
 
 func TestLocationBucketTracking(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordError("obj1", errors.New("test error"))
 
@@ -528,8 +541,9 @@ func TestLocationBucketTracking(t *testing.T) {
 }
 
 func TestTouchObjectSameBucket(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Record event - creates bucket entry
 	qs.RecordEvent("obj1")
@@ -550,8 +564,9 @@ func TestTouchObjectSameBucket(t *testing.T) {
 }
 
 func TestEvictStaleLocked(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Add an object
 	qs.RecordEvent("obj1")
@@ -608,8 +623,9 @@ func TestEvictStaleLocked(t *testing.T) {
 }
 
 func TestEvictionPreservesCategories(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordError("obj1", errors.New("err"))
 
@@ -622,18 +638,20 @@ func TestEvictionPreservesCategories(t *testing.T) {
 	}
 }
 
-func TestCloseMultipleTimes(t *testing.T) {
-	qs := NewQueueStats()
+func TestCancelMultipleTimes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = NewQueueStats(ctx)
 
-	// Should not panic when called multiple times
-	qs.Close()
-	qs.Close()
-	qs.Close()
+	// Should not panic when cancel is called multiple times
+	cancel()
+	cancel()
+	cancel()
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	done := make(chan bool)
 
@@ -845,8 +863,9 @@ func TestClassifyErrorJS(t *testing.T) {
 }
 
 func TestSnapshotCopiesData(t *testing.T) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	qs.RecordEvent("obj1")
 	qs.RecordError("obj1", errors.New("err"))
@@ -870,8 +889,9 @@ func TestSnapshotCopiesData(t *testing.T) {
 // Benchmark tests
 
 func BenchmarkRecordEvent(b *testing.B) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -880,8 +900,9 @@ func BenchmarkRecordEvent(b *testing.B) {
 }
 
 func BenchmarkRecordError(b *testing.B) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 	err := errors.New("test error")
 
 	b.ResetTimer()
@@ -891,8 +912,9 @@ func BenchmarkRecordError(b *testing.B) {
 }
 
 func BenchmarkGlobalSnapshot(b *testing.B) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Pre-populate with some data
 	for i := 0; i < 1000; i++ {
@@ -906,8 +928,9 @@ func BenchmarkGlobalSnapshot(b *testing.B) {
 }
 
 func BenchmarkTopObjects(b *testing.B) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Pre-populate with some data
 	for i := 0; i < 1000; i++ {
@@ -922,8 +945,9 @@ func BenchmarkTopObjects(b *testing.B) {
 }
 
 func BenchmarkUpdateRates(b *testing.B) {
-	qs := NewQueueStats()
-	defer qs.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	qs := NewQueueStats(ctx)
 
 	// Pre-populate with some data
 	for i := 0; i < 1000; i++ {

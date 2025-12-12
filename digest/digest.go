@@ -48,38 +48,30 @@ type DigestAuth struct {
 	UserStore UserStore
 	Opaque    string
 
-	noncesMu  sync.Mutex
-	nonces    map[string]nonceEntry
-	closeCh   chan struct{}
-	closeOnce sync.Once
+	noncesMu sync.Mutex
+	nonces   map[string]nonceEntry
 }
 
-func NewDigestAuth(realm string, userStore UserStore) *DigestAuth {
+// NewDigestAuth creates a new DigestAuth instance.
+// The cleanup goroutine runs until the context is cancelled.
+func NewDigestAuth(ctx context.Context, realm string, userStore UserStore) *DigestAuth {
 	da := &DigestAuth{
 		Realm:     realm,
 		UserStore: userStore,
 		Opaque:    generateSecureRandom(),
 		nonces:    make(map[string]nonceEntry),
-		closeCh:   make(chan struct{}),
 	}
-	go da.cleanupNonces()
+	go da.cleanupNonces(ctx)
 	return da
 }
 
-// Close stops the cleanup goroutine. Safe to call multiple times.
-func (da *DigestAuth) Close() {
-	da.closeOnce.Do(func() {
-		close(da.closeCh)
-	})
-}
-
-// cleanupNonces periodically removes expired nonces.
-func (da *DigestAuth) cleanupNonces() {
+// cleanupNonces periodically removes expired nonces until context is cancelled.
+func (da *DigestAuth) cleanupNonces(ctx context.Context) {
 	ticker := time.NewTicker(nonceCleanupInterval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-da.closeCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			da.noncesMu.Lock()

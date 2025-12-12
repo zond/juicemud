@@ -185,16 +185,13 @@ type QueueStats struct {
 
 	// Eviction tracking
 	lastEviction time.Time
-
-	// Lifecycle
-	closeCh   chan struct{}
-	closeOnce sync.Once
 }
 
-// NewQueueStats creates a new QueueStats tracker.
-func NewQueueStats() *QueueStats {
+// NewQueueStats creates a new QueueStats tracker and starts the periodic
+// rate update loop. The loop runs until the context is cancelled.
+func NewQueueStats(ctx context.Context) *QueueStats {
 	now := time.Now()
-	return &QueueStats{
+	q := &QueueStats{
 		objects:         make(map[string]*ObjectStats),
 		byCategory:      make(map[ErrorCategory]*ErrorStats),
 		byLocation:      make(map[string]*ErrorStats),
@@ -205,29 +202,23 @@ func NewQueueStats() *QueueStats {
 		recentErrors:    make([]ErrorRecord, recentErrorsBufferSize),
 		startTime:       now,
 		lastEviction:    now,
-		closeCh:         make(chan struct{}),
 	}
+	go q.runUpdateLoop(ctx)
+	return q
 }
 
-// Start begins the periodic rate update loop. Should be called in a goroutine.
-func (q *QueueStats) Start() {
+// runUpdateLoop runs the periodic rate update loop until context is cancelled.
+func (q *QueueStats) runUpdateLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-q.closeCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			q.UpdateRates()
 		}
 	}
-}
-
-// Close stops the periodic rate update loop. Safe to call multiple times.
-func (q *QueueStats) Close() {
-	q.closeOnce.Do(func() {
-		close(q.closeCh)
-	})
 }
 
 // RecordEvent records an event execution attempt for an object.

@@ -1,6 +1,7 @@
 package dbm
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,8 +44,10 @@ func WithTypeHash[T any, S structs.Serializable[T]](t testing.TB, f func(*TypeHa
 
 func WithLiveTypeHash[T any, S structs.Snapshottable[T]](t testing.TB, f func(*LiveTypeHash[T, S])) {
 	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	withFile(t, ".tkh", func(path string) {
-		dbm, err := OpenLiveTypeHash[T, S](path)
+		dbm, err := OpenLiveTypeHash[T, S](ctx, path)
 		if err != nil {
 			t.Fatal(err)
 		}
