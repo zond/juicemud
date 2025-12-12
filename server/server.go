@@ -296,8 +296,10 @@ func (s *Server) startWithListeners(ctx context.Context, sshLn, httpLn, httpsLn 
 	if err := httpsServer.Shutdown(shutdownCtx); err != nil {
 		errs = append(errs, err)
 	}
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		errs = append(errs, err)
+	if s.config.EnableHTTP {
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
