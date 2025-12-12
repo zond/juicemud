@@ -332,54 +332,66 @@ func (g *Game) loadNeighbourhoodAt(ctx context.Context, loc string) (*structs.Ne
 // 2. Wizards are trusted to configure the game
 // 3. Skill configs are game balance settings, not security-sensitive
 func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
-	callbacks["getSkillConfigs"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		args := info.Args()
-		if len(args) != 0 {
-			return rc.Throw("getSkillConfigs takes no arguments")
-		}
-		res, err := rc.JSFromGo(structs.SkillConfigs)
-		if err != nil {
-			return rc.Throw("trying to convert %v to *v8go.Value: %v", structs.SkillConfigs, err)
-		}
-		return res
-	}
-	callbacks["setSkillConfigs"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		args := info.Args()
-		if len(args) != 1 || !args[0].IsObject() {
-			return rc.Throw("setSkillConfigs takes [Object] arguments")
-		}
-		if err := rc.Copy(&structs.SkillConfigs, args[0]); err != nil {
-			return rc.Throw("trying to convert %v to structs.SkillConfigs: %v", args[0], err)
-		}
-		return nil
-
-	}
+	// getSkillConfig(name) -> config or null
 	callbacks["getSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 1 || !args[0].IsString() {
 			return rc.Throw("getSkillConfig takes [string] arguments")
 		}
-		skill, found := structs.SkillConfigs.GetHas(args[0].String())
+		skill, found := structs.SkillConfigs.Get(args[0].String())
 		if !found {
 			return nil
 		}
 		res, err := rc.JSFromGo(skill)
 		if err != nil {
-			return rc.Throw("trying to convert %v to *v8go.Value: %v", structs.SkillConfigs, err)
+			return rc.Throw("trying to convert %v to *v8go.Value: %v", skill, err)
 		}
 		return res
 	}
-	callbacks["setSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+
+	// casSkillConfig(name, oldConfig, newConfig) -> boolean
+	// Atomically updates a skill config if current value matches oldConfig.
+	// - oldConfig null: succeeds only if key doesn't exist (insert)
+	// - newConfig null: deletes the key (if oldConfig matched)
+	// Returns true if swap succeeded, false if current value didn't match.
+	callbacks["casSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
-		if len(args) != 2 || !args[0].IsString() || !args[1].IsObject() {
-			return rc.Throw("setSkillConfig takes [string, Object] arguments")
+		if len(args) != 3 || !args[0].IsString() {
+			return rc.Throw("casSkillConfig takes [string, Object|null, Object|null] arguments")
 		}
-		skill := structs.SkillConfig{}
-		if err := rc.Copy(&skill, args[1]); err != nil {
-			return rc.Throw("trying to convert %v to &structs.SkillConfig{}: %v", args[1], err)
+
+		name := args[0].String()
+
+		var oldConfig *structs.SkillConfig
+		if !args[1].IsNull() && !args[1].IsUndefined() {
+			if !args[1].IsObject() {
+				return rc.Throw("casSkillConfig: oldConfig must be Object or null")
+			}
+			old := structs.SkillConfig{}
+			if err := rc.Copy(&old, args[1]); err != nil {
+				return rc.Throw("trying to convert oldConfig: %v", err)
+			}
+			oldConfig = &old
 		}
-		structs.SkillConfigs.Set(args[0].String(), skill)
-		return nil
+
+		var newConfig *structs.SkillConfig
+		if !args[2].IsNull() && !args[2].IsUndefined() {
+			if !args[2].IsObject() {
+				return rc.Throw("casSkillConfig: newConfig must be Object or null")
+			}
+			new := structs.SkillConfig{}
+			if err := rc.Copy(&new, args[2]); err != nil {
+				return rc.Throw("trying to convert newConfig: %v", err)
+			}
+			newConfig = &new
+		}
+
+		swapped := structs.SkillConfigs.CompareAndSwap(name, oldConfig, newConfig)
+		res, err := rc.JSFromGo(swapped)
+		if err != nil {
+			return rc.Throw("trying to convert result: %v", err)
+		}
+		return res
 	}
 }
 

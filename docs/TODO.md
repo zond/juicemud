@@ -165,11 +165,12 @@
 ### 22. SkillConfigs Race Condition
 **File:** `game/processing.go:304-341`
 **Issue:** `structs.SkillConfigs` is a global `SyncMap` that can be modified by any JavaScript code via `setSkillConfigs`. The get-modify-set pattern isn't atomic, so concurrent modifications could lose updates.
-**Options:**
-- Add a `CompareAndSwap` or merge operation
-- Make skill configs per-object rather than global
-- Document that skill configs should only be set during initialization
-**Status:** Open - needs discussion
+**Fix:** Replaced with `SkillConfigStore` that provides:
+- `Get(name)` - returns config and found bool
+- `CompareAndSwap(name, old, new)` - atomic update if current matches old; nil old means insert-if-absent, nil new means delete
+- `Set(name, config)` - unconditional set for initialization/testing
+Removed `getSkillConfigs`/`setSkillConfigs` JS functions. Added `casSkillConfig(name, old, new)` JS function.
+**Status:** Fixed
 
 ### 23. Missing Context Cancellation in Sync Loop
 **File:** `storage/storage.go:498-517`

@@ -608,8 +608,64 @@ func (a *AnyEvent) Event() (*Event, error) {
 	}, nil
 }
 
+// SkillConfigStore provides thread-safe access to skill configurations with
+// compare-and-swap semantics to prevent lost updates from concurrent modifications.
+type SkillConfigStore struct {
+	m *juicemud.SyncMap[string, SkillConfig]
+}
+
+// NewSkillConfigStore creates a new skill config store.
+func NewSkillConfigStore() *SkillConfigStore {
+	return &SkillConfigStore{
+		m: juicemud.NewSyncMap[string, SkillConfig](),
+	}
+}
+
+// Get returns the config for the given skill name, or zero value if not found.
+func (s *SkillConfigStore) Get(name string) (SkillConfig, bool) {
+	return s.m.GetHas(name)
+}
+
+// CompareAndSwap atomically updates a skill config if the current value matches old.
+// If old is nil, succeeds only if the key doesn't exist (insert).
+// If new is nil, deletes the key (if old matched).
+// Returns true if the operation succeeded.
+func (s *SkillConfigStore) CompareAndSwap(name string, old *SkillConfig, new *SkillConfig) bool {
+	var swapped bool
+	s.m.WithLock(name, func() {
+		current, exists := s.m.GetHas(name)
+
+		// Check if current state matches expected old state
+		if old == nil {
+			// Caller expects key to not exist
+			if exists {
+				return
+			}
+		} else {
+			// Caller expects key to exist with specific value
+			if !exists || current != *old {
+				return
+			}
+		}
+
+		// Current state matches - perform the update
+		if new == nil {
+			s.m.Del(name)
+		} else {
+			s.m.Set(name, *new)
+		}
+		swapped = true
+	})
+	return swapped
+}
+
+// Set unconditionally sets a skill config (for initialization/testing).
+func (s *SkillConfigStore) Set(name string, config SkillConfig) {
+	s.m.Set(name, config)
+}
+
 var (
-	SkillConfigs = juicemud.NewSyncMap[string, SkillConfig]()
+	SkillConfigs = NewSkillConfigStore()
 )
 
 type SkillDuration float64
@@ -647,7 +703,7 @@ func (s *Skill) specificRecharge(at Timestamp, recharge SkillDuration) float64 {
 // improvement calculates skill XP gain based on recharge, skill level, and challenge difficulty.
 func (s *Skill) improvement(at Timestamp, challenge float64, effective float64) float64 {
 	recharge := 6 * time.Minute
-	if sk, found := SkillConfigs.GetHas(s.Name); found && sk.Recharge.Duration() > recharge {
+	if sk, found := SkillConfigs.Get(s.Name); found && sk.Recharge.Duration() > recharge {
 		recharge = sk.Recharge.Duration()
 	}
 	rechargeCoeff := math.Min(1, float64(at.Time().Sub(Timestamp(s.LastUsedAt).Time()))/float64(recharge))
@@ -660,7 +716,7 @@ func (s *Skill) improvement(at Timestamp, challenge float64, effective float64) 
 
 // Returns the effective level of this skill considering amount forgotten since last use.
 func (s *Skill) Effective(at Timestamp) float64 {
-	if config, found := SkillConfigs.GetHas(s.Name); found && config.Forget != 0 {
+	if config, found := SkillConfigs.Get(s.Name); found && config.Forget != 0 {
 		nanosSinceLastUse := at.Nanoseconds() - Timestamp(s.LastUsedAt).Nanoseconds()
 		forgetFraction := float64(nanosSinceLastUse) / float64(config.Forget.Nanoseconds())
 		forgetCoeff := 1 + (-1 / (1 + math.Exp(8-8*forgetFraction))) + (1 / math.Exp(8))
@@ -678,7 +734,7 @@ func (s *Skill) rechargeCoeff(at Timestamp) float64 {
 		return 1.0
 	}
 
-	if sk, found := SkillConfigs.GetHas(s.Name); found && sk.Recharge != 0 {
+	if sk, found := SkillConfigs.Get(s.Name); found && sk.Recharge != 0 {
 		rechargeCoeff := s.specificRecharge(at, sk.Recharge)
 		cumulativeReuse := float64(s.LastBase) * sk.Reuse
 		return cumulativeReuse + (1-cumulativeReuse)*rechargeCoeff
@@ -736,7 +792,7 @@ func (s skillUse) rng() *rnd.Rand {
 	h.Write([]byte(s.skill.Name))
 	h.Write([]byte(s.target))
 
-	skillConfig := SkillConfigs.Get(s.skill.Name)
+	skillConfig, _ := SkillConfigs.Get(s.skill.Name)
 
 	// Seed the hash with time step based on skill duration.
 	step := uint64(s.at.UnixNano())
