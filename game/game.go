@@ -126,11 +126,11 @@ func initialObjects() map[string]*structs.ObjectDO {
 }
 
 type Game struct {
-	storage      *storage.Storage
-	queueStats   *QueueStats
-	workChan     chan *structs.Event // Unbuffered channel for event handoff to workers
-	workerWG     sync.WaitGroup      // Tracks in-flight event workers
-	queueCancel  context.CancelFunc  // Cancels queue context to initiate shutdown
+	storage     *storage.Storage
+	queueStats  *QueueStats
+	workChan    chan *structs.Event // Unbuffered channel for event handoff to workers
+	workerWG    sync.WaitGroup      // Tracks in-flight event workers
+	queueCancel context.CancelFunc  // Cancels queue context to initiate shutdown
 }
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
@@ -172,21 +172,31 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		queueCancel: queueCancel,
 	}
 
-	// Start event workers. They process events until workChan is closed.
+	// processEvent handles a single event. Extracted to avoid duplication.
+	processEvent := func(ev *structs.Event) {
+		var call structs.Caller
+		if ev.Call.Name != "" {
+			call = &ev.Call
+		}
+		g.queueStats.RecordEvent(ev.Object)
+		if _, _, err := g.loadRun(ctx, ev.Object, call); err != nil {
+			g.queueStats.RecordError(ev.Object, err)
+			log.Printf("trying to execute %+v: %v", ev, err)
+			log.Printf("%v", juicemud.StackTrace(err))
+		}
+	}
+
+	// Start event workers. They process events until context is cancelled.
 	for i := 0; i < maxEventWorkers; i++ {
 		g.workerWG.Add(1)
 		go func() {
 			defer g.workerWG.Done()
-			for ev := range g.workChan {
-				var call structs.Caller
-				if ev.Call.Name != "" {
-					call = &ev.Call
-				}
-				g.queueStats.RecordEvent(ev.Object)
-				if _, _, err := g.loadRun(ctx, ev.Object, call); err != nil {
-					g.queueStats.RecordError(ev.Object, err)
-					log.Printf("trying to execute %+v: %v", ev, err)
-					log.Printf("%v", juicemud.StackTrace(err))
+			for {
+				select {
+				case ev := <-g.workChan:
+					processEvent(ev)
+				case <-queueCtx.Done():
+					return
 				}
 			}
 		}()
@@ -210,7 +220,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 				return ctx.Err() // Shutdown requested, event stays in queue
 			}
 		})
-		if err != nil && !errors.Is(err, context.Canceled) {
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			log.Panic(err)
 		}
 	}()
@@ -239,11 +249,9 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 // Close stops any background goroutines associated with the Game and waits
 // for in-flight event handlers to complete.
 func (g *Game) Close() {
-	// Cancel queue context to stop accepting new events.
+	// Cancel queue context. This stops the queue and all workers.
 	g.queueCancel()
-	// Close work channel to signal workers to stop after draining.
-	close(g.workChan)
-	// Wait for all in-flight event handlers to complete.
+	// Wait for all workers to complete their current event.
 	g.workerWG.Wait()
 
 	loginRateLimiter.Close()

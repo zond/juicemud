@@ -122,6 +122,8 @@ func main() {
 					f.Func().Params(
 						jen.Id("v").Op("*").Id(backendName),
 					).Id("Size").Params().Id("int").Block(
+						jen.Id("v").Dot("RLock").Call(),
+						jen.Defer().Id("v").Dot("RUnlock").Call(),
 						jen.Return(jen.Id("v").Dot("Unsafe").Dot("Size").Call()),
 					)
 					f.Func().Params(

@@ -49,6 +49,8 @@ func (v *Object) RUnlock() {
 	v.mutex.RUnlock()
 }
 func (v *Object) Size() int {
+	v.RLock()
+	defer v.RUnlock()
 	return v.Unsafe.Size()
 }
 func (v *Object) Marshal(b []byte) {
