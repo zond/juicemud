@@ -25,12 +25,13 @@ import (
 // 1.7e18 + 9e18 ≈ 1.1e19, well within uint64's 1.8e19 limit. The system would
 // need to run until year 2554 for current time alone to overflow int64.
 type Queue struct {
-	tree   *dbm.TypeTree[structs.Event, *structs.Event]
-	offset structs.Timestamp
-	wake   chan struct{} // Buffered(1), signals new event or state change
-	done   chan struct{} // Closed when Start() exits
-	mu     sync.Mutex    // Protects closed flag
-	closed bool
+	tree    *dbm.TypeTree[structs.Event, *structs.Event]
+	offset  structs.Timestamp
+	wake    chan struct{} // Buffered(1), signals new event or state change
+	done    chan struct{} // Closed when Start() exits
+	mu      sync.Mutex    // Protects closed and started flags
+	closed  bool
+	started bool
 }
 
 func New(ctx context.Context, t *dbm.TypeTree[structs.Event, *structs.Event]) *Queue {
@@ -76,6 +77,7 @@ func (q *Queue) signal() {
 }
 
 // Close signals the queue to stop and waits for Start() to exit.
+// Safe to call even if Start() was never called.
 func (q *Queue) Close() error {
 	q.mu.Lock()
 	if q.closed {
@@ -83,26 +85,28 @@ func (q *Queue) Close() error {
 		return nil
 	}
 	q.closed = true
+	started := q.started
 	q.mu.Unlock()
 	q.signal()
-	<-q.done
+	if started {
+		<-q.done
+	}
 	return nil
 }
 
 func (q *Queue) Push(ctx context.Context, eventer structs.Eventer) error {
-	q.mu.Lock()
-	if q.closed {
-		q.mu.Unlock()
-		return errors.Errorf("queue is closed")
-	}
-	q.mu.Unlock()
-
 	ev, err := eventer.Event()
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
 	ev.CreateKey()
 
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.closed {
+		return errors.Errorf("queue is closed")
+	}
 	if err := q.tree.Set(ev.Key, ev, false); err != nil {
 		return juicemud.WithStack(err)
 	}
@@ -117,6 +121,9 @@ type EventHandler func(context.Context, *structs.Event)
 // Blocks until the queue is closed or context is cancelled.
 // Due events are processed before returning; future events remain in the queue.
 func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
+	q.mu.Lock()
+	q.started = true
+	q.mu.Unlock()
 	defer close(q.done)
 
 	if ctx.Err() != nil {
