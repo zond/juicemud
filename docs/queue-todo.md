@@ -1,83 +1,40 @@
 # Queue TODO - Issues from Code Review
 
-## 1. Push() After Context Cancellation (Documentation Only)
+## Completed
 
-**Status:** Document only - behavior is acceptable
+### 1. Push() After Context Cancellation (Documentation Only)
+**Status:** Done - documented in queue.go comments
 
-**Issue:** Events pushed after context cancellation starts but before it completes may be persisted but not processed in the current session.
+### 2. Handler Drops Events on Context Cancellation
+**Status:** Fixed - redesigned with worker pool pattern
+- Handler sends to unbuffered channel (blocks until worker receives)
+- Handler returns error if context cancelled before handoff
+- Start() only deletes event if handler returns nil
+- Events not handed off stay in B-tree for next startup
 
-**Decision:** This is acceptable because:
-- After context is cancelled, the queue is supposed to be shut down
-- Persisted events will be processed on next startup
-- This matches the existing behavior where future events persist
+### 3. Remove Close() - Use Context-Only Shutdown
+**Status:** Fixed - Queue.Close() removed
+- Start() returns when context is cancelled
+- Owner (Game) creates child context, cancels it to shut down
+- Game waits for workers via WaitGroup after cancelling
 
-**Action:** Add comment documenting this behavior.
+### 4. Unused ctx Parameter in Push()
+**Status:** Fixed - renamed to `_`
 
-## 2. Handler Drops Events on Context Cancellation (Critical)
+### 5. Missing Tests
+**Status:** Fixed - added new tests
+- TestQueueHandlerError - verifies events persist on handler error
+- TestQueueConcurrentPush - verifies concurrent push safety
 
-**Status:** Needs fix - redesign with worker pool
+---
 
-**File:** `game/game.go`, lines 176-191
+## Remaining
 
-**Problem:** If context is cancelled while a handler goroutine is waiting for a semaphore slot, the event is silently dropped. The event has already been deleted from the B-tree at this point (in `Start()`), so it is lost forever.
-
-**Solution:** Redesign with worker pool pattern:
-1. Handler sends to unbuffered channel (blocks until worker receives)
-2. Pool of N workers read from channel and process events
-3. Handler returns error if context cancelled before handoff
-4. Start() only deletes event if handler returns nil
-5. Events not handed off stay in B-tree for next startup
-
-**Changes required:**
-- Change `EventHandler` signature to return `error`
-- Update `Start()` to check handler error, skip deletion on error
-- Update `game.go` to use worker pool with unbuffered channel
-- Workers wait via WaitGroup to ensure in-flight events complete
-
-## 3. Remove Close() - Use Context-Only Shutdown
-
-**Status:** Needs implementation
-
-**Issue:** Queue has both `Close()` and context cancellation, which is redundant and harder to coordinate.
-
-**Solution:** Remove `Close()` entirely, use context-only shutdown:
-- `Start()` returns when context is cancelled
-- Owner creates child context, cancels it to shut down
-- Owner waits for workers via WaitGroup after Start() returns
-- Remove `closed`, `started`, `done`, `mu` fields from Queue struct
-
-**Benefits:**
-- Single shutdown mechanism
-- Automatic propagation (parent cancel → child cancel)
-- Idiomatic Go pattern
-- Simpler code
-
-## 4. Unused ctx Parameter in Push()
-
-**Status:** Minor cleanup
-
-**File:** `storage/queue/queue.go`, line 98
-
-**Problem:** The `ctx` parameter is never used.
-
-**Fix:** Rename to `_` to signal it's unused but kept for API consistency.
-
-## 5. Missing Tests
-
-**Status:** Needs tests
-
-Update tests after redesign:
-- Concurrent Push() operations
-- Push() during/after context cancellation
-- Context cancellation scenarios
-- Handler errors / handoff failures
-- Worker pool draining on shutdown
-
-## 6. Replace Close() Pattern Across Codebase
+### 6. Replace Close() Pattern Across Codebase
 
 **Status:** Needs investigation and implementation
 
-**Issue:** Other background tasks in the codebase may use the Close() + context dual pattern.
+**Issue:** Other background tasks in the codebase use the Close() + context dual pattern.
 
 **Action:**
 1. Search codebase for background tasks with Close() functions
@@ -104,6 +61,6 @@ wg.Wait()  // Wait for task to complete
 ```
 
 **Files to investigate:**
-- `game/game.go` - Game.Close(), loginRateLimiter.Close(), queueStats.Close()
-- `storage/queue/queue.go` - Queue.Close()
+- `game/connection.go` - loginRateLimiter.Close()
+- `game/queuestats.go` - QueueStats.Close()
 - Any other background goroutines with Close() methods
