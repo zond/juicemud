@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gliderlabs/ssh"
@@ -88,9 +90,11 @@ func DefaultConfig() Config {
 
 // Server represents a running JuiceMUD server instance.
 type Server struct {
-	config  Config
-	crypto  crypto.Crypto
-	signer  gossh.Signer
+	config Config
+	crypto crypto.Crypto
+	signer gossh.Signer
+
+	mu      sync.RWMutex
 	storage *storage.Storage // Set during Start, nil before/after
 	game    *game.Game       // Set during Start, nil before/after
 }
@@ -197,12 +201,16 @@ func (s *Server) startWithListeners(ctx context.Context, sshLn, httpLn, httpsLn 
 	}
 	defer g.Wait()
 
-	// Set fields for accessor methods
+	// Set fields for accessor methods (synchronized)
+	s.mu.Lock()
 	s.storage = store
 	s.game = g
+	s.mu.Unlock()
 	defer func() {
+		s.mu.Lock()
 		s.storage = nil
 		s.game = nil
+		s.mu.Unlock()
 	}()
 
 	// Create SSH server
@@ -275,21 +283,32 @@ func (s *Server) startWithListeners(ctx context.Context, sshLn, httpLn, httpsLn 
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
 
-		sshServer.Shutdown(shutdownCtx)
-		httpsServer.Shutdown(shutdownCtx)
-		httpServer.Shutdown(shutdownCtx)
-		return nil
+		var errs []error
+		if err := sshServer.Shutdown(shutdownCtx); err != nil {
+			errs = append(errs, err)
+		}
+		if err := httpsServer.Shutdown(shutdownCtx); err != nil {
+			errs = append(errs, err)
+		}
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			errs = append(errs, err)
+		}
+		return errors.Join(errs...)
 	}
 }
 
 // Storage returns the server's storage instance.
-// Only valid while the server is running (after Start returns, before shutdown).
+// Only valid while the server is running; returns nil before Start or after shutdown.
 func (s *Server) Storage() *storage.Storage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.storage
 }
 
 // Game returns the server's game instance.
-// Only valid while the server is running (after Start returns, before shutdown).
+// Only valid while the server is running; returns nil before Start or after shutdown.
 func (s *Server) Game() *game.Game {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.game
 }
