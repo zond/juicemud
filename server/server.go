@@ -274,26 +274,32 @@ func (s *Server) startWithListeners(ctx context.Context, sshLn, httpLn, httpsLn 
 	}()
 
 	// Wait for context cancellation or server error
+	var serverErr error
 	select {
-	case err := <-errCh:
-		return juicemud.WithStack(err)
+	case serverErr = <-errCh:
+		// One server failed - trigger shutdown of others
 	case <-ctx.Done():
-		// Graceful shutdown
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-
-		var errs []error
-		if err := sshServer.Shutdown(shutdownCtx); err != nil {
-			errs = append(errs, err)
-		}
-		if err := httpsServer.Shutdown(shutdownCtx); err != nil {
-			errs = append(errs, err)
-		}
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			errs = append(errs, err)
-		}
-		return errors.Join(errs...)
+		// Context cancelled - graceful shutdown requested
 	}
+
+	// Graceful shutdown of all servers
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	var errs []error
+	if serverErr != nil {
+		errs = append(errs, serverErr)
+	}
+	if err := sshServer.Shutdown(shutdownCtx); err != nil {
+		errs = append(errs, err)
+	}
+	if err := httpsServer.Shutdown(shutdownCtx); err != nil {
+		errs = append(errs, err)
+	}
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 // Storage returns the server's storage instance.
