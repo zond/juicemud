@@ -1989,5 +1989,69 @@ addCallback('poke', ['action'], (msg) => {
 		return fmt.Errorf("out command did not complete")
 	}
 
+	// === Test 19: State persistence ===
+	fmt.Println("Testing state persistence...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for state test: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter genesis for state test did not complete")
+	}
+
+	// Create an object that uses state to count "tap" actions
+	counterSource := `setDescriptions([{Short: 'tap counter', Long: 'A counter that tracks taps.'}]);
+
+// Initialize counter if not set
+if (state.count === undefined) {
+	state.count = 0;
+}
+
+addCallback('tap', ['action'], (msg) => {
+	state.count += 1;
+	setDescriptions([{Short: 'tap counter (' + state.count + ' taps)', Long: 'A counter that has been tapped ' + state.count + ' times.'}]);
+});
+`
+	if err := dav.Put("/counter.js", counterSource); err != nil {
+		return fmt.Errorf("failed to create /counter.js: %w", err)
+	}
+
+	// Create the counter object
+	if err := tc.sendLine("/create /counter.js"); err != nil {
+		return fmt.Errorf("/create counter: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create counter did not complete")
+	}
+
+	// Wait for the counter to exist
+	if _, found := tc.waitForObject("*tap counter*", defaultWaitTimeout); !found {
+		return fmt.Errorf("counter was not created")
+	}
+
+	// Tap the counter three times
+	for i := 1; i <= 3; i++ {
+		if err := tc.sendLine("tap"); err != nil {
+			return fmt.Errorf("tap command %d: %w", i, err)
+		}
+		if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+			return fmt.Errorf("tap command %d did not complete", i)
+		}
+
+		// Wait for the description to update with the correct count
+		expectedDesc := fmt.Sprintf("tap counter (%d taps)", i)
+		found := waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
+			tc.sendLine("look")
+			output, _ = tc.waitForPrompt(defaultWaitTimeout)
+			return strings.Contains(output, expectedDesc)
+		})
+		if !found {
+			return fmt.Errorf("state should persist count after tap %d, expected %q in output: %q", i, expectedDesc, output)
+		}
+	}
+
+	fmt.Println("  state persistence: OK")
+
 	return nil
 }

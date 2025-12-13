@@ -62,6 +62,7 @@ For verifying object state and waiting for object creation, tests prefer:
 | `look [target]` | 16 | Look at specific object, shows name and Long description |
 | Room `action` handler | 18 | Room receives action commands issued by player |
 | Sibling `action` handler | 18 | Objects in same room receive action commands |
+| `state` persistence | 19 | JS state object persists across multiple command invocations |
 
 ## Not Tested
 
@@ -101,17 +102,10 @@ For verifying object state and waiting for object creation, tests prefer:
 | Can't exit universe | `/exit` at top level should fail | Low |
 | WebDAV unauthorized access | Non-owner/non-wizard can't access WebDAV | Medium |
 | `/remove` current location | Should fail with error message | Low |
-| State persistence | `state` object survives across runs | Medium |
 
 ## Suggested Next Tests
 
-### 1. State persistence (Medium Priority)
-Test that JS `state` object persists:
-- Create object that stores counter in `state`
-- Increment counter via command
-- Verify counter persists across multiple commands
-
-### 2. Edge cases (Lower Priority)
+### 1. Edge cases (Lower Priority)
 - `/exit` at genesis should fail gracefully
 - `/move #obj #obj` should fail (circular)
 - WebDAV access without wizard privileges
