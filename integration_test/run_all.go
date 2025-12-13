@@ -273,12 +273,12 @@ setDescriptions([{
 		return fmt.Errorf("/create room2 did not complete")
 	}
 
-	// Poll for room creation via /inspect (quote patterns with spaces)
-	room1ID, found := tc.waitForObject(`"Room One"`, defaultWaitTimeout)
+	// Poll for room creation via /inspect
+	room1ID, found := tc.waitForObject("Room One", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("room1 was not created")
 	}
-	if _, found := tc.waitForObject(`"Room Two"`, defaultWaitTimeout); !found {
+	if _, found := tc.waitForObject("Room Two", defaultWaitTimeout); !found {
 		return fmt.Errorf("room2 was not created")
 	}
 
@@ -1872,6 +1872,122 @@ addCallback('created', ['emit'], (msg) => {
 	}
 
 	fmt.Println("  /queuestats wizard command: OK")
+
+	// === Test 18: Room and sibling action handlers ===
+	fmt.Println("Testing room and sibling action handlers...")
+
+	// Ensure we're in genesis as a wizard
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for action handlers: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter genesis for action handlers did not complete")
+	}
+
+	// Create a room that handles the "shake" action
+	actionRoomSource := `setDescriptions([{Short: 'shaky chamber', Long: 'A small room with unstable walls.'}]);
+setExits([{Name: 'out', Destination: 'genesis'}]);
+addCallback('shake', ['action'], (msg) => {
+	setDescriptions([{Short: 'shaky chamber (shaken!)', Long: 'The walls have just been shaken!'}]);
+});
+`
+	if err := dav.Put("/actionroom.js", actionRoomSource); err != nil {
+		return fmt.Errorf("failed to create /actionroom.js: %w", err)
+	}
+
+	// Create the room
+	if err := tc.sendLine("/create /actionroom.js"); err != nil {
+		return fmt.Errorf("/create actionroom: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create actionroom did not complete")
+	}
+
+	// Wait for the room to exist
+	actionRoomID, found := tc.waitForObject("*shaky chamber*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("actionroom was not created")
+	}
+
+	// Enter the action room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", actionRoomID)); err != nil {
+		return fmt.Errorf("/enter actionroom: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter actionroom did not complete")
+	}
+
+	// Issue "shake" command - the room should handle this action
+	if err := tc.sendLine("shake"); err != nil {
+		return fmt.Errorf("shake command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("shake command did not complete")
+	}
+
+	// Wait for the room's description to update (action handlers have a small delay)
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
+		return strings.Contains(output, "shaky chamber (shaken!)")
+	})
+	if !found {
+		return fmt.Errorf("room action handler should have updated description: %q", output)
+	}
+
+	fmt.Println("  room action handler: OK")
+
+	// Now test sibling action handler
+	// Create an object that handles the "poke" action
+	pokeableSource := `setDescriptions([{Short: 'pokeable orb'}]);
+addCallback('poke', ['action'], (msg) => {
+	setDescriptions([{Short: 'pokeable orb (poked!)'}]);
+});
+`
+	if err := dav.Put("/pokeable.js", pokeableSource); err != nil {
+		return fmt.Errorf("failed to create /pokeable.js: %w", err)
+	}
+
+	// Create the pokeable object (it will be created in our current room - the actionroom)
+	if err := tc.sendLine("/create /pokeable.js"); err != nil {
+		return fmt.Errorf("/create pokeable: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create pokeable did not complete")
+	}
+
+	// Wait for the pokeable to exist
+	if _, found := tc.waitForObject("*pokeable orb*", defaultWaitTimeout); !found {
+		return fmt.Errorf("pokeable was not created")
+	}
+
+	// Issue "poke" command - the sibling object should handle this action
+	if err := tc.sendLine("poke"); err != nil {
+		return fmt.Errorf("poke command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("poke command did not complete")
+	}
+
+	// Wait for the sibling's description to update
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
+		return strings.Contains(output, "pokeable orb (poked!)")
+	})
+	if !found {
+		return fmt.Errorf("sibling action handler should have updated description: %q", output)
+	}
+
+	fmt.Println("  sibling action handler: OK")
+
+	// Return to genesis for any subsequent tests
+	if err := tc.sendLine("out"); err != nil {
+		return fmt.Errorf("out command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("out command did not complete")
+	}
 
 	return nil
 }

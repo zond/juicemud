@@ -45,7 +45,7 @@ func (tc *terminalClient) waitForObject(pattern string, timeout time.Duration) (
 func (tc *terminalClient) inspect(target string) (*inspectResult, error) {
 	cmd := "/inspect"
 	if target != "" {
-		cmd = fmt.Sprintf("/inspect %s", target)
+		cmd = fmt.Sprintf("/inspect '%s'", target)
 	}
 	if err := tc.sendLine(cmd); err != nil {
 		return nil, fmt.Errorf("sending inspect command: %w", err)

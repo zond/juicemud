@@ -38,7 +38,7 @@ For verifying object state and waiting for object creation, tests prefer:
 | `setExits()` | 5 | Creating exits between rooms |
 | `addCallback('connected', ['emit'])` | 1 | Implicitly via user.js |
 | `addCallback('x', ['command'])` | 8 | "train" command handler |
-| `addCallback('x', ['action'])` | 9, 10 | ping/start handlers for emit/setTimeout |
+| `addCallback('x', ['action'])` | 9, 10, 18 | ping/start handlers for emit/setTimeout, room/sibling actions |
 | `addCallback('x', ['emit'])` | 9, 10, 12 | Receiving emit/setTimeout/movement events |
 | `scan` | 7 | Shows current room and neighboring rooms via exits |
 | Challenge system (description) | 8 | Hidden gem with perception challenge |
@@ -60,6 +60,8 @@ For verifying object state and waiting for object creation, tests prefer:
 | `log()` | 14 | Console output appears when debug attached |
 | `created` event | 15 | Object receives creator info on `/create` |
 | `look [target]` | 16 | Look at specific object, shows name and Long description |
+| Room `action` handler | 18 | Room receives action commands issued by player |
+| Sibling `action` handler | 18 | Objects in same room receive action commands |
 
 ## Not Tested
 
@@ -89,9 +91,7 @@ For verifying object state and waiting for object creation, tests prefer:
 
 ### Events
 
-| Event | Description | Priority |
-|-------|-------------|----------|
-| Room/sibling `action` | Action handlers on location/siblings | Medium |
+(All priority events are now tested)
 
 ### Edge Cases
 
@@ -105,19 +105,13 @@ For verifying object state and waiting for object creation, tests prefer:
 
 ## Suggested Next Tests
 
-### 1. Room/sibling action handlers (Medium Priority)
-Test that actions can be handled by room or siblings:
-- Create room with action handler
-- Enter room and issue action command
-- Verify room's handler is invoked
-
-### 2. State persistence (Medium Priority)
+### 1. State persistence (Medium Priority)
 Test that JS `state` object persists:
 - Create object that stores counter in `state`
 - Increment counter via command
 - Verify counter persists across multiple commands
 
-### 3. Edge cases (Lower Priority)
+### 2. Edge cases (Lower Priority)
 - `/exit` at genesis should fail gracefully
 - `/move #obj #obj` should fail (circular)
 - WebDAV access without wizard privileges
