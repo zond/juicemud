@@ -426,6 +426,9 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		}
 
 		targetId := args[0].String()
+		if targetId == "" {
+			return rc.Throw("emit: targetId cannot be empty")
+		}
 		eventName := args[1].String()
 
 		message, err := v8go.JSONStringify(rc.Context(), args[2])
@@ -444,7 +447,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		// Always load target to validate it exists (and for challenge checks)
 		recipient, err := g.storage.AccessObject(ctx, targetId, nil)
 		if err != nil {
-			return rc.Throw("target not found: %v", err)
+			return rc.Throw("target %q not found: %v", targetId, err)
 		}
 
 		// If challenges provided, check recipient's skills
@@ -469,6 +472,9 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		}
 
 		locationId := args[0].String()
+		if locationId == "" {
+			return rc.Throw("emitToLocation: locationId cannot be empty")
+		}
 		eventName := args[1].String()
 
 		message, err := v8go.JSONStringify(rc.Context(), args[2])
@@ -487,7 +493,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		// Load the location and its content
 		loc, err := g.loadLocation(ctx, locationId)
 		if err != nil {
-			return rc.Throw("location not found: %v", err)
+			return rc.Throw("location %q not found: %v", locationId, err)
 		}
 
 		at := g.storage.Queue().After(defaultReactionDelay)
