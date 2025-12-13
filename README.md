@@ -121,11 +121,24 @@ addCallback('greet', ['command'], (msg) => {
 - `action`: Actions directed at sibling objects (other objects in the same location). Content: `{name: "...", line: "..."}`
 - `emit`: System infrastructure events with arbitrary JSON content depending on the source
 
-**Inter-Object Communication**: Objects can communicate with siblings using `emit()`:
+**Inter-Object Communication**: Objects can communicate using `emit()` and `emitToLocation()`:
 
 ```javascript
-// Emit an event to all siblings in the current location
-emit('ping', {message: 'hello from sender'});
+// Emit to a specific object by ID
+emit(targetId, 'ping', {message: 'hello'});
+
+// Emit with skill challenge - target only receives if they pass
+emit(targetId, 'whisper', {secret: 'hidden'}, [
+    {Skill: 'perception', Level: 50}
+]);
+
+// Broadcast to all objects at a location
+emitToLocation(getLocation(), 'announcement', {msg: 'Hello everyone!'});
+
+// Broadcast with challenge - only skilled objects receive
+emitToLocation(getLocation(), 'telepathy', {thought: 'secret'}, [
+    {Skill: 'psychic', Level: 100}
+]);
 
 // Receive emitted events
 addCallback('ping', ['emit'], (msg) => {
@@ -133,7 +146,7 @@ addCallback('ping', ['emit'], (msg) => {
 });
 ```
 
-The `emit()` function sends events to all objects in the same location.
+Challenge format uses PascalCase to match Go structs: `{Skill: string, Level: number, Message?: string}`. Challenge checks have side effects - recipient skills may improve or decay.
 
 **Movement and Container Events**: When objects move between locations, two types of events are generated:
 

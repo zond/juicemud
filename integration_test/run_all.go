@@ -2053,5 +2053,331 @@ addCallback('tap', ['action'], (msg) => {
 
 	fmt.Println("  state persistence: OK")
 
+	// === Test 20: emit() with challenges ===
+	fmt.Println("Testing emit() with challenges...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for emit challenges: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter genesis for emit challenges did not complete")
+	}
+
+	// High-perception receiver - has 200 perception, should receive challenged emit
+	highPercReceiverSource := `setDescriptions([{Short: 'eagle orb (waiting)'}]);
+setSkills({perception: {Practical: 200, Theoretical: 200}});
+addCallback('secret', ['emit'], (msg) => {
+	setDescriptions([{Short: 'eagle orb (got: ' + msg.secret + ')'}]);
+});
+`
+	if err := dav.Put("/eaglereceiver.js", highPercReceiverSource); err != nil {
+		return fmt.Errorf("failed to create /eaglereceiver.js: %w", err)
+	}
+
+	// Low-perception receiver - has 1 perception, should NOT receive challenged emit with level 50
+	lowPercReceiverSource := `setDescriptions([{Short: 'dim orb (waiting)'}]);
+setSkills({perception: {Practical: 1, Theoretical: 1}});
+addCallback('secret', ['emit'], (msg) => {
+	setDescriptions([{Short: 'dim orb (got: ' + msg.secret + ')'}]);
+});
+`
+	if err := dav.Put("/dimreceiver.js", lowPercReceiverSource); err != nil {
+		return fmt.Errorf("failed to create /dimreceiver.js: %w", err)
+	}
+
+	// Sender emits with perception challenge at level 50
+	challengeSenderSource := `setDescriptions([{Short: 'whisperer orb'}]);
+addCallback('whisper', ['action'], (msg) => {
+	const parts = msg.line.split(' ');
+	const targetId = parts[1];
+	emit(targetId, 'secret', {secret: 'hidden'}, [{Skill: 'perception', Level: 50}]);
+	setDescriptions([{Short: 'whisperer orb (sent)'}]);
+});
+`
+	if err := dav.Put("/challengesender.js", challengeSenderSource); err != nil {
+		return fmt.Errorf("failed to create /challengesender.js: %w", err)
+	}
+
+	// Create receivers
+	if err := tc.sendLine("/create /eaglereceiver.js"); err != nil {
+		return fmt.Errorf("/create eaglereceiver: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create eaglereceiver did not complete")
+	}
+	eagleID, found := tc.waitForObject("*eagle orb*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("eagle receiver was not created")
+	}
+
+	if err := tc.sendLine("/create /dimreceiver.js"); err != nil {
+		return fmt.Errorf("/create dimreceiver: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create dimreceiver did not complete")
+	}
+	dimID, found := tc.waitForObject("*dim orb*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("dim receiver was not created")
+	}
+
+	// Create sender
+	if err := tc.sendLine("/create /challengesender.js"); err != nil {
+		return fmt.Errorf("/create challengesender: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create challengesender did not complete")
+	}
+	if _, found := tc.waitForObject("*whisperer orb*", defaultWaitTimeout); !found {
+		return fmt.Errorf("whisperer was not created")
+	}
+
+	// Whisper to the high-perception receiver - should succeed
+	if err := tc.sendLine(fmt.Sprintf("whisper %s", eagleID)); err != nil {
+		return fmt.Errorf("whisper to eagle: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("whisper to eagle did not complete")
+	}
+
+	// Eagle should receive the secret
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
+		return strings.Contains(output, "eagle orb (got: hidden)")
+	})
+	if !found {
+		return fmt.Errorf("high-perception receiver should have received challenged emit: %q", output)
+	}
+
+	// Whisper to the low-perception receiver - should fail (no event received)
+	if err := tc.sendLine(fmt.Sprintf("whisper %s", dimID)); err != nil {
+		return fmt.Errorf("whisper to dim: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("whisper to dim did not complete")
+	}
+
+	// Wait a bit for any potential emit to arrive
+	time.Sleep(300 * time.Millisecond)
+
+	// Dim should NOT have received the secret (should still be waiting)
+	tc.sendLine("look")
+	output, _ = tc.waitForPrompt(defaultWaitTimeout)
+	if strings.Contains(output, "dim orb (got:") {
+		return fmt.Errorf("low-perception receiver should NOT have received challenged emit: %q", output)
+	}
+	if !strings.Contains(output, "dim orb (waiting)") {
+		return fmt.Errorf("dim orb should still be waiting: %q", output)
+	}
+
+	fmt.Println("  emit() with challenges: OK")
+
+	// === Test 21: emitToLocation() ===
+	fmt.Println("Testing emitToLocation()...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for emitToLocation: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter genesis for emitToLocation did not complete")
+	}
+
+	// Create a broadcast room
+	broadcastRoomSource := `setDescriptions([{Short: 'broadcast chamber', Long: 'A room for broadcasting.'}]);
+setExits([{Name: 'out', Destination: 'genesis'}]);
+`
+	if err := dav.Put("/broadcastroom.js", broadcastRoomSource); err != nil {
+		return fmt.Errorf("failed to create /broadcastroom.js: %w", err)
+	}
+	if err := tc.sendLine("/create /broadcastroom.js"); err != nil {
+		return fmt.Errorf("/create broadcastroom: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create broadcastroom did not complete")
+	}
+	broadcastRoomID, found := tc.waitForObject("*broadcast chamber*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("broadcast room was not created")
+	}
+
+	// Enter the broadcast room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", broadcastRoomID)); err != nil {
+		return fmt.Errorf("/enter broadcast room: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter broadcast room did not complete")
+	}
+
+	// Listener 1 - receives broadcasts
+	listener1Source := `setDescriptions([{Short: 'listener alpha (idle)'}]);
+addCallback('announce', ['emit'], (msg) => {
+	setDescriptions([{Short: 'listener alpha (heard: ' + msg.message + ')'}]);
+});
+`
+	if err := dav.Put("/listener1.js", listener1Source); err != nil {
+		return fmt.Errorf("failed to create /listener1.js: %w", err)
+	}
+	if err := tc.sendLine("/create /listener1.js"); err != nil {
+		return fmt.Errorf("/create listener1: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create listener1 did not complete")
+	}
+	if _, found := tc.waitForObject("*listener alpha*", defaultWaitTimeout); !found {
+		return fmt.Errorf("listener1 was not created")
+	}
+
+	// Listener 2 - also receives broadcasts
+	listener2Source := `setDescriptions([{Short: 'listener beta (idle)'}]);
+addCallback('announce', ['emit'], (msg) => {
+	setDescriptions([{Short: 'listener beta (heard: ' + msg.message + ')'}]);
+});
+`
+	if err := dav.Put("/listener2.js", listener2Source); err != nil {
+		return fmt.Errorf("failed to create /listener2.js: %w", err)
+	}
+	if err := tc.sendLine("/create /listener2.js"); err != nil {
+		return fmt.Errorf("/create listener2: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create listener2 did not complete")
+	}
+	if _, found := tc.waitForObject("*listener beta*", defaultWaitTimeout); !found {
+		return fmt.Errorf("listener2 was not created")
+	}
+
+	// Broadcaster - uses emitToLocation to broadcast to all in the room
+	broadcasterSource := `setDescriptions([{Short: 'broadcaster orb'}]);
+addCallback('broadcast', ['action'], (msg) => {
+	emitToLocation(getLocation(), 'announce', {message: 'hello all'});
+	setDescriptions([{Short: 'broadcaster orb (sent)'}]);
+});
+addCallback('announce', ['emit'], (msg) => {
+	// Broadcaster should also receive its own broadcast
+	log('Broadcaster received own announcement');
+});
+`
+	if err := dav.Put("/broadcaster.js", broadcasterSource); err != nil {
+		return fmt.Errorf("failed to create /broadcaster.js: %w", err)
+	}
+	if err := tc.sendLine("/create /broadcaster.js"); err != nil {
+		return fmt.Errorf("/create broadcaster: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create broadcaster did not complete")
+	}
+	if _, found := tc.waitForObject("*broadcaster orb*", defaultWaitTimeout); !found {
+		return fmt.Errorf("broadcaster was not created")
+	}
+
+	// Issue the broadcast command
+	if err := tc.sendLine("broadcast"); err != nil {
+		return fmt.Errorf("broadcast command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("broadcast command did not complete")
+	}
+
+	// Both listeners should receive the broadcast
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
+		return strings.Contains(output, "listener alpha (heard: hello all)") &&
+			strings.Contains(output, "listener beta (heard: hello all)")
+	})
+	if !found {
+		return fmt.Errorf("both listeners should have received broadcast: %q", output)
+	}
+
+	fmt.Println("  emitToLocation(): OK")
+
+	// === Test 22: emitToLocation() with challenges ===
+	fmt.Println("Testing emitToLocation() with challenges...")
+
+	// Stay in the broadcast room for this test
+
+	// Reset listeners for next test
+	listener1ChallengeSource := `setDescriptions([{Short: 'sensitive ear (idle)'}]);
+setSkills({telepathy: {Practical: 150, Theoretical: 150}});
+addCallback('mindcast', ['emit'], (msg) => {
+	setDescriptions([{Short: 'sensitive ear (heard: ' + msg.thought + ')'}]);
+});
+`
+	if err := dav.Put("/listener1.js", listener1ChallengeSource); err != nil {
+		return fmt.Errorf("failed to update /listener1.js: %w", err)
+	}
+
+	listener2ChallengeSource := `setDescriptions([{Short: 'deaf ear (idle)'}]);
+setSkills({telepathy: {Practical: 5, Theoretical: 5}});
+addCallback('mindcast', ['emit'], (msg) => {
+	setDescriptions([{Short: 'deaf ear (heard: ' + msg.thought + ')'}]);
+});
+`
+	if err := dav.Put("/listener2.js", listener2ChallengeSource); err != nil {
+		return fmt.Errorf("failed to update /listener2.js: %w", err)
+	}
+
+	// Wait for descriptions to update
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
+		return strings.Contains(output, "sensitive ear (idle)") &&
+			strings.Contains(output, "deaf ear (idle)")
+	})
+	if !found {
+		return fmt.Errorf("listeners should have reset for challenge test: %q", output)
+	}
+
+	// Telepathic broadcaster - uses emitToLocation with telepathy challenge
+	telepathSource := `setDescriptions([{Short: 'telepath orb'}]);
+addCallback('mindspeak', ['action'], (msg) => {
+	emitToLocation(getLocation(), 'mindcast', {thought: 'secret thought'}, [{Skill: 'telepathy', Level: 50}]);
+	setDescriptions([{Short: 'telepath orb (sent)'}]);
+});
+`
+	if err := dav.Put("/broadcaster.js", telepathSource); err != nil {
+		return fmt.Errorf("failed to update /broadcaster.js: %w", err)
+	}
+
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
+		return strings.Contains(output, "telepath orb")
+	})
+	if !found {
+		return fmt.Errorf("broadcaster should have updated to telepath: %q", output)
+	}
+
+	// Issue the telepathic broadcast
+	if err := tc.sendLine("mindspeak"); err != nil {
+		return fmt.Errorf("mindspeak command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("mindspeak command did not complete")
+	}
+
+	// Only the sensitive ear should receive the telepathic broadcast
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
+		tc.sendLine("look")
+		output, _ = tc.waitForPrompt(defaultWaitTimeout)
+		return strings.Contains(output, "sensitive ear (heard: secret thought)")
+	})
+	if !found {
+		return fmt.Errorf("high-telepathy listener should have received challenged broadcast: %q", output)
+	}
+
+	// The deaf ear should NOT have received the broadcast (still idle)
+	if strings.Contains(output, "deaf ear (heard:") {
+		return fmt.Errorf("low-telepathy listener should NOT have received challenged broadcast: %q", output)
+	}
+	if !strings.Contains(output, "deaf ear (idle)") {
+		return fmt.Errorf("deaf ear should still be idle: %q", output)
+	}
+
+	fmt.Println("  emitToLocation() with challenges: OK")
+
 	return nil
 }

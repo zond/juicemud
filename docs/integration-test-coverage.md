@@ -45,6 +45,10 @@ For verifying object state and waiting for object creation, tests prefer:
 | Challenge system (exit) | 8 | Skill-gated exit requiring strength |
 | `setSkills()` | 8 | Granting perception/strength via train command |
 | `emit()` | 9 | Sender emits to receiver, descriptions update |
+| `emit()` with challenges | 20 | High-skill recipient receives, low-skill filtered out |
+| `emitToLocation()` | 21 | Broadcasts to all objects in a location |
+| `emitToLocation()` with challenges | 22 | Broadcasts with skill-based filtering |
+| `getId()` | 20 | Used implicitly in emitToLocation (emitter ID for challenges) |
 | `setTimeout()` | 10 | Timer schedules delayed event |
 | `movement` event | 12 | Observer sees object move out of room |
 | `/mkgroup` | 13 | Create groups with owner and supergroup flags |

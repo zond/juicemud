@@ -420,16 +420,94 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	}
 	callbacks["emit"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
-		if len(args) != 3 || !args[0].IsString() || !args[1].IsString() {
-			return rc.Throw("emit takes [string, string, any] arguments")
+		// Accept 3 or 4 arguments
+		if len(args) < 3 || len(args) > 4 || !args[0].IsString() || !args[1].IsString() {
+			return rc.Throw("emit takes [string, string, any, challenges?] arguments")
 		}
+
+		targetId := args[0].String()
+		eventName := args[1].String()
+
 		message, err := v8go.JSONStringify(rc.Context(), args[2])
 		if err != nil {
 			return rc.Throw("trying to serialize %v: %v", args[2], err)
 		}
-		if err := g.emitJSON(ctx, g.storage.Queue().After(defaultReactionDelay), args[0].String(), args[1].String(), message); err != nil {
-			return rc.Throw("trying to enqueue %v for %v: %v", message, args[0].String(), err)
+
+		// Parse optional challenges
+		var challenges structs.Challenges
+		if len(args) == 4 && !args[3].IsNullOrUndefined() {
+			if err := rc.Copy(&challenges, args[3]); err != nil {
+				return rc.Throw("invalid challenges: %v", err)
+			}
 		}
+
+		// Always load target to validate it exists (and for challenge checks)
+		recipient, err := g.storage.AccessObject(ctx, targetId, nil)
+		if err != nil {
+			return rc.Throw("target not found: %v", err)
+		}
+
+		// If challenges provided, check recipient's skills
+		// challenges.Check(recipient, emitterID) - can recipient perceive event from emitter?
+		if len(challenges) > 0 {
+			if challenges.Check(recipient, object.GetId()) <= 0 {
+				// Recipient fails challenge - silently don't emit
+				return nil
+			}
+		}
+
+		if err := g.emitJSON(ctx, g.storage.Queue().After(defaultReactionDelay), targetId, eventName, message); err != nil {
+			return rc.Throw("trying to enqueue %v for %v: %v", message, targetId, err)
+		}
+		return nil
+	}
+	callbacks["emitToLocation"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		// Accept 3 or 4 arguments
+		if len(args) < 3 || len(args) > 4 || !args[0].IsString() || !args[1].IsString() {
+			return rc.Throw("emitToLocation takes [string, string, any, challenges?] arguments")
+		}
+
+		locationId := args[0].String()
+		eventName := args[1].String()
+
+		message, err := v8go.JSONStringify(rc.Context(), args[2])
+		if err != nil {
+			return rc.Throw("trying to serialize %v: %v", args[2], err)
+		}
+
+		// Parse optional challenges
+		var challenges structs.Challenges
+		if len(args) == 4 && !args[3].IsNullOrUndefined() {
+			if err := rc.Copy(&challenges, args[3]); err != nil {
+				return rc.Throw("invalid challenges: %v", err)
+			}
+		}
+
+		// Load the location and its content
+		loc, err := g.loadLocation(ctx, locationId)
+		if err != nil {
+			return rc.Throw("location not found: %v", err)
+		}
+
+		at := g.storage.Queue().After(defaultReactionDelay)
+		emitterId := object.GetId()
+
+		// Emit to each object in the location
+		for recipientId, recipient := range loc.Content {
+			// If challenges provided, check recipient's skills
+			if len(challenges) > 0 {
+				if challenges.Check(recipient, emitterId) <= 0 {
+					// Recipient fails challenge - skip
+					continue
+				}
+			}
+
+			if err := g.emitJSON(ctx, at, recipientId, eventName, message); err != nil {
+				return rc.Throw("trying to enqueue %v for %v: %v", message, recipientId, err)
+			}
+		}
+
 		return nil
 	}
 	callbacks["getNeighbourhood"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
@@ -442,6 +520,9 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 			return rc.Throw("trying to convert %v to *v8go.Value: %v", neighbourhood, err)
 		}
 		return val
+	}
+	callbacks["getId"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		return rc.String(object.GetId())
 	}
 }
 
