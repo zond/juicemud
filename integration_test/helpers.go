@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -47,14 +48,11 @@ func (tc *terminalClient) inspect(target string) (*inspectResult, error) {
 	if target != "" {
 		cmd = fmt.Sprintf("/inspect '%s'", target)
 	}
-	if err := tc.sendLine(cmd); err != nil {
-		return nil, fmt.Errorf("sending inspect command: %w", err)
-	}
-	output, ok := tc.waitForPrompt(defaultWaitTimeout)
+	output, ok := tc.sendCommand(cmd, defaultWaitTimeout)
 	if !ok {
 		return nil, fmt.Errorf("inspect command did not complete: %q", output)
 	}
-	// Extract JSON from output (skip command echo and prompt)
+	// Extract JSON from output
 	jsonMatch := jsonExtractor.FindString(output)
 	if jsonMatch == "" {
 		return nil, fmt.Errorf("no JSON found in inspect output: %q", output)
@@ -68,23 +66,52 @@ func (tc *terminalClient) inspect(target string) (*inspectResult, error) {
 
 // waitForLocation polls via /inspect until the object is at the expected location.
 // Use empty string as target to inspect the current user's object, or "#<id>" for other objects.
-// After finding the expected location, it drains any remaining buffered output to avoid
-// interference with subsequent commands.
 func (tc *terminalClient) waitForLocation(target, expectedLocation string, timeout time.Duration) bool {
-	found := waitForCondition(timeout, 50*time.Millisecond, func() bool {
+	return waitForCondition(timeout, 50*time.Millisecond, func() bool {
 		result, err := tc.inspect(target)
 		if err != nil {
 			return false
 		}
 		return result.GetLocation() == expectedLocation
 	})
+}
+
+// waitForLookMatch polls with look commands until the output contains the expected string.
+// Drains any buffered data after success to prevent interference with subsequent commands.
+func (tc *terminalClient) waitForLookMatch(expected string, timeout time.Duration) (string, bool) {
+	var lastOutput string
+	found := waitForCondition(timeout, 100*time.Millisecond, func() bool {
+		output, ok := tc.sendCommand("look", defaultWaitTimeout)
+		if !ok {
+			return false
+		}
+		lastOutput = output
+		return strings.Contains(output, expected)
+	})
 	if found {
-		// Drain any buffered output that might have arrived after the last prompt.
-		// This prevents leftover data from the final /inspect from interfering
-		// with subsequent commands.
-		tc.readUntil(50*time.Millisecond, nil)
+		// Non-blocking drain of any buffered data that arrived during polling
+		tc.readUntil(10*time.Millisecond, nil)
 	}
-	return found
+	return lastOutput, found
+}
+
+// waitForLookMatchFunc polls with look commands until the match function returns true.
+// Drains any buffered data after success to prevent interference with subsequent commands.
+func (tc *terminalClient) waitForLookMatchFunc(match func(string) bool, timeout time.Duration) (string, bool) {
+	var lastOutput string
+	found := waitForCondition(timeout, 100*time.Millisecond, func() bool {
+		output, ok := tc.sendCommand("look", defaultWaitTimeout)
+		if !ok {
+			return false
+		}
+		lastOutput = output
+		return match(output)
+	})
+	if found {
+		// Non-blocking drain of any buffered data that arrived during polling
+		tc.readUntil(10*time.Millisecond, nil)
+	}
+	return lastOutput, found
 }
 
 // waitForCondition polls until the condition returns true or timeout expires.

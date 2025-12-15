@@ -2,7 +2,9 @@ package game
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"regexp"
@@ -15,16 +17,73 @@ import (
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
-	"github.com/zond/juicemud/digest"
 	"github.com/zond/juicemud/lang"
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/term"
 )
 
 var (
 	ErrOperationAborted = fmt.Errorf("operation aborted")
 )
+
+// Argon2id parameters (OWASP recommended)
+const (
+	argon2Time    = 1
+	argon2Memory  = 64 * 1024 // 64 MB
+	argon2Threads = 4
+	argon2KeyLen  = 32
+	argon2SaltLen = 16
+)
+
+// hashPassword creates an Argon2id hash of the password.
+// Returns the hash in PHC string format: $argon2id$v=19$m=65536,t=1,p=4$<salt>$<hash>
+func hashPassword(password string) (string, error) {
+	salt := make([]byte, argon2SaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	hash := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
+		argon2.Version, argon2Memory, argon2Time, argon2Threads,
+		base64.RawStdEncoding.EncodeToString(salt),
+		base64.RawStdEncoding.EncodeToString(hash)), nil
+}
+
+// verifyPassword checks if the password matches the stored hash.
+// Supports Argon2id hashes in PHC string format.
+func verifyPassword(password, encodedHash string) bool {
+	// Parse PHC string format
+	parts := strings.Split(encodedHash, "$")
+	if len(parts) != 6 || parts[1] != "argon2id" {
+		return false
+	}
+
+	var version int
+	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
+		return false
+	}
+
+	var memory, time uint32
+	var threads uint8
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time, &threads); err != nil {
+		return false
+	}
+
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return false
+	}
+
+	expectedHash, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil {
+		return false
+	}
+
+	hash := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(expectedHash)))
+	return subtle.ConstantTimeCompare(hash, expectedHash) == 1
+}
 
 var (
 	connectionByObjectID = juicemud.NewSyncMap[string, *Connection]()
@@ -191,22 +250,24 @@ func (c *Connection) renderMovement(m *movement) error {
 		return juicemud.WithStack(err)
 	}
 	if m.Source != nil {
-		if exit, found := neigh.FindLocation(*m.Source); !found {
-			return errors.Errorf("renderMovement got movement from unknown source: %+v", m)
-		} else if exit != nil {
-			fmt.Fprintf(c.term, "Via exit %s, you see %v leave.\n", exit.Name(), m.Object.Indef())
-		} else {
-			fmt.Fprintf(c.term, "%v leaves.\n", lang.Capitalize(m.Object.Indef()))
+		if exit, found := neigh.FindLocation(*m.Source); found {
+			if exit != nil {
+				fmt.Fprintf(c.term, "Via exit %s, you see %v leave.\n", exit.Name(), m.Object.Indef())
+			} else {
+				fmt.Fprintf(c.term, "%v leaves.\n", lang.Capitalize(m.Object.Indef()))
+			}
 		}
+		// If !found, source not visible - just don't show leaving message
 	}
 	if m.Destination != nil {
-		if exit, found := neigh.FindLocation(*m.Destination); !found {
-			return errors.Errorf("renderMovement got movement to unknown destination: %+v", m)
-		} else if exit != nil {
-			fmt.Fprintf(c.term, "Via exit %s, you see %v arrive.\n", exit.Name(), m.Object.Indef())
-		} else {
-			fmt.Fprintf(c.term, "%v arrives.\n", lang.Capitalize(m.Object.Indef()))
+		if exit, found := neigh.FindLocation(*m.Destination); found {
+			if exit != nil {
+				fmt.Fprintf(c.term, "Via exit %s, you see %v arrive.\n", exit.Name(), m.Object.Indef())
+			} else {
+				fmt.Fprintf(c.term, "%v arrives.\n", lang.Capitalize(m.Object.Indef()))
+			}
 		}
+		// If !found, destination not visible - just don't show arriving message
 	}
 	return nil
 }
@@ -442,11 +503,7 @@ func (c *Connection) Process() error {
 	if c.user == nil {
 		return errors.New("can't process without user")
 	}
-	if has, err := c.game.storage.UserAccessToGroup(c.ctx, c.user, wizardsGroup); err != nil {
-		return juicemud.WithStack(err)
-	} else if has {
-		c.wiz = true
-	}
+	c.wiz = c.user.Wizard
 
 	connectionByObjectID.Set(string(c.user.Object), c)
 	defer connectionByObjectID.Del(string(c.user.Object))
@@ -535,8 +592,7 @@ func (c *Connection) loginUser() error {
 			return juicemud.WithStack(err)
 		}
 
-		ha1 := digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
-		if subtle.ConstantTimeCompare([]byte(ha1), []byte(user.PasswordHash)) != 1 {
+		if !verifyPassword(password, user.PasswordHash) {
 			// Record failed attempt for rate limiting
 			c.game.loginRateLimiter.recordFailure(user.Name)
 			c.game.storage.AuditLog(c.ctx, "LOGIN_FAILED", storage.AuditLoginFailed{
@@ -583,7 +639,7 @@ func (c *Connection) createUser() error {
 		if username == "abort" {
 			return juicemud.WithStack(ErrOperationAborted)
 		}
-		if err := juicemud.ValidateName(username, "username"); err != nil {
+		if err := validateUsername(username); err != nil {
 			fmt.Fprintln(c.term, err.Error())
 			continue
 		}
@@ -620,7 +676,11 @@ func (c *Connection) createUser() error {
 			if selection == "abort" {
 				return juicemud.WithStack(ErrOperationAborted)
 			} else if selection == "y" {
-				user.PasswordHash = digest.ComputeHA1(user.Name, juicemud.DAVAuthRealm, password)
+				hash, err := hashPassword(password)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				user.PasswordHash = hash
 				c.user = user
 			}
 		} else {

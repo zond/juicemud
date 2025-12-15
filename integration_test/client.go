@@ -1,12 +1,8 @@
 package integration_test
 
 import (
-	"crypto/md5"
-	"crypto/tls"
-	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -170,8 +166,36 @@ func (tc *terminalClient) waitFor(expected string, timeout time.Duration) (strin
 
 // waitForPrompt waits for the command prompt to appear, indicating the server is ready for input.
 // Returns all output received up to and including the prompt.
+// Waits until the output ENDS with a prompt to avoid partial reads.
 func (tc *terminalClient) waitForPrompt(timeout time.Duration) (string, bool) {
-	return tc.waitFor("\n> ", timeout)
+	output := tc.readUntil(timeout, func(s string) bool {
+		return strings.HasSuffix(s, "\n> ") || strings.HasSuffix(s, "\r\n> ")
+	})
+	return output, strings.HasSuffix(output, "\n> ") || strings.HasSuffix(output, "\r\n> ")
+}
+
+// sendCommand sends a command and waits for the response.
+// Returns the server's response (everything between the echoed command and the next prompt).
+func (tc *terminalClient) sendCommand(cmd string, timeout time.Duration) (string, bool) {
+	if err := tc.sendLine(cmd); err != nil {
+		return "", false
+	}
+	output, ok := tc.waitForPrompt(timeout)
+	if !ok {
+		return output, false
+	}
+	// The output contains: [echoed command]\r\n[response]\n>
+	// Strip the echoed command from the beginning if present
+	if idx := strings.Index(output, "\r\n"); idx >= 0 {
+		output = output[idx+2:]
+	}
+	// Strip the trailing prompt
+	if strings.HasSuffix(output, "\n> ") {
+		output = output[:len(output)-3]
+	} else if strings.HasSuffix(output, "\r\n> ") {
+		output = output[:len(output)-4]
+	}
+	return output, true
 }
 
 func (tc *terminalClient) Close() {
@@ -181,123 +205,4 @@ func (tc *terminalClient) Close() {
 	tc.stdin.Close()
 	tc.session.Close()
 	tc.conn.Close()
-}
-
-// webDAVClient wraps HTTP client for WebDAV operations with digest auth.
-type webDAVClient struct {
-	baseURL  string
-	username string
-	password string
-	client   *http.Client
-}
-
-func newWebDAVClient(addr, username, password string) *webDAVClient {
-	return &webDAVClient{
-		baseURL:  "http://" + addr,
-		username: username,
-		password: password,
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-		},
-	}
-}
-
-func (w *webDAVClient) doWithAuth(method, path string, body io.Reader) (*http.Response, error) {
-	url := w.baseURL + path
-
-	// First request to get the challenge
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusUnauthorized {
-		return resp, nil
-	}
-	resp.Body.Close()
-
-	// Parse WWW-Authenticate header
-	authHeader := resp.Header.Get("WWW-Authenticate")
-	if authHeader == "" {
-		return nil, fmt.Errorf("no WWW-Authenticate header")
-	}
-
-	params := parseDigestChallenge(authHeader)
-
-	// Create authenticated request
-	req, err = http.NewRequest(method, url, body)
-	if err != nil {
-		return nil, err
-	}
-
-	// Compute digest response
-	ha1 := md5Hash(fmt.Sprintf("%s:%s:%s", w.username, params["realm"], w.password))
-	ha2 := md5Hash(fmt.Sprintf("%s:%s", method, path))
-	nc := "00000001"
-	cnonce := "abcdef"
-	response := md5Hash(fmt.Sprintf("%s:%s:%s:%s:%s:%s", ha1, params["nonce"], nc, cnonce, "auth", ha2))
-
-	authValue := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", qop=auth, nc=%s, cnonce="%s", response="%s", opaque="%s"`,
-		w.username, params["realm"], params["nonce"], path, nc, cnonce, response, params["opaque"])
-
-	req.Header.Set("Authorization", authValue)
-
-	return w.client.Do(req)
-}
-
-func (w *webDAVClient) Put(path, content string) error {
-	resp, err := w.doWithAuth("PUT", path, strings.NewReader(content))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("PUT %s failed: %d %s", path, resp.StatusCode, string(body))
-	}
-	return nil
-}
-
-func (w *webDAVClient) Get(path string) (string, error) {
-	resp, err := w.doWithAuth("GET", path, nil)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s failed: %d", path, resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	return string(body), nil
-}
-
-func parseDigestChallenge(header string) map[string]string {
-	params := make(map[string]string)
-	header = strings.TrimPrefix(header, "Digest ")
-	for _, part := range strings.Split(header, ",") {
-		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(kv) == 2 {
-			params[strings.ToLower(kv[0])] = strings.Trim(kv[1], "\"")
-		}
-	}
-	return params
-}
-
-func md5Hash(data string) string {
-	hash := md5.Sum([]byte(data))
-	return hex.EncodeToString(hash[:])
 }

@@ -4,20 +4,15 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
-	"math/big"
 	"os"
-	"time"
 
 	gossh "golang.org/x/crypto/ssh"
 )
 
 type Crypto struct {
-	Hostname      string
 	PrivKeyPath   string
 	SSHPubKeyPath string
-	HTTPSCertPath string
 }
 
 func (c Crypto) Generate() error {
@@ -31,9 +26,7 @@ func (c Crypto) Generate() error {
 			Type:  "RSA PRIVATE KEY",
 			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
 		})
-	if err := os.WriteFile(c.PrivKeyPath, keyPEM,
-		0600,
-	); err != nil {
+	if err := os.WriteFile(c.PrivKeyPath, keyPEM, 0600); err != nil {
 		return err
 	}
 
@@ -42,41 +35,6 @@ func (c Crypto) Generate() error {
 		return err
 	}
 	if err := os.WriteFile(c.SSHPubKeyPath, gossh.MarshalAuthorizedKey(pub), 0600); err != nil {
-		return err
-	}
-
-	// Create a self-signed certificate template
-	// Generate random serial number (required to be unique per CA, good practice even for self-signed)
-	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return err
-	}
-
-	hostname := c.Hostname
-	if hostname == "" {
-		hostname = "localhost"
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject: pkix.Name{
-			CommonName: hostname,
-		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().AddDate(1, 0, 0),
-		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{
-			x509.ExtKeyUsageServerAuth,
-		},
-		DNSNames: []string{hostname, "localhost"},
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &privateKey.PublicKey, privateKey)
-	if err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(c.HTTPSCertPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), 0600); err != nil {
 		return err
 	}
 

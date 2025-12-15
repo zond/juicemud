@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -48,7 +49,6 @@ const (
 )
 
 const (
-	root          = "/"
 	userSource    = "/user.js"
 	genesisSource = "/genesis.js"
 	bootSource    = "/boot.js"
@@ -60,9 +60,6 @@ const (
 	emptyID   = ""
 )
 
-const (
-	wizardsGroup = "wizards"
-)
 
 const (
 	// maxEventWorkers is the number of worker goroutines that process queue events.
@@ -72,9 +69,6 @@ const (
 )
 
 var (
-	initialDirectories = []string{
-		root,
-	}
 	initialSources = map[string]string{
 		bootSource: "// This code is run each time the game server starts.",
 		userSource: `// This code runs all connected users.
@@ -101,11 +95,6 @@ setDescriptions([
 ]);
 `,
 		emptySource: "// This code runs the top level container of all content.",
-	}
-	initialGroups = []storage.Group{
-		{
-			Name: wizardsGroup,
-		},
 	}
 )
 
@@ -135,29 +124,36 @@ type Game struct {
 
 func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	ctx = juicemud.MakeMainContext(ctx)
-	for _, dir := range initialDirectories {
-		if err := s.CreateDir(ctx, dir); err != nil {
-			return nil, juicemud.WithStack(err)
-		}
+
+	// Create sources directory if it doesn't exist
+	sourcesDir := s.SourcesDir()
+	if err := os.MkdirAll(sourcesDir, 0755); err != nil {
+		return nil, juicemud.WithStack(err)
 	}
-	for path, source := range initialSources {
-		if _, created, err := s.EnsureFile(ctx, path); err != nil {
-			return nil, juicemud.WithStack(err)
-		} else if created {
-			if err := s.StoreSource(ctx, path, []byte(source)); err != nil {
+
+	// Write initial source files if they don't exist
+	for sourcePath, source := range initialSources {
+		fullPath := filepath.Join(sourcesDir, sourcePath)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			// Create parent directory if needed
+			if dir := filepath.Dir(fullPath); dir != sourcesDir {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					return nil, juicemud.WithStack(err)
+				}
+			}
+			if err := os.WriteFile(fullPath, []byte(source), 0644); err != nil {
 				return nil, juicemud.WithStack(err)
 			}
+		} else if err != nil {
+			return nil, juicemud.WithStack(err)
 		}
 	}
+
+	// Ensure initial objects exist
 	for _, obj := range initialObjects() {
 		o := &structs.Object{Unsafe: obj}
 		o.Unsafe.PostUnmarshal()
 		if err := s.UNSAFEEnsureObject(ctx, o); err != nil {
-			return nil, juicemud.WithStack(err)
-		}
-	}
-	for _, group := range initialGroups {
-		if _, err := s.EnsureGroup(ctx, &group); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}

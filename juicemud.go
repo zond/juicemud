@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"iter"
-	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,30 +17,7 @@ import (
 	goccy "github.com/goccy/go-json"
 )
 
-var (
-	lastUniqueIDCounter uint64 = 0
-	// validNameRE matches valid names for users and groups: 1-16 chars, starts with letter,
-	// contains only letters, numbers, hyphens, or underscores.
-	validNameRE = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,15}$`)
-)
-
-// InvalidNameError is returned when a name fails validation.
-type InvalidNameError struct {
-	Desc string // e.g., "username" or "group name"
-}
-
-func (e InvalidNameError) Error() string {
-	return fmt.Sprintf("Invalid %s. Must be 1-16 characters, start with a letter, and contain only letters, numbers, hyphens, or underscores.", e.Desc)
-}
-
-// ValidateName checks if a name is valid for users, groups, etc.
-// Returns nil if valid, or an InvalidNameError describing the problem.
-func ValidateName(name, desc string) error {
-	if !validNameRE.MatchString(name) {
-		return InvalidNameError{Desc: desc}
-	}
-	return nil
-}
+var lastUniqueIDCounter uint64 = 0
 
 const (
 	uniqueIDLen = 16
@@ -132,10 +108,6 @@ func IsMainContext(ctx context.Context) bool {
 func MakeMainContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, mainContect, true)
 }
-
-const (
-	DAVAuthRealm = "WebDAV"
-)
 
 type stackTracer interface {
 	StackTrace() errors.StackTrace

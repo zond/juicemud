@@ -19,8 +19,8 @@ type AuditLogger struct {
 	enc    *json.Encoder
 }
 
-// AuditRef identifies a user or group by both ID and name for audit logging.
-// ID is a pointer to distinguish between "ID is 0" and "no ID" (nil for system/owner).
+// AuditRef identifies a user by both ID and name for audit logging.
+// ID is a pointer to distinguish between "ID is 0" and "no ID" (nil for system).
 type AuditRef struct {
 	ID   *int64 `json:"id,omitempty"`
 	Name string `json:"name"`
@@ -34,21 +34,6 @@ func Ref(id int64, name string) AuditRef {
 // SystemRef creates an AuditRef for "system" (no ID).
 func SystemRef() AuditRef {
 	return AuditRef{Name: "system"}
-}
-
-// OwnerRef creates an AuditRef for "owner" (no ID).
-func OwnerRef() AuditRef {
-	return AuditRef{Name: "owner"}
-}
-
-// RefPtr creates a pointer to an AuditRef with the given ID and name.
-func RefPtr(id int64, name string) *AuditRef {
-	return &AuditRef{ID: &id, Name: name}
-}
-
-// OwnerRefPtr creates a pointer to an AuditRef for "owner" (no ID).
-func OwnerRefPtr() *AuditRef {
-	return &AuditRef{Name: "owner"}
 }
 
 // AuditData is the interface for typed audit event data.
@@ -96,101 +81,21 @@ type AuditLoginFailed struct {
 
 func (AuditLoginFailed) auditData() {}
 
-// AuditGroupCreate is logged when a group is created.
-type AuditGroupCreate struct {
-	Caller     AuditRef `json:"caller"`
-	Group      AuditRef `json:"group"`
-	Owner      AuditRef `json:"owner"`
-	Supergroup bool     `json:"supergroup"`
+// AuditWizardGrant is logged when wizard privileges are granted to a user.
+type AuditWizardGrant struct {
+	Target  AuditRef `json:"target"`  // user receiving wizard privileges
+	GrantedBy AuditRef `json:"granted_by"` // wizard who granted the privileges
 }
 
-func (AuditGroupCreate) auditData() {}
+func (AuditWizardGrant) auditData() {}
 
-// AuditGroupDelete is logged when a group is deleted.
-type AuditGroupDelete struct {
-	Caller AuditRef `json:"caller"`
-	Group  AuditRef `json:"group"`
+// AuditWizardRevoke is logged when wizard privileges are revoked from a user.
+type AuditWizardRevoke struct {
+	Target    AuditRef `json:"target"`     // user losing wizard privileges
+	RevokedBy AuditRef `json:"revoked_by"` // wizard who revoked the privileges
 }
 
-func (AuditGroupDelete) auditData() {}
-
-// AuditGroupEdit is logged when a group is modified.
-type AuditGroupEdit struct {
-	Caller         AuditRef  `json:"caller"`
-	Group          AuditRef  `json:"group"`
-	NameFrom       string    `json:"name_from,omitempty"`
-	NameTo         string    `json:"name_to,omitempty"`
-	OwnerFrom      *AuditRef `json:"owner_from,omitempty"`
-	OwnerTo        *AuditRef `json:"owner_to,omitempty"`
-	SupergroupFrom *bool     `json:"supergroup_from,omitempty"`
-	SupergroupTo   *bool     `json:"supergroup_to,omitempty"`
-}
-
-func (AuditGroupEdit) auditData() {}
-
-// AuditMemberAdd is logged when a user is added to a group.
-type AuditMemberAdd struct {
-	Caller AuditRef `json:"caller"`
-	Added  AuditRef `json:"added"`
-	Group  AuditRef `json:"group"`
-}
-
-func (AuditMemberAdd) auditData() {}
-
-// AuditMemberRemove is logged when a user is removed from a group.
-type AuditMemberRemove struct {
-	Caller  AuditRef `json:"caller"`
-	Removed AuditRef `json:"removed"`
-	Group   AuditRef `json:"group"`
-}
-
-func (AuditMemberRemove) auditData() {}
-
-// AuditFileCreate is logged when a file or directory is created.
-type AuditFileCreate struct {
-	Caller AuditRef `json:"caller"`
-	Path   string   `json:"path"`
-	IsDir  bool     `json:"is_dir"`
-}
-
-func (AuditFileCreate) auditData() {}
-
-// AuditFileUpdate is logged when file content is modified.
-type AuditFileUpdate struct {
-	Caller AuditRef `json:"caller"`
-	Path   string   `json:"path"`
-}
-
-func (AuditFileUpdate) auditData() {}
-
-// AuditFileDelete is logged when a file or directory is deleted.
-type AuditFileDelete struct {
-	Caller AuditRef `json:"caller"`
-	Path   string   `json:"path"`
-	IsDir  bool     `json:"is_dir"`
-}
-
-func (AuditFileDelete) auditData() {}
-
-// AuditFileMove is logged when a file or directory is moved/renamed.
-type AuditFileMove struct {
-	Caller  AuditRef `json:"caller"`
-	OldPath string   `json:"old_path"`
-	NewPath string   `json:"new_path"`
-}
-
-func (AuditFileMove) auditData() {}
-
-// AuditFileChmod is logged when file permissions are changed.
-type AuditFileChmod struct {
-	Caller     AuditRef  `json:"caller"`
-	Path       string    `json:"path"`
-	Permission string    `json:"permission"` // "read" or "write"
-	OldGroup   *AuditRef `json:"old_group,omitempty"`
-	NewGroup   *AuditRef `json:"new_group,omitempty"`
-}
-
-func (AuditFileChmod) auditData() {}
+func (AuditWizardRevoke) auditData() {}
 
 // NewAuditLogger creates a new audit logger writing to the specified file
 // with automatic log rotation.

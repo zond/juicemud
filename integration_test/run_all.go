@@ -3,11 +3,11 @@
 // # Testing Principles
 //
 // All interactions should use the same interfaces as production: SSH for game
-// commands and WebDAV for file operations. Direct function calls on the test
-// server should only be used for:
+// commands. Source files are written directly to the filesystem. Direct function
+// calls on the test server should only be used for:
 //   - Necessary setup/teardown operations
-//   - Verification that SSH/WebDAV actions succeeded, and only when verifying
-//     via SSH/WebDAV would be unnecessarily complex
+//   - Verification that actions succeeded, and only when verifying
+//     via SSH would be unnecessarily complex
 //
 // # Test Structure
 //
@@ -118,49 +118,27 @@ func RunAll(ts *TestServer) error {
 
 	fmt.Println("  User creation and login: OK")
 
-	// === Test 2: WebDAV file operations ===
-	fmt.Println("Testing WebDAV file operations...")
+	// === Test 2: Wizard setup ===
+	fmt.Println("Setting up wizard access...")
 
-	// Make testuser an owner for subsequent tests (needed to bootstrap wizard access)
+	// Make testuser an owner and wizard for subsequent tests
 	user.Owner = true
+	user.Wizard = true
 	if err := ts.Storage().StoreUser(ctx, user, true, ""); err != nil {
-		return fmt.Errorf("failed to make testuser owner: %w", err)
+		return fmt.Errorf("failed to make testuser owner/wizard: %w", err)
 	}
 
-	// Reconnect as owner - owner status is checked at login time
+	// Reconnect to pick up owner/wizard status
 	tc, err := loginUser(ts.SSHAddr(), "testuser", "testpass123")
-	if err != nil {
-		return fmt.Errorf("loginUser as owner: %w", err)
-	}
-
-	// Use /adduser command to add ourselves to the wizards group
-	// This tests the group management commands via SSH interface
-	if err := tc.sendLine("/adduser testuser wizards"); err != nil {
-		return fmt.Errorf("/adduser to wizards: %w", err)
-	}
-	output, ok := tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/adduser to wizards did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Added "testuser" to "wizards"`) {
-		return fmt.Errorf("/adduser to wizards should show success: %q", output)
-	}
-
-	// Reconnect to pick up wizard status - wizard membership is checked at login time
-	tc.Close()
-	tc, err = loginUser(ts.SSHAddr(), "testuser", "testpass123")
 	if err != nil {
 		return fmt.Errorf("loginUser as wizard: %w", err)
 	}
 	defer tc.Close()
 
-	// Test WebDAV operations
-	dav := newWebDAVClient(ts.HTTPAddr(), "testuser", "testpass123")
-
-	// Read existing file
-	content, err := dav.Get("/user.js")
+	// Verify we can read existing source file
+	content, err := ts.ReadSource("/user.js")
 	if err != nil {
-		return fmt.Errorf("failed to GET /user.js: %w", err)
+		return fmt.Errorf("failed to read /user.js: %w", err)
 	}
 	if !strings.Contains(content, "connected") {
 		return fmt.Errorf("user.js doesn't contain expected content: %s", content)
@@ -174,20 +152,20 @@ setDescriptions([{
 	Long: 'A room created for testing.',
 }]);
 `
-	if err := dav.Put("/testroom.js", roomSource); err != nil {
-		return fmt.Errorf("failed to PUT /testroom.js: %w", err)
+	if err := ts.WriteSource("/testroom.js", roomSource); err != nil {
+		return fmt.Errorf("failed to write /testroom.js: %w", err)
 	}
 
 	// Verify file was created
-	readBack, err := dav.Get("/testroom.js")
+	readBack, err := ts.ReadSource("/testroom.js")
 	if err != nil {
-		return fmt.Errorf("failed to GET /testroom.js: %w", err)
+		return fmt.Errorf("failed to read /testroom.js: %w", err)
 	}
 	if readBack != roomSource {
 		return fmt.Errorf("file content mismatch: got %q, want %q", readBack, roomSource)
 	}
 
-	fmt.Println("  WebDAV file operations: OK")
+	fmt.Println("  Wizard setup: OK")
 
 	// === Test 3: Wizard commands ===
 	fmt.Println("Testing wizard commands...")
@@ -199,7 +177,7 @@ setDescriptions([{
 	Long: 'A simple wooden box.',
 }]);
 `
-	if err := dav.Put("/box.js", boxSource); err != nil {
+	if err := ts.WriteSource("/box.js", boxSource); err != nil {
 		return fmt.Errorf("failed to create /box.js: %w", err)
 	}
 
@@ -252,10 +230,10 @@ setDescriptions([{
 	Long: 'The second test room.',
 }]);
 `
-	if err := dav.Put("/room1.js", room1Source); err != nil {
+	if err := ts.WriteSource("/room1.js", room1Source); err != nil {
 		return fmt.Errorf("failed to create /room1.js: %w", err)
 	}
-	if err := dav.Put("/room2.js", room2Source); err != nil {
+	if err := ts.WriteSource("/room2.js", room2Source); err != nil {
 		return fmt.Errorf("failed to create /room2.js: %w", err)
 	}
 
@@ -318,7 +296,7 @@ setDescriptions([{
 		return fmt.Errorf("look in genesis: %w", err)
 	}
 
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("look in genesis did not complete: %q", output)
 	}
@@ -343,7 +321,7 @@ setExits([{
 	Destination: 'genesis',
 }]);
 `
-	if err := dav.Put("/lookroom.js", lookRoomSource); err != nil {
+	if err := ts.WriteSource("/lookroom.js", lookRoomSource); err != nil {
 		return fmt.Errorf("failed to create /lookroom.js: %w", err)
 	}
 
@@ -355,7 +333,7 @@ setDescriptions([{
 	Long: 'An old book covered in dust.',
 }]);
 `
-	if err := dav.Put("/book.js", bookSource); err != nil {
+	if err := ts.WriteSource("/book.js", bookSource); err != nil {
 		return fmt.Errorf("failed to create /book.js: %w", err)
 	}
 
@@ -476,7 +454,7 @@ setExits([{
 	Destination: '%s',
 }]);
 `, lookRoomID)
-	if err := dav.Put("/genesis.js", genesisSource); err != nil {
+	if err := ts.WriteSource("/genesis.js", genesisSource); err != nil {
 		return fmt.Errorf("failed to update /genesis.js: %w", err)
 	}
 
@@ -584,7 +562,7 @@ setExits([
 	},
 ]);
 `
-	if err := dav.Put("/challenge_room.js", challengeRoomSource); err != nil {
+	if err := ts.WriteSource("/challenge_room.js", challengeRoomSource); err != nil {
 		return fmt.Errorf("failed to create /challenge_room.js: %w", err)
 	}
 
@@ -596,7 +574,7 @@ setDescriptions([{
 	Challenges: [{Skill: 'perception', Level: 100}],
 }]);
 `
-	if err := dav.Put("/hidden_gem.js", hiddenGemSource); err != nil {
+	if err := ts.WriteSource("/hidden_gem.js", hiddenGemSource); err != nil {
 		return fmt.Errorf("failed to create /hidden_gem.js: %w", err)
 	}
 
@@ -725,7 +703,7 @@ addCallback('train', ['command'], (msg) => {
 	});
 });
 `
-	if err := dav.Put("/user.js", trainableUserSource); err != nil {
+	if err := ts.WriteSource("/user.js", trainableUserSource); err != nil {
 		return fmt.Errorf("failed to update /user.js with train command: %w", err)
 	}
 
@@ -796,7 +774,7 @@ addCallback('pong', ['emit'], (msg) => {
 	setDescriptions([{Short: 'receiver orb (got: ' + msg.message + ')'}]);
 });
 `
-	if err := dav.Put("/receiver.js", receiverSource); err != nil {
+	if err := ts.WriteSource("/receiver.js", receiverSource); err != nil {
 		return fmt.Errorf("failed to create /receiver.js: %w", err)
 	}
 
@@ -808,7 +786,7 @@ addCallback('ping', ['action'], (msg) => {
 	setDescriptions([{Short: 'sender orb (sent)'}]);
 });
 `
-	if err := dav.Put("/sender.js", senderSource); err != nil {
+	if err := ts.WriteSource("/sender.js", senderSource); err != nil {
 		return fmt.Errorf("failed to create /sender.js: %w", err)
 	}
 
@@ -842,12 +820,7 @@ addCallback('ping', ['action'], (msg) => {
 	}
 
 	// Poll with look until we see the receiver got the message (emit has ~100ms delay)
-	var lookOutput string
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		lookOutput, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(lookOutput, "receiver orb (got: hello)")
-	})
+	lookOutput, found := tc.waitForLookMatch("receiver orb (got: hello)", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("receiver did not update description after receiving emit: %q", lookOutput)
 	}
@@ -878,7 +851,7 @@ addCallback('timeout', ['emit'], (msg) => {
 	setDescriptions([{Short: 'timer orb (fired)'}]);
 });
 `
-	if err := dav.Put("/timer.js", timerSource); err != nil {
+	if err := ts.WriteSource("/timer.js", timerSource); err != nil {
 		return fmt.Errorf("failed to create /timer.js: %w", err)
 	}
 
@@ -893,12 +866,7 @@ addCallback('timeout', ['emit'], (msg) => {
 	}
 
 	// Poll until timer is visible in room
-	var timerOutput string
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		timerOutput, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(timerOutput, "timer orb (idle)")
-	})
+	timerOutput, found := tc.waitForLookMatch("timer orb (idle)", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("timer should be idle initially: %q", timerOutput)
 	}
@@ -912,11 +880,7 @@ addCallback('timeout', ['emit'], (msg) => {
 	}
 
 	// Poll with look until we see the timer fired (setTimeout has 200ms delay)
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		timerOutput, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(timerOutput, "timer orb (fired)")
-	})
+	timerOutput, found = tc.waitForLookMatch("timer orb (fired)", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("timer should show (fired) after timeout: %q", timerOutput)
 	}
@@ -936,7 +900,7 @@ addCallback('timeout', ['emit'], (msg) => {
 
 	removableSource := `setDescriptions([{Short: 'removable widget'}]);
 `
-	if err := dav.Put("/removable.js", removableSource); err != nil {
+	if err := ts.WriteSource("/removable.js", removableSource); err != nil {
 		return fmt.Errorf("failed to create /removable.js: %w", err)
 	}
 
@@ -952,13 +916,9 @@ addCallback('timeout', ['emit'], (msg) => {
 		return fmt.Errorf("removable was not created")
 	}
 
-	// Verify object exists via /inspect (poll to handle buffered output)
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine(fmt.Sprintf("/inspect #%s", removableID))
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "removable widget")
-	})
-	if !found {
+	// Verify object exists via /inspect
+	output, ok = tc.sendCommand(fmt.Sprintf("/inspect #%s", removableID), defaultWaitTimeout)
+	if !ok || !strings.Contains(output, "removable widget") {
 		return fmt.Errorf("removable object should exist before removal: %q", output)
 	}
 
@@ -971,13 +931,8 @@ addCallback('timeout', ['emit'], (msg) => {
 	}
 
 	// Verify object no longer exists via /inspect (should show error or empty)
-	found = waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
-		tc.sendLine(fmt.Sprintf("/inspect #%s", removableID))
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		// Object is gone if inspect doesn't show the description
-		return !strings.Contains(output, "removable widget")
-	})
-	if !found {
+	output, ok = tc.sendCommand(fmt.Sprintf("/inspect #%s", removableID), defaultWaitTimeout)
+	if strings.Contains(output, "removable widget") {
 		return fmt.Errorf("removable object should not exist after removal: %q", output)
 	}
 
@@ -1018,13 +973,13 @@ addCallback('movement', ['emit'], (msg) => {
 	setDescriptions([{Short: 'watcher orb (saw: ' + id + ')'}]);
 });
 `
-	if err := dav.Put("/observer.js", observerSource); err != nil {
+	if err := ts.WriteSource("/observer.js", observerSource); err != nil {
 		return fmt.Errorf("failed to create /observer.js: %w", err)
 	}
 
 	moveableSource := `setDescriptions([{Short: 'moveable cube'}]);
 `
-	if err := dav.Put("/moveable.js", moveableSource); err != nil {
+	if err := ts.WriteSource("/moveable.js", moveableSource); err != nil {
 		return fmt.Errorf("failed to create /moveable.js: %w", err)
 	}
 
@@ -1059,444 +1014,14 @@ addCallback('movement', ['emit'], (msg) => {
 	}
 
 	// Poll with look until observer shows it saw the movement
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "watcher orb (saw: "+moveableID+")")
-	})
+	output, found = tc.waitForLookMatch("watcher orb (saw: "+moveableID+")", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("observer should have seen moveable in movement event: %q", output)
 	}
 
 	fmt.Println("  Movement event notifications: OK")
 
-	// === Test 13: Group management commands ===
-	fmt.Println("Testing group management commands...")
-
-	// Drain any buffered output from the previous polling loop by waiting for any
-	// pending responses and then sending a known command.
-	// The polling loop in the previous test sends 'look' commands - wait a moment
-	// to let any in-flight responses arrive, then drain them.
-	time.Sleep(200 * time.Millisecond)
-	// Read and discard any buffered output
-	tc.readUntil(100*time.Millisecond, nil)
-
-	// Now send a drain command and wait for its prompt to ensure clean state
-	if err := tc.sendLine("/groups"); err != nil {
-		return fmt.Errorf("/groups drain command: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/groups drain command did not complete")
-	}
-
-	// Test /mkgroup - create a group owned by "owner" (root level)
-	if err := tc.sendLine("/mkgroup testgroup owner"); err != nil {
-		return fmt.Errorf("/mkgroup command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/mkgroup command did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Created group "testgroup"`) {
-		return fmt.Errorf("/mkgroup should show success message: %q", output)
-	}
-
-	// Test /listgroups - verify group was created
-	if err := tc.sendLine("/listgroups"); err != nil {
-		return fmt.Errorf("/listgroups command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/listgroups command did not complete: %q", output)
-	}
-	if !strings.Contains(output, "testgroup") {
-		return fmt.Errorf("/listgroups should show testgroup: %q", output)
-	}
-	if !strings.Contains(output, "wizards") {
-		return fmt.Errorf("/listgroups should show wizards group: %q", output)
-	}
-
-	// Test /mkgroup with supergroup flag
-	if err := tc.sendLine("/mkgroup supertest testgroup true"); err != nil {
-		return fmt.Errorf("/mkgroup supertest command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/mkgroup supertest command did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Created group "supertest"`) {
-		return fmt.Errorf("/mkgroup supertest should show success: %q", output)
-	}
-
-	// Verify supertest appears in /listgroups with supergroup flag
-	if err := tc.sendLine("/listgroups"); err != nil {
-		return fmt.Errorf("/listgroups after supertest: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/listgroups after supertest did not complete: %q", output)
-	}
-	if !strings.Contains(output, "supertest") {
-		return fmt.Errorf("/listgroups should show supertest: %q", output)
-	}
-	// Supertest should show "yes" in Supergroup column
-	if !strings.Contains(output, "yes") {
-		return fmt.Errorf("/listgroups should show 'yes' for supergroup: %q", output)
-	}
-
-	// Test /adduser - add testuser to testgroup
-	if err := tc.sendLine("/adduser testuser testgroup"); err != nil {
-		return fmt.Errorf("/adduser command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/adduser command did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Added "testuser" to "testgroup"`) {
-		return fmt.Errorf("/adduser should show success: %q", output)
-	}
-
-	// Test /members - verify user is in group
-	if err := tc.sendLine("/members testgroup"); err != nil {
-		return fmt.Errorf("/members command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/members command did not complete: %q", output)
-	}
-	if !strings.Contains(output, "testuser") {
-		return fmt.Errorf("/members should show testuser: %q", output)
-	}
-	// lang.Card produces "a member" for count 1
-	if !strings.Contains(output, "a member") {
-		return fmt.Errorf("/members should show 'a member': %q", output)
-	}
-
-	// Test /groups - verify user sees their groups
-	if err := tc.sendLine("/groups"); err != nil {
-		return fmt.Errorf("/groups command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/groups command did not complete: %q", output)
-	}
-	if !strings.Contains(output, "testgroup") {
-		return fmt.Errorf("/groups should show testgroup: %q", output)
-	}
-	if !strings.Contains(output, "wizards") {
-		return fmt.Errorf("/groups should show wizards: %q", output)
-	}
-
-	// Test /groups with user argument
-	if err := tc.sendLine("/groups testuser"); err != nil {
-		return fmt.Errorf("/groups testuser command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/groups testuser command did not complete: %q", output)
-	}
-	if !strings.Contains(output, "testgroup") {
-		return fmt.Errorf("/groups testuser should show testgroup: %q", output)
-	}
-
-	// Test /editgroup -name - rename group
-	if err := tc.sendLine("/editgroup testgroup -name renamedgroup"); err != nil {
-		return fmt.Errorf("/editgroup -name command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/editgroup -name command did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Renamed group "testgroup" to "renamedgroup"`) {
-		return fmt.Errorf("/editgroup -name should show success: %q", output)
-	}
-
-	// Verify rename via /listgroups
-	if err := tc.sendLine("/listgroups"); err != nil {
-		return fmt.Errorf("/listgroups after rename: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/listgroups after rename did not complete: %q", output)
-	}
-	if strings.Contains(output, "testgroup") {
-		return fmt.Errorf("/listgroups should not show old name 'testgroup': %q", output)
-	}
-	if !strings.Contains(output, "renamedgroup") {
-		return fmt.Errorf("/listgroups should show new name 'renamedgroup': %q", output)
-	}
-
-	// Test /editgroup -super - change supergroup flag
-	if err := tc.sendLine("/editgroup renamedgroup -super true"); err != nil {
-		return fmt.Errorf("/editgroup -super command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/editgroup -super command did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Changed Supergroup of "renamedgroup" to true`) {
-		return fmt.Errorf("/editgroup -super should show success: %q", output)
-	}
-
-	// Test /editgroup -owner - change OwnerGroup
-	// First create a new group that we can use as an owner
-	if err := tc.sendLine("/mkgroup ownertest owner"); err != nil {
-		return fmt.Errorf("/mkgroup ownertest command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/mkgroup ownertest did not complete: %q", output)
-	}
-
-	// Change renamedgroup's OwnerGroup to ownertest
-	if err := tc.sendLine("/editgroup renamedgroup -owner ownertest"); err != nil {
-		return fmt.Errorf("/editgroup -owner command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/editgroup -owner command did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Changed OwnerGroup of "renamedgroup" to "ownertest"`) {
-		return fmt.Errorf("/editgroup -owner should show success: %q", output)
-	}
-
-	// Verify via /listgroups that renamedgroup now shows ownertest as owner
-	if err := tc.sendLine("/listgroups"); err != nil {
-		return fmt.Errorf("/listgroups after -owner: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/listgroups after -owner did not complete: %q", output)
-	}
-	// The output should show renamedgroup with ownertest as its owner
-	// (ownertest appears in the OwnerGroup column for renamedgroup's row)
-
-	// Change OwnerGroup back to "owner" (root level)
-	if err := tc.sendLine("/editgroup renamedgroup -owner owner"); err != nil {
-		return fmt.Errorf("/editgroup -owner to owner command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/editgroup -owner to owner did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Changed OwnerGroup of "renamedgroup" to "owner"`) {
-		return fmt.Errorf("/editgroup -owner to owner should show success: %q", output)
-	}
-
-	// Cleanup ownertest
-	if err := tc.sendLine("/rmgroup ownertest"); err != nil {
-		return fmt.Errorf("/rmgroup ownertest command: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/rmgroup ownertest did not complete")
-	}
-
-	// Test /rmuser - remove user from group
-	if err := tc.sendLine("/rmuser testuser renamedgroup"); err != nil {
-		return fmt.Errorf("/rmuser command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/rmuser command did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Removed "testuser" from "renamedgroup"`) {
-		return fmt.Errorf("/rmuser should show success: %q", output)
-	}
-
-	// Verify removal via /members
-	if err := tc.sendLine("/members renamedgroup"); err != nil {
-		return fmt.Errorf("/members after rmuser: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/members after rmuser did not complete: %q", output)
-	}
-	if strings.Contains(output, "testuser") {
-		return fmt.Errorf("/members should not show testuser after removal: %q", output)
-	}
-	// lang.Card produces "no members" for count 0
-	if !strings.Contains(output, "no members") {
-		return fmt.Errorf("/members should show 'no members': %q", output)
-	}
-
-	// Test /rmgroup - delete group
-	if err := tc.sendLine("/rmgroup supertest"); err != nil {
-		return fmt.Errorf("/rmgroup command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/rmgroup command did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Deleted group "supertest"`) {
-		return fmt.Errorf("/rmgroup should show success: %q", output)
-	}
-
-	// Verify deletion via /listgroups
-	if err := tc.sendLine("/listgroups"); err != nil {
-		return fmt.Errorf("/listgroups after rmgroup: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/listgroups after rmgroup did not complete: %q", output)
-	}
-	if strings.Contains(output, "supertest") {
-		return fmt.Errorf("/listgroups should not show deleted group 'supertest': %q", output)
-	}
-
-	// Test error cases
-
-	// Cannot create group with invalid name (starts with digit)
-	if err := tc.sendLine("/mkgroup 123invalid owner"); err != nil {
-		return fmt.Errorf("/mkgroup 123invalid command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/mkgroup 123invalid did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Error:") {
-		return fmt.Errorf("/mkgroup 123invalid should show error: %q", output)
-	}
-
-	// Cannot create duplicate group
-	if err := tc.sendLine("/mkgroup renamedgroup owner"); err != nil {
-		return fmt.Errorf("/mkgroup duplicate command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/mkgroup duplicate did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Error:") {
-		return fmt.Errorf("/mkgroup duplicate should show error: %q", output)
-	}
-
-	// Cannot delete non-existent group
-	if err := tc.sendLine("/rmgroup nonexistent"); err != nil {
-		return fmt.Errorf("/rmgroup nonexistent command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/rmgroup nonexistent did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Error:") {
-		return fmt.Errorf("/rmgroup nonexistent should show error: %q", output)
-	}
-
-	// Cannot remove user from group they're not in
-	if err := tc.sendLine("/rmuser testuser renamedgroup"); err != nil {
-		return fmt.Errorf("/rmuser not-member command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/rmuser not-member did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Error:") {
-		return fmt.Errorf("/rmuser not-member should show error: %q", output)
-	}
-
-	// === Test permission failures with non-owner user ===
-
-	// Create a second user who is not an owner
-	tc2, err := createUser(ts.SSHAddr(), "regularuser", "pass456")
-	if err != nil {
-		return fmt.Errorf("createUser regularuser: %w", err)
-	}
-
-	// Add regularuser to wizards group so they can use wizard commands
-	if err := tc.sendLine("/adduser regularuser wizards"); err != nil {
-		tc2.Close()
-		return fmt.Errorf("/adduser regularuser wizards: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		tc2.Close()
-		return fmt.Errorf("/adduser regularuser wizards did not complete")
-	}
-
-	// Reconnect regularuser to pick up wizard status
-	tc2.Close()
-	tc2, err = loginUser(ts.SSHAddr(), "regularuser", "pass456")
-	if err != nil {
-		return fmt.Errorf("loginUser regularuser: %w", err)
-	}
-	defer tc2.Close()
-
-	// Non-owner cannot create root-level group (OwnerGroup=0)
-	if err := tc2.sendLine("/mkgroup rootgroup owner"); err != nil {
-		return fmt.Errorf("/mkgroup rootgroup by non-owner: %w", err)
-	}
-	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/mkgroup rootgroup by non-owner did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Error:") {
-		return fmt.Errorf("non-owner creating root-level group should fail: %q", output)
-	}
-
-	// Create a supergroup owned by wizards
-	// It must be a supergroup so members can create groups under it
-	if err := tc.sendLine("/mkgroup testowned wizards true"); err != nil {
-		return fmt.Errorf("/mkgroup testowned: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/mkgroup testowned did not complete")
-	}
-
-	// Add regularuser to testowned so they can create groups under it
-	if err := tc.sendLine("/adduser regularuser testowned"); err != nil {
-		return fmt.Errorf("/adduser regularuser testowned: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/adduser regularuser testowned did not complete")
-	}
-
-	// regularuser CAN create a group under testowned (since they're in testowned which is a Supergroup)
-	if err := tc2.sendLine("/mkgroup subgroup testowned"); err != nil {
-		return fmt.Errorf("/mkgroup subgroup by regularuser: %w", err)
-	}
-	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/mkgroup subgroup by regularuser did not complete: %q", output)
-	}
-	if !strings.Contains(output, `Created group "subgroup"`) {
-		return fmt.Errorf("wizard member should create group under owned group: %q", output)
-	}
-
-	// Non-owner cannot modify root-level groups
-	if err := tc2.sendLine("/adduser regularuser renamedgroup"); err != nil {
-		return fmt.Errorf("/adduser to root group by non-owner: %w", err)
-	}
-	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/adduser to root group by non-owner did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Error:") {
-		return fmt.Errorf("non-owner modifying root-level group should fail: %q", output)
-	}
-
-	// Cleanup permission test groups
-	if err := tc.sendLine("/rmgroup subgroup"); err != nil {
-		return fmt.Errorf("/rmgroup subgroup: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/rmgroup subgroup did not complete")
-	}
-	if err := tc.sendLine("/rmgroup testowned"); err != nil {
-		return fmt.Errorf("/rmgroup testowned: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/rmgroup testowned did not complete")
-	}
-
-	// Cleanup: delete renamedgroup
-	if err := tc.sendLine("/rmgroup renamedgroup"); err != nil {
-		return fmt.Errorf("/rmgroup cleanup command: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/rmgroup cleanup did not complete")
-	}
-
-	fmt.Println("  Group management commands: OK")
-
-	// === Test 14: /debug and log() ===
+	// === Test 13: /debug and log() ===
 	fmt.Println("Testing /debug and log()...")
 
 	// Ensure we're in genesis
@@ -1514,7 +1039,7 @@ addCallback('trigger', ['action'], (msg) => {
 	setDescriptions([{Short: 'logger stone (triggered)'}]);
 });
 `
-	if err := dav.Put("/logger.js", loggerSource); err != nil {
+	if err := ts.WriteSource("/logger.js", loggerSource); err != nil {
 		return fmt.Errorf("failed to create /logger.js: %w", err)
 	}
 
@@ -1544,35 +1069,26 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Wait for object to update its description
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "logger stone (triggered)")
-	})
+	output, found = tc.waitForLookMatch("logger stone (triggered)", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("logger should have updated description after trigger: %q", output)
 	}
 
 	// Reset the logger for the next test (re-upload resets description to untriggered state)
-	if err := dav.Put("/logger.js", loggerSource); err != nil {
+	if err := ts.WriteSource("/logger.js", loggerSource); err != nil {
 		return fmt.Errorf("failed to reset /logger.js: %w", err)
 	}
 
 	// Wait for description to reset
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "logger stone") && !strings.Contains(output, "(triggered)")
-	})
+	output, found = tc.waitForLookMatchFunc(func(s string) bool {
+		return strings.Contains(s, "logger stone") && !strings.Contains(s, "(triggered)")
+	}, defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("logger should have reset description: %q", output)
 	}
 
 	// Test 2: Attach console with /debug
-	if err := tc.sendLine(fmt.Sprintf("/debug #%s", loggerID)); err != nil {
-		return fmt.Errorf("/debug command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	output, ok = tc.sendCommand(fmt.Sprintf("/debug #%s", loggerID), defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/debug command did not complete: %q", output)
 	}
@@ -1603,10 +1119,7 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Test 3: Detach with /undebug
-	if err := tc.sendLine(fmt.Sprintf("/undebug #%s", loggerID)); err != nil {
-		return fmt.Errorf("/undebug command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	output, ok = tc.sendCommand(fmt.Sprintf("/undebug #%s", loggerID), defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/undebug command did not complete: %q", output)
 	}
@@ -1615,25 +1128,20 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 
 	// Reset the logger again
-	if err := dav.Put("/logger.js", loggerSource); err != nil {
+	if err := ts.WriteSource("/logger.js", loggerSource); err != nil {
 		return fmt.Errorf("failed to reset /logger.js again: %w", err)
 	}
 
 	// Wait for description to reset
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "logger stone") && !strings.Contains(output, "(triggered)")
-	})
+	output, found = tc.waitForLookMatchFunc(func(s string) bool {
+		return strings.Contains(s, "logger stone") && !strings.Contains(s, "(triggered)")
+	}, defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("logger should have reset description again: %q", output)
 	}
 
 	// Trigger again - log output should NOT appear anymore
-	if err := tc.sendLine("trigger logger"); err != nil {
-		return fmt.Errorf("trigger after undebug: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	output, ok = tc.sendCommand("trigger logger", defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("trigger after undebug did not complete: %q", output)
 	}
@@ -1664,7 +1172,7 @@ addCallback('created', ['emit'], (msg) => {
 	}
 });
 `
-	if err := dav.Put("/witness.js", createdSource); err != nil {
+	if err := ts.WriteSource("/witness.js", createdSource); err != nil {
 		return fmt.Errorf("failed to create /witness.js: %w", err)
 	}
 
@@ -1680,11 +1188,7 @@ addCallback('created', ['emit'], (msg) => {
 	}
 
 	// Wait for the witness to appear with the creator's ID in its description
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "witness stone (created by "+userID+")")
-	})
+	output, found = tc.waitForLookMatch("witness stone (created by "+userID+")", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("witness should show creator ID in description: %q", output)
 	}
@@ -1708,7 +1212,7 @@ addCallback('created', ['emit'], (msg) => {
 	Long: 'An ancient book bound in cracked leather. Strange symbols cover the spine, and the pages smell of forgotten ages.',
 }]);
 `
-	if err := dav.Put("/tome.js", tomeSource); err != nil {
+	if err := ts.WriteSource("/tome.js", tomeSource); err != nil {
 		return fmt.Errorf("failed to create /tome.js: %w", err)
 	}
 
@@ -1891,7 +1395,7 @@ addCallback('shake', ['action'], (msg) => {
 	setDescriptions([{Short: 'shaky chamber (shaken!)', Long: 'The walls have just been shaken!'}]);
 });
 `
-	if err := dav.Put("/actionroom.js", actionRoomSource); err != nil {
+	if err := ts.WriteSource("/actionroom.js", actionRoomSource); err != nil {
 		return fmt.Errorf("failed to create /actionroom.js: %w", err)
 	}
 
@@ -1926,11 +1430,7 @@ addCallback('shake', ['action'], (msg) => {
 	}
 
 	// Wait for the room's description to update (action handlers have a small delay)
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "shaky chamber (shaken!)")
-	})
+	output, found = tc.waitForLookMatch("shaky chamber (shaken!)", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("room action handler should have updated description: %q", output)
 	}
@@ -1944,7 +1444,7 @@ addCallback('poke', ['action'], (msg) => {
 	setDescriptions([{Short: 'pokeable orb (poked!)'}]);
 });
 `
-	if err := dav.Put("/pokeable.js", pokeableSource); err != nil {
+	if err := ts.WriteSource("/pokeable.js", pokeableSource); err != nil {
 		return fmt.Errorf("failed to create /pokeable.js: %w", err)
 	}
 
@@ -1970,11 +1470,7 @@ addCallback('poke', ['action'], (msg) => {
 	}
 
 	// Wait for the sibling's description to update
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "pokeable orb (poked!)")
-	})
+	output, found = tc.waitForLookMatch("pokeable orb (poked!)", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("sibling action handler should have updated description: %q", output)
 	}
@@ -2013,7 +1509,7 @@ addCallback('tap', ['action'], (msg) => {
 	setDescriptions([{Short: 'tap counter (' + state.count + ' taps)', Long: 'A counter that has been tapped ' + state.count + ' times.'}]);
 });
 `
-	if err := dav.Put("/counter.js", counterSource); err != nil {
+	if err := ts.WriteSource("/counter.js", counterSource); err != nil {
 		return fmt.Errorf("failed to create /counter.js: %w", err)
 	}
 
@@ -2041,11 +1537,7 @@ addCallback('tap', ['action'], (msg) => {
 
 		// Wait for the description to update with the correct count
 		expectedDesc := fmt.Sprintf("tap counter (%d taps)", i)
-		found := waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-			tc.sendLine("look")
-			output, _ = tc.waitForPrompt(defaultWaitTimeout)
-			return strings.Contains(output, expectedDesc)
-		})
+		output, found := tc.waitForLookMatch(expectedDesc, defaultWaitTimeout)
 		if !found {
 			return fmt.Errorf("state should persist count after tap %d, expected %q in output: %q", i, expectedDesc, output)
 		}
@@ -2071,7 +1563,7 @@ addCallback('secret', ['emit'], (msg) => {
 	setDescriptions([{Short: 'eagle orb (got: ' + msg.secret + ')'}]);
 });
 `
-	if err := dav.Put("/eaglereceiver.js", highPercReceiverSource); err != nil {
+	if err := ts.WriteSource("/eaglereceiver.js", highPercReceiverSource); err != nil {
 		return fmt.Errorf("failed to create /eaglereceiver.js: %w", err)
 	}
 
@@ -2082,7 +1574,7 @@ addCallback('secret', ['emit'], (msg) => {
 	setDescriptions([{Short: 'dim orb (got: ' + msg.secret + ')'}]);
 });
 `
-	if err := dav.Put("/dimreceiver.js", lowPercReceiverSource); err != nil {
+	if err := ts.WriteSource("/dimreceiver.js", lowPercReceiverSource); err != nil {
 		return fmt.Errorf("failed to create /dimreceiver.js: %w", err)
 	}
 
@@ -2095,7 +1587,7 @@ addCallback('whisper', ['action'], (msg) => {
 	setDescriptions([{Short: 'whisperer orb (sent)'}]);
 });
 `
-	if err := dav.Put("/challengesender.js", challengeSenderSource); err != nil {
+	if err := ts.WriteSource("/challengesender.js", challengeSenderSource); err != nil {
 		return fmt.Errorf("failed to create /challengesender.js: %w", err)
 	}
 
@@ -2142,11 +1634,7 @@ addCallback('whisper', ['action'], (msg) => {
 	}
 
 	// Eagle should receive the secret
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "eagle orb (got: hidden)")
-	})
+	output, found = tc.waitForLookMatch("eagle orb (got: hidden)", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("high-perception receiver should have received challenged emit: %q", output)
 	}
@@ -2189,7 +1677,7 @@ addCallback('whisper', ['action'], (msg) => {
 	broadcastRoomSource := `setDescriptions([{Short: 'broadcast chamber', Long: 'A room for broadcasting.'}]);
 setExits([{Name: 'out', Destination: 'genesis'}]);
 `
-	if err := dav.Put("/broadcastroom.js", broadcastRoomSource); err != nil {
+	if err := ts.WriteSource("/broadcastroom.js", broadcastRoomSource); err != nil {
 		return fmt.Errorf("failed to create /broadcastroom.js: %w", err)
 	}
 	if err := tc.sendLine("/create /broadcastroom.js"); err != nil {
@@ -2217,7 +1705,7 @@ addCallback('announce', ['emit'], (msg) => {
 	setDescriptions([{Short: 'listener alpha (heard: ' + msg.message + ')'}]);
 });
 `
-	if err := dav.Put("/listener1.js", listener1Source); err != nil {
+	if err := ts.WriteSource("/listener1.js", listener1Source); err != nil {
 		return fmt.Errorf("failed to create /listener1.js: %w", err)
 	}
 	if err := tc.sendLine("/create /listener1.js"); err != nil {
@@ -2236,7 +1724,7 @@ addCallback('announce', ['emit'], (msg) => {
 	setDescriptions([{Short: 'listener beta (heard: ' + msg.message + ')'}]);
 });
 `
-	if err := dav.Put("/listener2.js", listener2Source); err != nil {
+	if err := ts.WriteSource("/listener2.js", listener2Source); err != nil {
 		return fmt.Errorf("failed to create /listener2.js: %w", err)
 	}
 	if err := tc.sendLine("/create /listener2.js"); err != nil {
@@ -2260,7 +1748,7 @@ addCallback('announce', ['emit'], (msg) => {
 	log('Broadcaster received own announcement');
 });
 `
-	if err := dav.Put("/broadcaster.js", broadcasterSource); err != nil {
+	if err := ts.WriteSource("/broadcaster.js", broadcasterSource); err != nil {
 		return fmt.Errorf("failed to create /broadcaster.js: %w", err)
 	}
 	if err := tc.sendLine("/create /broadcaster.js"); err != nil {
@@ -2282,12 +1770,10 @@ addCallback('announce', ['emit'], (msg) => {
 	}
 
 	// Both listeners should receive the broadcast
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "listener alpha (heard: hello all)") &&
-			strings.Contains(output, "listener beta (heard: hello all)")
-	})
+	output, found = tc.waitForLookMatchFunc(func(s string) bool {
+		return strings.Contains(s, "listener alpha (heard: hello all)") &&
+			strings.Contains(s, "listener beta (heard: hello all)")
+	}, defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("both listeners should have received broadcast: %q", output)
 	}
@@ -2306,7 +1792,7 @@ addCallback('mindcast', ['emit'], (msg) => {
 	setDescriptions([{Short: 'sensitive ear (heard: ' + msg.thought + ')'}]);
 });
 `
-	if err := dav.Put("/listener1.js", listener1ChallengeSource); err != nil {
+	if err := ts.WriteSource("/listener1.js", listener1ChallengeSource); err != nil {
 		return fmt.Errorf("failed to update /listener1.js: %w", err)
 	}
 
@@ -2316,17 +1802,15 @@ addCallback('mindcast', ['emit'], (msg) => {
 	setDescriptions([{Short: 'deaf ear (heard: ' + msg.thought + ')'}]);
 });
 `
-	if err := dav.Put("/listener2.js", listener2ChallengeSource); err != nil {
+	if err := ts.WriteSource("/listener2.js", listener2ChallengeSource); err != nil {
 		return fmt.Errorf("failed to update /listener2.js: %w", err)
 	}
 
 	// Wait for descriptions to update
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "sensitive ear (idle)") &&
-			strings.Contains(output, "deaf ear (idle)")
-	})
+	output, found = tc.waitForLookMatchFunc(func(s string) bool {
+		return strings.Contains(s, "sensitive ear (idle)") &&
+			strings.Contains(s, "deaf ear (idle)")
+	}, defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("listeners should have reset for challenge test: %q", output)
 	}
@@ -2338,15 +1822,11 @@ addCallback('mindspeak', ['action'], (msg) => {
 	setDescriptions([{Short: 'telepath orb (sent)'}]);
 });
 `
-	if err := dav.Put("/broadcaster.js", telepathSource); err != nil {
+	if err := ts.WriteSource("/broadcaster.js", telepathSource); err != nil {
 		return fmt.Errorf("failed to update /broadcaster.js: %w", err)
 	}
 
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "telepath orb")
-	})
+	output, found = tc.waitForLookMatch("telepath orb", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("broadcaster should have updated to telepath: %q", output)
 	}
@@ -2360,11 +1840,7 @@ addCallback('mindspeak', ['action'], (msg) => {
 	}
 
 	// Only the sensitive ear should receive the telepathic broadcast
-	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
-		tc.sendLine("look")
-		output, _ = tc.waitForPrompt(defaultWaitTimeout)
-		return strings.Contains(output, "sensitive ear (heard: secret thought)")
-	})
+	output, found = tc.waitForLookMatch("sensitive ear (heard: secret thought)", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("high-telepathy listener should have received challenged broadcast: %q", output)
 	}
@@ -2378,6 +1854,138 @@ addCallback('mindspeak', ['action'], (msg) => {
 	}
 
 	fmt.Println("  emitToLocation() with challenges: OK")
+
+	// === Test 23: /addwiz and /delwiz commands ===
+	fmt.Println("Testing /addwiz and /delwiz commands...")
+
+	// Create a second user to test granting/revoking wizard status
+	tc2, err := createUser(ts.SSHAddr(), "wizardtest", "wizpass123")
+	if err != nil {
+		return fmt.Errorf("createUser wizardtest: %w", err)
+	}
+	defer tc2.Close()
+
+	// Verify new user is not a wizard (can't use /inspect)
+	if err := tc2.sendLine("/inspect"); err != nil {
+		return fmt.Errorf("/inspect as non-wizard: %w", err)
+	}
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/inspect did not complete: %q", output)
+	}
+	// Non-wizards should NOT see JSON output from /inspect
+	if strings.Contains(output, "\"Unsafe\"") {
+		return fmt.Errorf("non-wizard should not see /inspect output: %q", output)
+	}
+
+	// Grant wizard status using /addwiz (tc is the owner)
+	if err := tc.sendLine("/addwiz wizardtest"); err != nil {
+		return fmt.Errorf("/addwiz command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/addwiz command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Granted wizard privileges") {
+		return fmt.Errorf("/addwiz should confirm grant: %q", output)
+	}
+
+	// Reconnect as wizardtest to pick up wizard status
+	tc2.Close()
+	tc2, err = loginUser(ts.SSHAddr(), "wizardtest", "wizpass123")
+	if err != nil {
+		return fmt.Errorf("loginUser wizardtest after /addwiz: %w", err)
+	}
+	defer tc2.Close()
+
+	// Verify wizardtest can now use /inspect (wizard command)
+	if err := tc2.sendLine("/inspect"); err != nil {
+		return fmt.Errorf("/inspect as wizard: %w", err)
+	}
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/inspect as wizard did not complete: %q", output)
+	}
+	// Wizards should see JSON output from /inspect
+	if !strings.Contains(output, "\"Unsafe\"") {
+		return fmt.Errorf("wizard should see /inspect output: %q", output)
+	}
+
+	// Revoke wizard status using /delwiz
+	if err := tc.sendLine("/delwiz wizardtest"); err != nil {
+		return fmt.Errorf("/delwiz command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/delwiz command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Revoked wizard privileges") {
+		return fmt.Errorf("/delwiz should confirm revoke: %q", output)
+	}
+
+	// Reconnect to pick up revoked status
+	tc2.Close()
+	tc2, err = loginUser(ts.SSHAddr(), "wizardtest", "wizpass123")
+	if err != nil {
+		return fmt.Errorf("loginUser wizardtest after /delwiz: %w", err)
+	}
+	defer tc2.Close()
+
+	// Verify wizardtest can no longer use /inspect
+	if err := tc2.sendLine("/inspect"); err != nil {
+		return fmt.Errorf("/inspect after revoke: %w", err)
+	}
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/inspect after revoke did not complete: %q", output)
+	}
+	// Revoked user should NOT see JSON output from /inspect
+	if strings.Contains(output, "\"Unsafe\"") {
+		return fmt.Errorf("revoked user should not see /inspect output: %q", output)
+	}
+
+	// Test that non-owner cannot use /addwiz
+	// Grant wizard back to wizardtest (but not owner)
+	if err := tc.sendLine("/addwiz wizardtest"); err != nil {
+		return fmt.Errorf("/addwiz to restore: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/addwiz to restore did not complete")
+	}
+
+	// Reconnect wizardtest as wizard
+	tc2.Close()
+	tc2, err = loginUser(ts.SSHAddr(), "wizardtest", "wizpass123")
+	if err != nil {
+		return fmt.Errorf("loginUser wizardtest as wizard: %w", err)
+	}
+	defer tc2.Close()
+
+	// Try to use /addwiz as non-owner wizard
+	if err := tc2.sendLine("/addwiz testuser"); err != nil {
+		return fmt.Errorf("/addwiz as non-owner: %w", err)
+	}
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/addwiz as non-owner did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Only owners") {
+		return fmt.Errorf("non-owner should be denied /addwiz: %q", output)
+	}
+
+	// Try to use /delwiz as non-owner wizard
+	if err := tc2.sendLine("/delwiz testuser"); err != nil {
+		return fmt.Errorf("/delwiz as non-owner: %w", err)
+	}
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/delwiz as non-owner did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Only owners") {
+		return fmt.Errorf("non-owner should be denied /delwiz: %q", output)
+	}
+
+	fmt.Println("  /addwiz and /delwiz commands: OK")
 
 	return nil
 }

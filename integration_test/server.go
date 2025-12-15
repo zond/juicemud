@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/zond/juicemud/server"
@@ -13,12 +14,10 @@ import (
 // TestServer wraps a server instance for testing.
 type TestServer struct {
 	*server.Server
-	tmpDir        string
-	sshListener   net.Listener
-	httpListener  net.Listener
-	httpsListener net.Listener
-	cancel        context.CancelFunc
-	done          chan struct{} // closed when server goroutine exits
+	tmpDir      string
+	sshListener net.Listener
+	cancel      context.CancelFunc
+	done        chan struct{} // closed when server goroutine exits
 }
 
 // NewTestServer creates a new test server with random ports.
@@ -29,12 +28,8 @@ func NewTestServer() (*TestServer, error) {
 	}
 
 	config := server.Config{
-		SSHAddr:    "127.0.0.1:0",
-		HTTPSAddr:  "127.0.0.1:0",
-		HTTPAddr:   "127.0.0.1:0",
-		EnableHTTP: true, // Enable HTTP for testing
-		Hostname:   "localhost",
-		Dir:        tmpDir,
+		SSHAddr: "127.0.0.1:0",
+		Dir:     tmpDir,
 	}
 
 	srv, err := server.New(config)
@@ -43,24 +38,9 @@ func NewTestServer() (*TestServer, error) {
 		return nil, err
 	}
 
-	// Create listeners with random ports
+	// Create listener with random port
 	sshLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, err
-	}
-
-	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		sshLn.Close()
-		os.RemoveAll(tmpDir)
-		return nil, err
-	}
-
-	httpsLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		httpLn.Close()
-		sshLn.Close()
 		os.RemoveAll(tmpDir)
 		return nil, err
 	}
@@ -69,19 +49,17 @@ func NewTestServer() (*TestServer, error) {
 	done := make(chan struct{})
 
 	ts := &TestServer{
-		Server:        srv,
-		tmpDir:        tmpDir,
-		sshListener:   sshLn,
-		httpListener:  httpLn,
-		httpsListener: httpsLn,
-		cancel:        cancel,
-		done:          done,
+		Server:      srv,
+		tmpDir:      tmpDir,
+		sshListener: sshLn,
+		cancel:      cancel,
+		done:        done,
 	}
 
 	// Start server in background
 	go func() {
 		defer close(done)
-		srv.StartWithListeners(ctx, sshLn, httpLn, httpsLn)
+		srv.StartWithListener(ctx, sshLn)
 	}()
 
 	// Wait for server to be ready by polling the SSH port
@@ -106,19 +84,12 @@ func (ts *TestServer) Close() {
 	ts.cancel()
 	<-ts.done // wait for server to fully shut down
 	ts.sshListener.Close()
-	ts.httpListener.Close()
-	ts.httpsListener.Close()
 	os.RemoveAll(ts.tmpDir)
 }
 
 // SSHAddr returns the SSH address.
 func (ts *TestServer) SSHAddr() string {
 	return ts.sshListener.Addr().String()
-}
-
-// HTTPAddr returns the HTTP address.
-func (ts *TestServer) HTTPAddr() string {
-	return ts.httpListener.Addr().String()
 }
 
 // waitForSourceObject polls until an object with the given source path exists.
@@ -139,3 +110,28 @@ func (ts *TestServer) waitForSourceObject(ctx context.Context, sourcePath string
 	return objectID, found
 }
 
+// SourcesDir returns the path to the sources directory.
+func (ts *TestServer) SourcesDir() string {
+	return filepath.Join(ts.tmpDir, "src")
+}
+
+// WriteSource writes a source file to the sources directory.
+// The path should start with "/" (e.g., "/user.js").
+func (ts *TestServer) WriteSource(path, content string) error {
+	fullPath := filepath.Join(ts.SourcesDir(), path)
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(fullPath, []byte(content), 0644)
+}
+
+// ReadSource reads a source file from the sources directory.
+// The path should start with "/" (e.g., "/user.js").
+func (ts *TestServer) ReadSource(path string) (string, error) {
+	fullPath := filepath.Join(ts.SourcesDir(), path)
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}

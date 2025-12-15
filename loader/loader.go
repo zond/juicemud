@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/game"
@@ -16,12 +15,11 @@ import (
 	goccy "github.com/goccy/go-json"
 )
 
+// data holds the serialized game state for backup/restore.
+// Note: Sources are now stored on the filesystem and should be managed via Git.
 type data struct {
 	Objects []structs.ObjectDO
-	Sources map[string]string
 }
-
-var nonWordReg = regexp.MustCompile(`\W`)
 
 func main() {
 	dir := flag.String("dir", filepath.Join(os.Getenv("HOME"), ".juicemud"), "Where to save database and settings.")
@@ -65,25 +63,11 @@ func main() {
 				log.Fatalf("storing obj %q: %v", obj.Id, err)
 			}
 		}
-		for path, src := range d.Sources {
-			if _, _, err := store.EnsureFile(ctx, path); err != nil {
-				log.Fatalf("creating file %q: %v", path, err)
-			}
-			if err := store.StoreSource(ctx, path, []byte(src)); err != nil {
-				log.Fatalf("storing source %q: %v", path, err)
-			}
-		}
+		log.Printf("Restored %d objects", len(d.Objects))
 	}
 	if *doBackup {
 		d := &data{
 			Objects: []structs.ObjectDO{},
-			Sources: map[string]string{},
-		}
-		for entry, err := range store.EachSource(ctx) {
-			if err != nil {
-				log.Fatalf("iterating sources: %v", err)
-			}
-			d.Sources[entry.Path] = entry.Content
 		}
 		for obj, err := range store.EachObject(ctx) {
 			if err != nil {
@@ -97,8 +81,9 @@ func main() {
 			log.Fatalf("encoding data: %v", err)
 		}
 
-		if err := os.WriteFile(*dataPath, b, 0x600); err != nil {
+		if err := os.WriteFile(*dataPath, b, 0600); err != nil {
 			log.Fatal(err)
 		}
+		log.Printf("Backed up %d objects", len(d.Objects))
 	}
 }

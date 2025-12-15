@@ -2,8 +2,9 @@ package game
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
-	"sort"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -11,8 +12,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rodaine/table"
 	"github.com/zond/juicemud"
-	"github.com/zond/juicemud/lang"
-	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 
 	goccy "github.com/goccy/go-json"
@@ -21,36 +20,50 @@ import (
 func (c *Connection) wizCommands() commands {
 	return []command{
 		{
-			names: m("/groups"),
+			names: m("/addwiz"),
 			f: func(c *Connection, s string) error {
+				if !c.user.Owner {
+					fmt.Fprintln(c.term, "Only owners can grant wizard privileges.")
+					return nil
+				}
 				parts, err := shellwords.SplitPosix(s)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				var targetUser *storage.User
-				var userName string
-				if len(parts) >= 2 {
-					// Query another user's groups
-					userName = parts[1]
-					targetUser, err = c.game.storage.LoadUser(c.ctx, userName)
-					if err != nil {
-						fmt.Fprintf(c.term, "Error: user %q not found\n", userName)
-						return nil
-					}
-				} else {
-					// Query own groups
-					targetUser = c.user
-					userName = c.user.Name
+				if len(parts) != 2 {
+					fmt.Fprintln(c.term, "usage: /addwiz <username>")
+					return nil
 				}
-				groups, err := c.game.storage.UserGroups(c.ctx, targetUser)
+				username := parts[1]
+				if err := c.game.storage.SetUserWizard(c.ctx, username, true); err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+				fmt.Fprintf(c.term, "Granted wizard privileges to %q\n", username)
+				return nil
+			},
+		},
+		{
+			names: m("/delwiz"),
+			f: func(c *Connection, s string) error {
+				if !c.user.Owner {
+					fmt.Fprintln(c.term, "Only owners can revoke wizard privileges.")
+					return nil
+				}
+				parts, err := shellwords.SplitPosix(s)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				sort.Sort(groups)
-				fmt.Fprintf(c.term, "%s is member of %v:\n", userName, lang.Card(len(groups), "groups"))
-				for _, group := range groups {
-					fmt.Fprintf(c.term, "  %s\n", group.Name)
+				if len(parts) != 2 {
+					fmt.Fprintln(c.term, "usage: /delwiz <username>")
+					return nil
 				}
+				username := parts[1]
+				if err := c.game.storage.SetUserWizard(c.ctx, username, false); err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+				fmt.Fprintf(c.term, "Revoked wizard privileges from %q\n", username)
 				return nil
 			},
 		},
@@ -122,12 +135,12 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "usage: /create [path]")
 					return nil
 				}
-				exists, err := c.game.storage.FileExists(c.ctx, parts[1])
+				exists, err := c.game.storage.SourceExists(c.ctx, parts[1])
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
 				if !exists {
-					fmt.Fprintf(c.term, "%q doesn't exist", parts[1])
+					fmt.Fprintf(c.term, "%q doesn't exist\n", parts[1])
 					return nil
 				}
 				self, err := c.game.accessObject(c.ctx, c.user.Object)
@@ -231,300 +244,74 @@ func (c *Connection) wizCommands() commands {
 			},
 		},
 		{
-			names: m("/chwrite"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
-				if len(parts) == 2 {
-					if err := c.game.storage.ChwriteFile(c.ctx, parts[1], ""); err != nil {
-						return juicemud.WithStack(err)
-					}
-				} else if len(parts) == 3 {
-					if err := c.game.storage.ChwriteFile(c.ctx, parts[1], parts[2]); err != nil {
-						return juicemud.WithStack(err)
-					}
-				} else {
-					fmt.Fprintln(c.term, "usage: /chwrite [path] [writer group]")
-				}
-				return nil
-			},
-		},
-		{
-			names: m("/chread"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
-				if len(parts) == 2 {
-					if err := c.game.storage.ChreadFile(c.ctx, parts[1], ""); err != nil {
-						return juicemud.WithStack(err)
-					}
-				} else if len(parts) == 3 {
-					if err := c.game.storage.ChreadFile(c.ctx, parts[1], parts[2]); err != nil {
-						return juicemud.WithStack(err)
-					}
-				} else {
-					fmt.Fprintln(c.term, "usage: /chread [path] [reader group]")
-				}
-				return nil
-			},
-		},
-		{
 			names: m("/ls"),
 			f: func(c *Connection, s string) error {
 				parts, err := shellwords.SplitPosix(s)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				if len(parts) < 1 {
-					return nil
+				if len(parts) < 2 {
+					parts = append(parts, "/")
 				}
-				parts = parts[1:]
-				t := table.New("Path", "Read", "Write").WithWriter(c.term)
-				lastWasFile := false
-				for _, part := range parts {
-					f, err := c.game.storage.LoadFile(c.ctx, part)
+				t := table.New("Path", "Type", "Objects").WithWriter(c.term)
+				for _, part := range parts[1:] {
+					fullPath, err := c.game.storage.SafeSourcePath(part)
+					if err != nil {
+						t.AddRow(part, "error", err.Error())
+						continue
+					}
+					info, err := os.Stat(fullPath)
 					if errors.Is(err, os.ErrNotExist) {
-						t.AddRow(fmt.Sprintf("%s: %v", part, err), "", "")
+						t.AddRow(part, "not found", "")
 						continue
 					} else if err != nil {
 						return juicemud.WithStack(err)
 					}
-					lastWasFile = !f.Dir
-					r, w, err := c.game.storage.FileGroups(c.ctx, f)
-					if err != nil {
-						return juicemud.WithStack(err)
-					}
-					t.AddRow(f.Path, r.Name, w.Name)
-					if f.Dir {
-						children, err := c.game.storage.LoadChildren(c.ctx, f.Id)
-						if err != nil {
-							return juicemud.WithStack(err)
-						}
-						for _, child := range children {
-							r, w, err := c.game.storage.FileGroups(c.ctx, &child)
-							if err != nil {
-								return juicemud.WithStack(err)
-							}
-							t.AddRow(child.Path, r.Name, w.Name)
-						}
 
-					}
-				}
-				t.Print()
-				if len(parts) == 1 && lastWasFile {
-					objectIDs := []string{}
-					for id, err := range c.game.storage.EachSourceObject(c.ctx, parts[0]) {
+					if info.IsDir() {
+						// List directory contents
+						entries, err := os.ReadDir(fullPath)
 						if err != nil {
 							return juicemud.WithStack(err)
 						}
-						objectIDs = append(objectIDs, id)
-					}
-					if len(objectIDs) > 0 {
-						fmt.Fprint(c.term, "\nUsed by:\n")
-						for _, id := range objectIDs {
-							fmt.Fprintf(c.term, "  %q\n", id)
+						t.AddRow(part+"/", "dir", "")
+						for _, entry := range entries {
+							entryPath := filepath.Join(part, entry.Name())
+							entryType := "file"
+							if entry.IsDir() {
+								entryType = "dir"
+								entryPath += "/"
+							}
+							// Count objects using this source
+							objCount := 0
+							if !entry.IsDir() {
+								objCount, _ = c.game.storage.CountSourceObjects(c.ctx, entryPath)
+							}
+							objStr := ""
+							if objCount > 0 {
+								objStr = fmt.Sprintf("%d", objCount)
+							}
+							t.AddRow(entryPath, entryType, objStr)
+						}
+					} else {
+						// Single file
+						objCount, _ := c.game.storage.CountSourceObjects(c.ctx, part)
+						objStr := ""
+						if objCount > 0 {
+							objStr = fmt.Sprintf("%d", objCount)
+						}
+						t.AddRow(part, "file", objStr)
+						// Show which objects use this source
+						if objCount > 0 {
+							fmt.Fprint(c.term, "\nUsed by:\n")
+							for id, err := range c.game.storage.EachSourceObject(c.ctx, part) {
+								if err != nil {
+									return juicemud.WithStack(err)
+								}
+								fmt.Fprintf(c.term, "  %q\n", id)
+							}
 						}
 					}
-				}
-				return nil
-			},
-		},
-		// Group management commands
-		{
-			names: m("/mkgroup"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
-				if len(parts) < 3 {
-					fmt.Fprintln(c.term, "usage: /mkgroup <name> <owner> [super]")
-					fmt.Fprintln(c.term, "  owner: group name or 'owner' for OwnerGroup=0")
-					fmt.Fprintln(c.term, "  super: 'true' to make this a Supergroup (default: false)")
-					return nil
-				}
-				name := parts[1]
-				ownerName := parts[2]
-				supergroup := false
-				if len(parts) >= 4 && parts[3] == "true" {
-					supergroup = true
-				}
-				if err := c.game.storage.CreateGroup(c.ctx, name, ownerName, supergroup); err != nil {
-					fmt.Fprintf(c.term, "Error: %v\n", err)
-					return nil
-				}
-				fmt.Fprintf(c.term, "Created group %q\n", name)
-				return nil
-			},
-		},
-		{
-			names: m("/rmgroup"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
-				if len(parts) != 2 {
-					fmt.Fprintln(c.term, "usage: /rmgroup <name>")
-					return nil
-				}
-				name := parts[1]
-				if err := c.game.storage.DeleteGroup(c.ctx, name); err != nil {
-					fmt.Fprintf(c.term, "Error: %v\n", err)
-					return nil
-				}
-				fmt.Fprintf(c.term, "Deleted group %q\n", name)
-				return nil
-			},
-		},
-		{
-			names: m("/editgroup"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
-				if len(parts) < 4 {
-					fmt.Fprintln(c.term, "usage: /editgroup <group> <option> <value>")
-					fmt.Fprintln(c.term, "  options:")
-					fmt.Fprintln(c.term, "    -name <newname>     Rename the group")
-					fmt.Fprintln(c.term, "    -owner <newowner>   Change OwnerGroup ('owner' for OwnerGroup=0)")
-					fmt.Fprintln(c.term, "    -super <true|false> Change Supergroup flag")
-					return nil
-				}
-				groupName := parts[1]
-				option := parts[2]
-				value := parts[3]
-				switch option {
-				case "-name":
-					if err := c.game.storage.EditGroupName(c.ctx, groupName, value); err != nil {
-						fmt.Fprintf(c.term, "Error: %v\n", err)
-						return nil
-					}
-					fmt.Fprintf(c.term, "Renamed group %q to %q\n", groupName, value)
-				case "-owner":
-					if err := c.game.storage.EditGroupOwner(c.ctx, groupName, value); err != nil {
-						fmt.Fprintf(c.term, "Error: %v\n", err)
-						return nil
-					}
-					fmt.Fprintf(c.term, "Changed OwnerGroup of %q to %q\n", groupName, value)
-				case "-super":
-					supergroup := value == "true"
-					if err := c.game.storage.EditGroupSupergroup(c.ctx, groupName, supergroup); err != nil {
-						fmt.Fprintf(c.term, "Error: %v\n", err)
-						return nil
-					}
-					fmt.Fprintf(c.term, "Changed Supergroup of %q to %v\n", groupName, supergroup)
-				default:
-					fmt.Fprintf(c.term, "Unknown option: %s\n", option)
-					fmt.Fprintln(c.term, "Valid options: -name, -owner, -super")
-				}
-				return nil
-			},
-		},
-		{
-			names: m("/adduser"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
-				if len(parts) != 3 {
-					fmt.Fprintln(c.term, "usage: /adduser <user> <group>")
-					return nil
-				}
-				userName := parts[1]
-				groupName := parts[2]
-				user, err := c.game.storage.LoadUser(c.ctx, userName)
-				if err != nil {
-					fmt.Fprintf(c.term, "Error: user %q not found\n", userName)
-					return nil
-				}
-				if err := c.game.storage.AddUserToGroup(c.ctx, user, groupName); err != nil {
-					fmt.Fprintf(c.term, "Error: %v\n", err)
-					return nil
-				}
-				fmt.Fprintf(c.term, "Added %q to %q\n", userName, groupName)
-				return nil
-			},
-		},
-		{
-			names: m("/rmuser"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
-				if len(parts) != 3 {
-					fmt.Fprintln(c.term, "usage: /rmuser <user> <group>")
-					return nil
-				}
-				userName := parts[1]
-				groupName := parts[2]
-				if err := c.game.storage.RemoveUserFromGroup(c.ctx, userName, groupName); err != nil {
-					fmt.Fprintf(c.term, "Error: %v\n", err)
-					return nil
-				}
-				fmt.Fprintf(c.term, "Removed %q from %q\n", userName, groupName)
-				return nil
-			},
-		},
-		{
-			names: m("/members"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
-				if len(parts) != 2 {
-					fmt.Fprintln(c.term, "usage: /members <group>")
-					return nil
-				}
-				groupName := parts[1]
-				members, err := c.game.storage.GroupMembers(c.ctx, groupName)
-				if err != nil {
-					fmt.Fprintf(c.term, "Error: %v\n", err)
-					return nil
-				}
-				fmt.Fprintf(c.term, "Members of %q (%s):\n", groupName, lang.Card(len(members), "members"))
-				for _, user := range members {
-					fmt.Fprintf(c.term, "  %s\n", user.Name)
-				}
-				return nil
-			},
-		},
-		{
-			names: m("/listgroups"),
-			f: func(c *Connection, s string) error {
-				groups, err := c.game.storage.ListGroups(c.ctx)
-				if err != nil {
-					fmt.Fprintf(c.term, "Error: %v\n", err)
-					return nil
-				}
-				// Build a map of group IDs to names to avoid N+1 queries
-				groupNames := make(map[int64]string, len(groups))
-				for _, g := range groups {
-					groupNames[g.Id] = g.Name
-				}
-				t := table.New("Name", "OwnerGroup", "Supergroup").WithWriter(c.term)
-				for _, g := range groups {
-					ownerName := "owner"
-					if g.OwnerGroup != 0 {
-						if name, ok := groupNames[g.OwnerGroup]; ok {
-							ownerName = name
-						} else {
-							ownerName = fmt.Sprintf("#%d", g.OwnerGroup)
-						}
-					}
-					superStr := ""
-					if g.Supergroup {
-						superStr = "yes"
-					}
-					t.AddRow(g.Name, ownerName, superStr)
 				}
 				t.Print()
 				return nil
@@ -695,3 +482,6 @@ func (c *Connection) wizCommands() commands {
 		},
 	}
 }
+
+// Ensure fs.DirEntry is used (imported for os.ReadDir return type)
+var _ fs.DirEntry

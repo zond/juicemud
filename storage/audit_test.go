@@ -146,549 +146,26 @@ func TestAudit_UserCreate_NotLoggedOnUpdate(t *testing.T) {
 	}
 }
 
-// === Group Audit Tests ===
-
-func TestAudit_GroupCreate(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		if err := s.CreateGroup(ctx, "wizards", "owner", true); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "GROUP_CREATE")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 GROUP_CREATE entry, got %d", len(entries))
-	}
-
-	var data AuditGroupCreate
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.Group.Name != "wizards" {
-		t.Errorf("Group.Name = %q, want %q", data.Group.Name, "wizards")
-	}
-	if data.Owner.Name != "owner" {
-		t.Errorf("Owner.Name = %q, want %q", data.Owner.Name, "owner")
-	}
-	if !data.Supergroup {
-		t.Error("Supergroup should be true")
-	}
-}
-
-func TestAudit_GroupDelete(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		createTestGroup(t, s, "wizards", 0, false)
-
-		if err := s.DeleteGroup(ctx, "wizards"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "GROUP_DELETE")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 GROUP_DELETE entry, got %d", len(entries))
-	}
-
-	var data AuditGroupDelete
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.Group.Name != "wizards" {
-		t.Errorf("Group.Name = %q, want %q", data.Group.Name, "wizards")
-	}
-}
-
-func TestAudit_GroupEditName(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		createTestGroup(t, s, "wizards", 0, false)
-
-		if err := s.EditGroupName(ctx, "wizards", "mages"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "GROUP_EDIT")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 GROUP_EDIT entry, got %d", len(entries))
-	}
-
-	var data AuditGroupEdit
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.NameFrom != "wizards" {
-		t.Errorf("NameFrom = %q, want %q", data.NameFrom, "wizards")
-	}
-	if data.NameTo != "mages" {
-		t.Errorf("NameTo = %q, want %q", data.NameTo, "mages")
-	}
-}
-
-func TestAudit_GroupEditOwner(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		admins := createTestGroup(t, s, "admins", 0, true)
-		createTestGroup(t, s, "mods", 0, true)
-		createTestGroup(t, s, "wizards", admins.Id, false)
-
-		if err := s.EditGroupOwner(ctx, "wizards", "mods"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "GROUP_EDIT")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 GROUP_EDIT entry, got %d", len(entries))
-	}
-
-	var data AuditGroupEdit
-	parseAuditData(t, entries[0], &data)
-	if data.OwnerFrom == nil || data.OwnerFrom.Name != "admins" {
-		t.Errorf("OwnerFrom.Name = %v, want %q", data.OwnerFrom, "admins")
-	}
-	if data.OwnerTo == nil || data.OwnerTo.Name != "mods" {
-		t.Errorf("OwnerTo.Name = %v, want %q", data.OwnerTo, "mods")
-	}
-}
-
-func TestAudit_GroupEditSupergroup(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		createTestGroup(t, s, "wizards", 0, false)
-
-		if err := s.EditGroupSupergroup(ctx, "wizards", true); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "GROUP_EDIT")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 GROUP_EDIT entry, got %d", len(entries))
-	}
-
-	var data AuditGroupEdit
-	parseAuditData(t, entries[0], &data)
-	if data.SupergroupFrom == nil || *data.SupergroupFrom != false {
-		t.Errorf("SupergroupFrom = %v, want false", data.SupergroupFrom)
-	}
-	if data.SupergroupTo == nil || *data.SupergroupTo != true {
-		t.Errorf("SupergroupTo = %v, want true", data.SupergroupTo)
-	}
-}
-
-// === Membership Audit Tests ===
-
-func TestAudit_MemberAdd(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		alice := createTestUser(t, s, "alice", false)
-		ctx := userContext(owner)
-
-		createTestGroup(t, s, "wizards", 0, false)
-
-		if err := s.AddUserToGroup(ctx, alice, "wizards"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "MEMBER_ADD")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 MEMBER_ADD entry, got %d", len(entries))
-	}
-
-	var data AuditMemberAdd
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.Added.Name != "alice" {
-		t.Errorf("Added.Name = %q, want %q", data.Added.Name, "alice")
-	}
-	if data.Group.Name != "wizards" {
-		t.Errorf("Group.Name = %q, want %q", data.Group.Name, "wizards")
-	}
-}
-
-func TestAudit_MemberAdd_NotLoggedWhenAlreadyMember(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		alice := createTestUser(t, s, "alice", false)
-		ctx := userContext(owner)
-
-		createTestGroup(t, s, "wizards", 0, false)
-
-		// Add alice first time
-		if err := s.AddUserToGroup(ctx, alice, "wizards"); err != nil {
-			t.Fatal(err)
-		}
-		// Add alice second time (should be no-op, no audit entry)
-		if err := s.AddUserToGroup(ctx, alice, "wizards"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "MEMBER_ADD")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 MEMBER_ADD entry (not logged when already member), got %d", len(entries))
-	}
-}
-
-func TestAudit_MemberRemove(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		alice := createTestUser(t, s, "alice", false)
-
-		createTestGroup(t, s, "wizards", 0, false)
-		if err := s.AddUserToGroup(juicemud.MakeMainContext(context.Background()), alice, "wizards"); err != nil {
-			t.Fatal(err)
-		}
-
-		ctx := userContext(owner)
-		if err := s.RemoveUserFromGroup(ctx, "alice", "wizards"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "MEMBER_REMOVE")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 MEMBER_REMOVE entry, got %d", len(entries))
-	}
-
-	var data AuditMemberRemove
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.Removed.Name != "alice" {
-		t.Errorf("Removed.Name = %q, want %q", data.Removed.Name, "alice")
-	}
-	if data.Group.Name != "wizards" {
-		t.Errorf("Group.Name = %q, want %q", data.Group.Name, "wizards")
-	}
-}
-
-// === File Audit Tests ===
-
-func TestAudit_FileCreate(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		// Create root first
-		if err := s.CreateDir(juicemud.MakeMainContext(context.Background()), "/"); err != nil {
-			t.Fatal(err)
-		}
-
-		// Create a file
-		if _, _, err := s.EnsureFile(ctx, "/test.js"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "FILE_CREATE")
-	// Find the one for /test.js (not root)
-	var found *auditEntry
-	for _, e := range entries {
-		var data AuditFileCreate
-		parseAuditData(t, e, &data)
-		if data.Path == "/test.js" {
-			found = &e
-			break
-		}
-	}
-	if found == nil {
-		t.Fatal("Expected FILE_CREATE entry for /test.js")
-	}
-
-	var data AuditFileCreate
-	parseAuditData(t, *found, &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.IsDir {
-		t.Error("IsDir should be false for a file")
-	}
-}
-
-func TestAudit_FileCreate_Directory(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		// Create root first
-		if err := s.CreateDir(juicemud.MakeMainContext(context.Background()), "/"); err != nil {
-			t.Fatal(err)
-		}
-
-		// Create a directory
-		if err := s.CreateDir(ctx, "/mydir"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "FILE_CREATE")
-	var found *auditEntry
-	for _, e := range entries {
-		var data AuditFileCreate
-		parseAuditData(t, e, &data)
-		if data.Path == "/mydir" {
-			found = &e
-			break
-		}
-	}
-	if found == nil {
-		t.Fatal("Expected FILE_CREATE entry for /mydir")
-	}
-
-	var data AuditFileCreate
-	parseAuditData(t, *found, &data)
-	if !data.IsDir {
-		t.Error("IsDir should be true for a directory")
-	}
-}
-
-func TestAudit_FileUpdate(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		// Create root and file first
-		if err := s.CreateDir(juicemud.MakeMainContext(context.Background()), "/"); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := s.EnsureFile(ctx, "/test.js"); err != nil {
-			t.Fatal(err)
-		}
-
-		// Update the file
-		if err := s.StoreSource(ctx, "/test.js", []byte("// updated content")); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "FILE_UPDATE")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 FILE_UPDATE entry, got %d", len(entries))
-	}
-
-	var data AuditFileUpdate
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.Path != "/test.js" {
-		t.Errorf("Path = %q, want %q", data.Path, "/test.js")
-	}
-}
-
-func TestAudit_FileDelete(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		// Create root and file first
-		if err := s.CreateDir(juicemud.MakeMainContext(context.Background()), "/"); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := s.EnsureFile(ctx, "/test.js"); err != nil {
-			t.Fatal(err)
-		}
-
-		// Delete the file
-		if err := s.DelFile(ctx, "/test.js"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "FILE_DELETE")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 FILE_DELETE entry, got %d", len(entries))
-	}
-
-	var data AuditFileDelete
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.Path != "/test.js" {
-		t.Errorf("Path = %q, want %q", data.Path, "/test.js")
-	}
-}
-
-func TestAudit_FileMove(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		// Create root and file first
-		if err := s.CreateDir(juicemud.MakeMainContext(context.Background()), "/"); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := s.EnsureFile(ctx, "/old.js"); err != nil {
-			t.Fatal(err)
-		}
-
-		// Move/rename the file
-		if err := s.MoveFile(ctx, "/old.js", "/new.js"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "FILE_MOVE")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 FILE_MOVE entry, got %d", len(entries))
-	}
-
-	var data AuditFileMove
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.OldPath != "/old.js" {
-		t.Errorf("OldPath = %q, want %q", data.OldPath, "/old.js")
-	}
-	if data.NewPath != "/new.js" {
-		t.Errorf("NewPath = %q, want %q", data.NewPath, "/new.js")
-	}
-}
-
-func TestAudit_FileChmod(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		// Create root, file, and a group
-		if err := s.CreateDir(juicemud.MakeMainContext(context.Background()), "/"); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := s.EnsureFile(ctx, "/test.js"); err != nil {
-			t.Fatal(err)
-		}
-		createTestGroup(t, s, "wizards", 0, false)
-
-		// Change read permission
-		if err := s.ChreadFile(ctx, "/test.js", "wizards"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "FILE_CHMOD")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 FILE_CHMOD entry, got %d", len(entries))
-	}
-
-	var data AuditFileChmod
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "owner" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "owner")
-	}
-	if data.Path != "/test.js" {
-		t.Errorf("Path = %q, want %q", data.Path, "/test.js")
-	}
-	if data.Permission != "read" {
-		t.Errorf("Permission = %q, want %q", data.Permission, "read")
-	}
-	if data.NewGroup == nil || data.NewGroup.Name != "wizards" {
-		t.Errorf("NewGroup = %v, want wizards", data.NewGroup)
-	}
-}
-
-func TestAudit_FileChmod_NotLoggedWhenUnchanged(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
-
-		// Create root, file, and a group
-		if err := s.CreateDir(juicemud.MakeMainContext(context.Background()), "/"); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := s.EnsureFile(ctx, "/test.js"); err != nil {
-			t.Fatal(err)
-		}
-		createTestGroup(t, s, "wizards", 0, false)
-
-		// Change read permission
-		if err := s.ChreadFile(ctx, "/test.js", "wizards"); err != nil {
-			t.Fatal(err)
-		}
-		// Change to the same group again (should not log)
-		if err := s.ChreadFile(ctx, "/test.js", "wizards"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "FILE_CHMOD")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 FILE_CHMOD entry (not logged when unchanged), got %d", len(entries))
-	}
-}
-
 // === Session ID Tests ===
 
 func TestAudit_SessionIDIncluded(t *testing.T) {
 	entries := withTestStorage(t, func(s *Storage) {
-		owner := createTestUser(t, s, "owner", true)
-		ctx := userContext(owner)
+		ctx := juicemud.MakeMainContext(context.Background())
 		ctx = SetSessionID(ctx, "test-session-123")
 
-		createTestGroup(t, s, "wizards", 0, false)
-
-		if err := s.DeleteGroup(ctx, "wizards"); err != nil {
+		user := &User{Name: "testuser"}
+		if err := s.StoreUser(ctx, user, false, "192.168.1.1:12345"); err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	entries = filterAuditByEvent(entries, "GROUP_DELETE")
+	entries = filterAuditByEvent(entries, "USER_CREATE")
 	if len(entries) != 1 {
-		t.Fatalf("Expected 1 GROUP_DELETE entry, got %d", len(entries))
+		t.Fatalf("Expected 1 USER_CREATE entry, got %d", len(entries))
 	}
 
 	if entries[0].SessionID != "test-session-123" {
 		t.Errorf("SessionID = %q, want %q", entries[0].SessionID, "test-session-123")
-	}
-}
-
-// === System Caller Tests ===
-
-func TestAudit_SystemCallerWhenNoAuth(t *testing.T) {
-	entries := withTestStorage(t, func(s *Storage) {
-		// Use main context (no authenticated user)
-		ctx := juicemud.MakeMainContext(context.Background())
-
-		// Create root directory (called by system)
-		if err := s.CreateDir(ctx, "/"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	entries = filterAuditByEvent(entries, "FILE_CREATE")
-	if len(entries) != 1 {
-		t.Fatalf("Expected 1 FILE_CREATE entry, got %d", len(entries))
-	}
-
-	var data AuditFileCreate
-	parseAuditData(t, entries[0], &data)
-	if data.Caller.Name != "system" {
-		t.Errorf("Caller.Name = %q, want %q", data.Caller.Name, "system")
-	}
-	if data.Caller.ID != nil {
-		t.Errorf("Caller.ID = %v, want nil for system", data.Caller.ID)
 	}
 }
 
@@ -709,11 +186,8 @@ func TestAudit_EntriesAreValidJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	owner := createTestUser(t, s, "owner", true)
-	userCtx := userContext(owner)
-
-	createTestGroup(t, s, "wizards", 0, false)
-	if err := s.DeleteGroup(userCtx, "wizards"); err != nil {
+	user := &User{Name: "testuser"}
+	if err := s.StoreUser(ctx, user, false, "192.168.1.1:12345"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -748,8 +222,11 @@ func TestAudit_EntriesAreValidJSON(t *testing.T) {
 
 func TestAudit_TimeIsRFC3339(t *testing.T) {
 	entries := withTestStorage(t, func(s *Storage) {
-		createTestUser(t, s, "owner", true)
-		createTestGroup(t, s, "wizards", 0, false)
+		ctx := juicemud.MakeMainContext(context.Background())
+		user := &User{Name: "testuser"}
+		if err := s.StoreUser(ctx, user, false, "192.168.1.1:12345"); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	if len(entries) == 0 {
@@ -767,4 +244,137 @@ func TestAudit_TimeIsRFC3339(t *testing.T) {
 			t.Errorf("Time %q is not valid RFC3339: %v", entry.Time, err)
 		}
 	}
+}
+
+// === Wizard Status Audit Tests ===
+
+func TestAudit_WizardGrant(t *testing.T) {
+	entries := withTestStorage(t, func(s *Storage) {
+		ctx := juicemud.MakeMainContext(context.Background())
+
+		// Create owner user who will grant wizard status
+		owner := &User{Name: "owner", Owner: true, Wizard: true}
+		if err := s.StoreUser(ctx, owner, false, "192.168.1.1:12345"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create target user who will receive wizard status
+		target := &User{Name: "target"}
+		if err := s.StoreUser(ctx, target, false, "192.168.1.2:12345"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Set context as authenticated owner
+		ctx = AuthenticateUser(ctx, owner)
+
+		// Grant wizard status
+		if err := s.SetUserWizard(ctx, "target", true); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	entries = filterAuditByEvent(entries, "WIZARD_GRANT")
+	if len(entries) != 1 {
+		t.Fatalf("Expected 1 WIZARD_GRANT entry, got %d", len(entries))
+	}
+
+	var data AuditWizardGrant
+	parseAuditData(t, entries[0], &data)
+	if data.Target.Name != "target" {
+		t.Errorf("Target.Name = %q, want %q", data.Target.Name, "target")
+	}
+	if data.GrantedBy.Name != "owner" {
+		t.Errorf("GrantedBy.Name = %q, want %q", data.GrantedBy.Name, "owner")
+	}
+}
+
+func TestAudit_WizardRevoke(t *testing.T) {
+	entries := withTestStorage(t, func(s *Storage) {
+		ctx := juicemud.MakeMainContext(context.Background())
+
+		// Create owner user who will revoke wizard status
+		owner := &User{Name: "owner", Owner: true, Wizard: true}
+		if err := s.StoreUser(ctx, owner, false, "192.168.1.1:12345"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create target user who will have wizard status revoked
+		target := &User{Name: "target", Wizard: true}
+		if err := s.StoreUser(ctx, target, false, "192.168.1.2:12345"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Set context as authenticated owner
+		ctx = AuthenticateUser(ctx, owner)
+
+		// Revoke wizard status
+		if err := s.SetUserWizard(ctx, "target", false); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	entries = filterAuditByEvent(entries, "WIZARD_REVOKE")
+	if len(entries) != 1 {
+		t.Fatalf("Expected 1 WIZARD_REVOKE entry, got %d", len(entries))
+	}
+
+	var data AuditWizardRevoke
+	parseAuditData(t, entries[0], &data)
+	if data.Target.Name != "target" {
+		t.Errorf("Target.Name = %q, want %q", data.Target.Name, "target")
+	}
+	if data.RevokedBy.Name != "owner" {
+		t.Errorf("RevokedBy.Name = %q, want %q", data.RevokedBy.Name, "owner")
+	}
+}
+
+func TestAudit_WizardGrant_RequiresOwner(t *testing.T) {
+	withTestStorage(t, func(s *Storage) {
+		ctx := juicemud.MakeMainContext(context.Background())
+
+		// Create non-owner wizard user
+		wizard := &User{Name: "wizard", Owner: false, Wizard: true}
+		if err := s.StoreUser(ctx, wizard, false, "192.168.1.1:12345"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create target user
+		target := &User{Name: "target"}
+		if err := s.StoreUser(ctx, target, false, "192.168.1.2:12345"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Set context as authenticated non-owner wizard
+		ctx = AuthenticateUser(ctx, wizard)
+
+		// Try to grant wizard status - should fail
+		err := s.SetUserWizard(ctx, "target", true)
+		if err == nil {
+			t.Fatal("Expected error when non-owner tries to grant wizard")
+		}
+		if !strings.Contains(err.Error(), "only owners") {
+			t.Errorf("Error should mention only owners: %v", err)
+		}
+	})
+}
+
+func TestAudit_WizardGrant_RequiresAuth(t *testing.T) {
+	withTestStorage(t, func(s *Storage) {
+		ctx := juicemud.MakeMainContext(context.Background())
+
+		// Create target user
+		target := &User{Name: "target"}
+		if err := s.StoreUser(ctx, target, false, "192.168.1.2:12345"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Try to grant wizard status without authentication - should fail
+		err := s.SetUserWizard(ctx, "target", true)
+		if err == nil {
+			t.Fatal("Expected error when unauthenticated user tries to grant wizard")
+		}
+		if !strings.Contains(err.Error(), "only owners") {
+			t.Errorf("Error should mention only owners: %v", err)
+		}
+	})
 }

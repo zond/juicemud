@@ -1,14 +1,15 @@
 # JuiceMUD
 
-A MUD (Multi-User Dungeon) game server written in Go, featuring JavaScript-based object scripting, SSH-based player connections, and WebDAV file management.
+A MUD (Multi-User Dungeon) game server written in Go, featuring JavaScript-based object scripting and SSH-based player connections.
 
 ## Features
 
 - SSH-based player connections using [gliderlabs/ssh](https://github.com/gliderlabs/ssh)
 - JavaScript object scripting using V8 via [rogchap.com/v8go](https://rogchap.com/v8go)
-- WebDAV interface for file management with HTTP Digest authentication
+- Filesystem-native source management (edit sources directly in `<dir>/src/`)
 - Persistent storage using [tkrzw](https://github.com/estraier/tkrzw-go) (hash/tree databases) and SQLite
 - Sophisticated skill system with forgetting mechanics and challenge-based access control
+- Argon2id password hashing for secure credential storage
 
 ## Build and Run
 
@@ -16,7 +17,7 @@ A MUD (Multi-User Dungeon) game server written in Go, featuring JavaScript-based
 # Build the server
 go build -o juicemud ./bin/server
 
-# Run the server (default ports: SSH 15000, HTTPS 8081, HTTP 8080)
+# Run the server (default port: SSH 15000)
 ./juicemud
 
 # Run all tests
@@ -45,44 +46,43 @@ go generate ./structs
                                     │   Server.New()  │
                                     └────────┬────────┘
                                              │
-              ┌──────────────────────────────┼──────────────────────────────┐
-              │                              │                              │
-     ┌────────▼────────┐            ┌────────▼────────┐            ┌────────▼────────┐
-     │   SSH Server    │            │  HTTPS Server   │            │   HTTP Server   │
-     │   (port 15000)  │            │   (port 8081)   │            │   (port 8080)   │
-     └────────┬────────┘            └────────┬────────┘            └────────┬────────┘
-              │                              │                              │
-     ┌────────▼────────┐            ┌────────▼────────┐                     │
-     │      game       │            │   digest.Wrap   │◄────────────────────┘
-     │ HandleSession() │            │  (HTTP Digest)  │
-     └────────┬────────┘            └────────┬────────┘
-              │                              │
-     ┌────────▼────────┐            ┌────────▼────────┐
-     │   Connection    │            │   dav.Handler   │
-     │  (player I/O)   │            │   (WebDAV ops)  │
-     └────────┬────────┘            └────────┬────────┘
-              │                              │
-              └──────────────┬───────────────┘
-                             │
-                    ┌────────▼────────┐
-                    │     storage     │
-                    │   Storage{}     │
-                    └────────┬────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         │                   │                   │
-┌────────▼────────┐ ┌────────▼────────┐ ┌────────▼────────┐
-│   SQLite (db)   │ │  tkrzw (hash)   │ │  tkrzw (tree)   │
-│  users, files,  │ │    objects,     │ │     events      │
-│     groups      │ │   file content  │ │    (queue)      │
-└─────────────────┘ └─────────────────┘ └─────────────────┘
+                                    ┌────────▼────────┐
+                                    │   SSH Server    │
+                                    │   (port 15000)  │
+                                    └────────┬────────┘
+                                             │
+                                    ┌────────▼────────┐
+                                    │      game       │
+                                    │ HandleSession() │
+                                    └────────┬────────┘
+                                             │
+                                    ┌────────▼────────┐
+                                    │   Connection    │
+                                    │  (player I/O)   │
+                                    └────────┬────────┘
+                                             │
+                                    ┌────────▼────────┐
+                                    │     storage     │
+                                    │   Storage{}     │
+                                    └────────┬────────┘
+                                             │
+         ┌───────────────────┬───────────────┴───────────────┐
+         │                   │                               │
+┌────────▼────────┐ ┌────────▼────────┐             ┌────────▼────────┐
+│   SQLite (db)   │ │  tkrzw (hash)   │             │  tkrzw (tree)   │
+│     users       │ │    objects      │             │     events      │
+└─────────────────┘ └─────────────────┘             │    (queue)      │
+                                                    └─────────────────┘
+                    ┌─────────────────┐
+                    │   Filesystem    │
+                    │   <dir>/src/    │
+                    │  (JS sources)   │
+                    └─────────────────┘
 ```
 
 ### Core Components
 
-**Server Entry Point** (`server/server.go`): Starts three services:
-- SSH server for player connections
-- HTTPS/HTTP servers for WebDAV file access
+**Server Entry Point** (`server/server.go`): Starts the SSH server for player connections.
 
 **Game Engine** (`game/`):
 - `game.go` - Initializes the game, handles SSH sessions, sets up initial world objects
@@ -90,7 +90,7 @@ go generate ./structs
 - `processing.go` - Object execution, JavaScript callback registration, movement detection
 
 **Storage Layer** (`storage/`):
-- `storage.go` - Main storage interface, SQLite for users/files/groups, file access control
+- `storage.go` - Main storage interface, SQLite for users, filesystem for JavaScript sources
 - `dbm/dbm.go` - Wrapper around tkrzw for key-value storage with typed generics
 - `queue/queue.go` - Event queue for scheduled object callbacks
 
@@ -199,7 +199,7 @@ setTimeout(() => {
 
 **Skill/Challenge System**: Descriptions and exits can have challenge requirements. Objects have skills with theoretical/practical levels, recharge times, and forgetting mechanics. See `docs/skill-system.md` for details.
 
-**File System**: JavaScript sources stored in virtual filesystem with read/write group permissions. Files tracked in SQLite, content in tkrzw hash.
+**File System**: JavaScript sources are stored directly on the filesystem in `<dir>/src/`. Wizards can browse and edit these files using standard text editors or IDEs.
 
 **Player Commands**: All users have access to:
 - `look` or `l`: View current room, or `look <target>` to examine a specific object
@@ -213,11 +213,11 @@ setTimeout(() => {
 
 Objects only receive events they've registered callbacks for with the matching tag. For example, `trigger logger` only invokes the logger's callback if it registered `addCallback('trigger', ['action'], ...)`.
 
-**Wizard Commands**: Users in "wizards" group get additional `/`-prefixed commands:
+**Wizard Commands**: Wizard users (User.Wizard = true) get additional `/`-prefixed commands:
 - Object management: `/create`, `/inspect`, `/move`, `/remove`, `/enter`, `/exit`
 - Debugging: `/debug`, `/undebug`
-- File permissions: `/ls`, `/chread`, `/chwrite`
-- Group management: `/groups`, `/mkgroup`, `/rmgroup`, `/editgroup`, `/adduser`, `/rmuser`, `/members`, `/listgroups`
+- Source files: `/ls`
+- Admin: `/addwiz`, `/delwiz`
 
 ## Dependencies
 
@@ -233,16 +233,15 @@ Objects only receive events they've registered callbacks for with the matching t
 ```
 juicemud/
 ├── bin/
-│   ├── server/              # Main server binary
-│   └── integration_test/    # Standalone test runner
-├── dav/                     # WebDAV handler
-├── digest/                  # HTTP Digest authentication
+│   └── server/              # Main server binary
+├── crypto/                  # SSH key generation
+├── decorator/               # Object decoration utilities
 ├── docs/                    # Documentation
-├── fs/                      # Virtual filesystem for WebDAV
 ├── game/                    # Game engine
 ├── integration_test/        # Integration tests
 ├── js/                      # JavaScript runtime
 ├── lang/                    # Natural language utilities
+├── loader/                  # JavaScript source loading
 ├── server/                  # Server initialization
 ├── storage/
 │   ├── dbm/                 # tkrzw database wrappers
