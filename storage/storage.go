@@ -661,6 +661,9 @@ func (s *Storage) SetSourcesDir(dir string) {
 // and atomically switches to it. The validation and switch are done under the same lock
 // to prevent TOCTOU races between checking and switching.
 // Returns missing sources if validation fails, or nil on successful switch.
+//
+// Note: This function performs filesystem I/O (os.Stat) while holding locks.
+// The sources directory should be on fast local storage to avoid contention.
 func (s *Storage) ValidateAndSwitchSources(ctx context.Context, newDir string) ([]MissingSource, error) {
 	s.sourceObjectsMu.Lock()
 	defer s.sourceObjectsMu.Unlock()
@@ -674,8 +677,17 @@ func (s *Storage) ValidateAndSwitchSources(ctx context.Context, newDir string) (
 		fullPath := filepath.Join(newDir, sourcePath)
 		if _, err := os.Stat(fullPath); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
+				// Collect object IDs that use this source
+				var objectIDs []string
+				for entry, err := range s.sourceObjects.SubEach(sourcePath) {
+					if err != nil {
+						return nil, juicemud.WithStack(err)
+					}
+					objectIDs = append(objectIDs, entry.K)
+				}
 				missing = append(missing, MissingSource{
-					Path: sourcePath,
+					Path:      sourcePath,
+					ObjectIDs: objectIDs,
 				})
 			} else {
 				return nil, juicemud.WithStack(err)

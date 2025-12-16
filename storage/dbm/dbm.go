@@ -667,7 +667,8 @@ func (t *Tree) EachSet() iter.Seq2[string, error] {
 				break // Invalid key format
 			}
 			setLen := binary.BigEndian.Uint32(key[:4])
-			if len(key) < int(4+setLen) {
+			// Check for overflow and valid length (setLen must fit in remaining key bytes)
+			if setLen > uint32(len(key)-4) {
 				break // Invalid key format
 			}
 			set := string(key[4 : 4+setLen])

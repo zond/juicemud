@@ -271,9 +271,15 @@ func (s *Server) handleControlConnection(ctx context.Context, conn net.Conn) {
 
 	// Set read deadline for idle timeout, plus context cancellation for shutdown
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		conn.Close()
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+			// Connection handled normally, goroutine exits
+		}
 	}()
 
 	reader := bufio.NewReader(conn)
