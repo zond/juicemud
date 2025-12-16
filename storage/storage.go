@@ -407,32 +407,65 @@ var ErrCircularContainer = errors.New("cannot move object into itself or its con
 
 // maxContainmentDepth is the maximum depth for containment chain walks.
 // This prevents infinite loops on corrupted data and bounds performance.
+// 1000 is chosen as significantly deeper than any legitimate game hierarchy
+// (typically < 10 levels) while still completing quickly (in-memory lookups
+// take ~100μs for 1000 iterations, disk lookups ~500ms worst case).
 const maxContainmentDepth = 1000
+
+// checkCircularContainment walks up the containment chain from destID to verify
+// that objID is not an ancestor of destID. Returns ErrCircularContainer if moving
+// objID into destID would create a cycle.
+//
+// The locked map contains already-loaded objects (keyed by ID) that should be
+// used instead of calling s.objects.Get. Pass nil for the quick pre-lock check.
+func (s *Storage) checkCircularContainment(objID, destID string, locked map[string]*structs.Object) error {
+	currentID := destID
+	for depth := 0; currentID != "" && depth < maxContainmentDepth; depth++ {
+		if currentID == objID {
+			return ErrCircularContainer
+		}
+		current := locked[currentID]
+		if current == nil {
+			var err error
+			current, err = s.objects.Get(currentID)
+			if err != nil {
+				return juicemud.WithStack(err)
+			}
+			// Use GetLocation() for objects not in the locked set - they aren't
+			// locked and we need the mutex protection.
+			currentID = current.GetLocation()
+		} else {
+			// For objects in the locked set, we already hold their mutex via WithLock,
+			// so we must access Unsafe directly to avoid deadlock (GetLocation tries
+			// to acquire RLock which blocks on the held write lock).
+			currentID = current.Unsafe.Location
+		}
+	}
+	if currentID != "" {
+		// This indicates corrupted data - either a cycle already exists or
+		// the hierarchy is unreasonably deep. Log for admin investigation.
+		log.Printf("WARNING: containment chain exceeded max depth %d while checking move of objID=%s to destID=%s, possible data corruption", maxContainmentDepth, objID, destID)
+		return errors.New("containment chain too deep or already circular")
+	}
+	return nil
+}
 
 func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID string) error {
 	if obj.PostUnlock == nil {
 		return errors.Errorf("can't move object unknown to storage: %+v", obj)
 	}
+	if destID == "" {
+		return errors.New("destination ID cannot be empty")
+	}
 
 	id := obj.GetId()
 	sourceID := obj.GetLocation()
 
-	// Check for circular containment: walk up from destID to ensure we don't find id.
-	// This prevents moving an object into itself or into something it contains.
-	// We re-check the immediate parent inside the lock to prevent TOCTOU races.
-	currentID := destID
-	for depth := 0; currentID != "" && depth < maxContainmentDepth; depth++ {
-		if currentID == id {
-			return ErrCircularContainer
-		}
-		current, err := s.objects.Get(currentID)
-		if err != nil {
-			return juicemud.WithStack(err)
-		}
-		currentID = current.GetLocation()
-	}
-	if currentID != "" {
-		return errors.New("containment chain too deep or already circular")
+	// Quick check for circular containment before acquiring locks.
+	// This is an optimization to fail fast in the common case.
+	// We re-check inside the lock to prevent TOCTOU races.
+	if err := s.checkCircularContainment(id, destID, nil); err != nil {
+		return err
 	}
 
 	source, err := s.objects.Get(sourceID)
@@ -446,12 +479,14 @@ func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID st
 	}
 
 	return juicemud.WithStack(structs.WithLock(func() error {
-		// Re-check that destination is not inside the object we're moving.
-		// This check uses the locked dest object to prevent TOCTOU races.
-		// For deeper nesting, the outer check handles it (since object locks
-		// serialize concurrent moves, races creating deep cycles aren't possible).
-		if dest.Unsafe.Location == id {
-			return ErrCircularContainer
+		// Re-check for circular containment under lock to prevent TOCTOU races.
+		// Pass already-loaded objects to avoid deadlock from calling Get on them.
+		if err := s.checkCircularContainment(id, destID, map[string]*structs.Object{
+			id:       obj,
+			sourceID: source,
+			destID:   dest,
+		}); err != nil {
+			return err
 		}
 
 		if obj.Unsafe.Location != sourceID {
