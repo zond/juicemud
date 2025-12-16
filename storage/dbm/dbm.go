@@ -633,6 +633,79 @@ func (t *Tree) SubEach(set string) iter.Seq2[BEntry, error] {
 	}
 }
 
+// EachSet iterates over all unique set names in the tree.
+// Uses jump-based iteration to efficiently skip all entries within each set.
+func (t *Tree) EachSet() iter.Seq2[string, error] {
+	return func(yield func(string, error) bool) {
+		t.mutex.RLock()
+		defer t.mutex.RUnlock()
+
+		iter := t.dbm.MakeIterator()
+		defer iter.Destruct()
+
+		// Start at the first key
+		if stat := iter.First(); !stat.IsOK() {
+			if stat.GetCode() != tkrzw.StatusNotFoundError {
+				yield("", juicemud.WithStack(stat))
+			}
+			return
+		}
+
+		for {
+			key, _, status := iter.Get()
+			if status.GetCode() == tkrzw.StatusNotFoundError {
+				break
+			} else if !status.IsOK() {
+				if !yield("", juicemud.WithStack(status)) {
+					break
+				}
+				continue
+			}
+
+			// Extract set from key: [4 bytes len][set bytes][...]
+			if len(key) < 4 {
+				break // Invalid key format
+			}
+			setLen := binary.BigEndian.Uint32(key[:4])
+			if len(key) < int(4+setLen) {
+				break // Invalid key format
+			}
+			set := string(key[4 : 4+setLen])
+
+			if !yield(set, nil) {
+				break
+			}
+
+			// Jump to the next set: increment the set prefix
+			setPrefix := key[:4+setLen]
+			nextSetKey := incrementBytes(setPrefix)
+			if nextSetKey == nil {
+				break // No more sets possible (all bytes were 0xFF)
+			}
+
+			// Jump to the incremented key
+			iter.Jump(nextSetKey)
+		}
+	}
+}
+
+// incrementBytes increments a byte slice as a big-endian integer.
+// Returns nil if all bytes overflow (were 0xFF).
+func incrementBytes(b []byte) []byte {
+	result := make([]byte, len(b))
+	copy(result, b)
+
+	for i := len(result) - 1; i >= 0; i-- {
+		if result[i] < 0xFF {
+			result[i]++
+			return result
+		}
+		result[i] = 0
+	}
+
+	return nil // All bytes overflowed
+}
+
 type TypeTree[T any, S structs.Serializable[T]] struct {
 	*TypeHash[T, S]
 }

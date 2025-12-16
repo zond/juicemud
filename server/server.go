@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/zond/juicemud"
@@ -256,14 +257,29 @@ func (s *Server) startControlSocket(ctx context.Context) error {
 	}
 }
 
+// writeResponse writes a response to the control socket connection.
+// Errors are logged but not returned since the connection is closing anyway.
+func writeResponse(conn net.Conn, format string, args ...any) {
+	if _, err := fmt.Fprintf(conn, format, args...); err != nil {
+		log.Printf("Control socket write error: %v", err)
+	}
+}
+
 // handleControlConnection handles a single admin connection.
 func (s *Server) handleControlConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
+	// Set read deadline for idle timeout, plus context cancellation for shutdown
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	go func() {
+		<-ctx.Done()
+		conn.Close()
+	}()
+
 	reader := bufio.NewReader(conn)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Fprintf(conn, "ERROR: read error: %v\n", err)
+		writeResponse(conn, "ERROR: read error: %v\n", err)
 		return
 	}
 
@@ -282,7 +298,7 @@ func (s *Server) handleControlConnection(ctx context.Context, conn net.Conn) {
 		s.handleSwitchSources(ctx, conn, targetPath)
 
 	default:
-		fmt.Fprintf(conn, "ERROR: unknown command: %s\n", command)
+		writeResponse(conn, "ERROR: unknown command: %s\n", command)
 	}
 }
 
@@ -290,32 +306,32 @@ func (s *Server) handleControlConnection(ctx context.Context, conn net.Conn) {
 func (s *Server) handleSwitchSources(ctx context.Context, conn net.Conn, targetPath string) {
 	store := s.Storage()
 	if store == nil {
-		fmt.Fprintf(conn, "ERROR: server not running\n")
+		writeResponse(conn, "ERROR: server not running\n")
 		return
 	}
 
 	// Resolve symlinks to get actual directory
 	resolvedPath, err := storage.ResolveSourcePath(s.config.Dir, targetPath)
 	if err != nil {
-		fmt.Fprintf(conn, "ERROR: failed to resolve path %q: %v\n", targetPath, err)
+		writeResponse(conn, "ERROR: failed to resolve path %q: %v\n", targetPath, err)
 		return
 	}
 
 	// Check that it's a directory
 	info, err := os.Stat(resolvedPath)
 	if err != nil {
-		fmt.Fprintf(conn, "ERROR: cannot access %q: %v\n", resolvedPath, err)
+		writeResponse(conn, "ERROR: cannot access %q: %v\n", resolvedPath, err)
 		return
 	}
 	if !info.IsDir() {
-		fmt.Fprintf(conn, "ERROR: %q is not a directory\n", resolvedPath)
+		writeResponse(conn, "ERROR: %q is not a directory\n", resolvedPath)
 		return
 	}
 
-	// Validate all object sources exist in new root
-	missing, err := store.ValidateSources(ctx, resolvedPath)
+	// Validate and switch atomically (holds lock across both operations)
+	missing, err := store.ValidateAndSwitchSources(ctx, resolvedPath)
 	if err != nil {
-		fmt.Fprintf(conn, "ERROR: validation failed: %v\n", err)
+		writeResponse(conn, "ERROR: validation failed: %v\n", err)
 		return
 	}
 	if len(missing) > 0 {
@@ -324,12 +340,10 @@ func (s *Server) handleSwitchSources(ctx context.Context, conn net.Conn, targetP
 		for _, m := range missing {
 			fmt.Fprintf(&errMsg, "  %s (%d objects)\n", m.Path, len(m.ObjectIDs))
 		}
-		fmt.Fprint(conn, errMsg.String())
+		writeResponse(conn, "%s", errMsg.String())
 		return
 	}
 
-	// Switch to new sources directory
-	store.SetSourcesDir(resolvedPath)
 	log.Printf("Switched sources to %s", resolvedPath)
-	fmt.Fprintf(conn, "OK\n")
+	writeResponse(conn, "OK\n")
 }

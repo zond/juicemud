@@ -93,6 +93,8 @@ func (s *Storage) Close() error {
 
 // SourcesDir returns the directory where source files are stored.
 func (s *Storage) SourcesDir() string {
+	s.sourceObjectsMu.RLock()
+	defer s.sourceObjectsMu.RUnlock()
 	return s.sourcesDir
 }
 
@@ -648,11 +650,45 @@ func (s *Storage) ValidateSources(ctx context.Context, rootDir string) ([]Missin
 }
 
 // SetSourcesDir atomically updates the sources directory.
-// This should only be called after ValidateSources confirms the new directory is valid.
+// Prefer ValidateAndSwitchSources for external use to avoid TOCTOU races.
 func (s *Storage) SetSourcesDir(dir string) {
 	s.sourceObjectsMu.Lock()
 	defer s.sourceObjectsMu.Unlock()
 	s.sourcesDir = dir
+}
+
+// ValidateAndSwitchSources validates that all source files exist in the new directory
+// and atomically switches to it. The validation and switch are done under the same lock
+// to prevent TOCTOU races between checking and switching.
+// Returns missing sources if validation fails, or nil on successful switch.
+func (s *Storage) ValidateAndSwitchSources(ctx context.Context, newDir string) ([]MissingSource, error) {
+	s.sourceObjectsMu.Lock()
+	defer s.sourceObjectsMu.Unlock()
+
+	// Iterate unique source paths using the sourceObjects index
+	var missing []MissingSource
+	for sourcePath, err := range s.sourceObjects.EachSet() {
+		if err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+		fullPath := filepath.Join(newDir, sourcePath)
+		if _, err := os.Stat(fullPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				missing = append(missing, MissingSource{
+					Path: sourcePath,
+				})
+			} else {
+				return nil, juicemud.WithStack(err)
+			}
+		}
+	}
+
+	// Only switch if validation passed
+	if len(missing) == 0 {
+		s.sourcesDir = newDir
+	}
+
+	return missing, nil
 }
 
 // ResolveSourcePath resolves symlinks in a source path and returns the real path.

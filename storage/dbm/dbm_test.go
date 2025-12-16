@@ -374,3 +374,101 @@ func TestSubSets(t *testing.T) {
 		}
 	})
 }
+
+func TestEachSet(t *testing.T) {
+	WithTree(t, func(tr *Tree) {
+		// Create sets with various names to test iteration and jumping
+		wantSets := map[string]bool{
+			"alpha":   true,
+			"beta":    true,
+			"gamma":   true,
+			"delta":   true,
+			"epsilon": true,
+		}
+
+		// Add entries to each set
+		for setID := range wantSets {
+			for i := 0; i < 10; i++ {
+				if err := tr.SubSet(setID, fmt.Sprintf("key%d", i), nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+
+		// Verify EachSet returns all unique sets
+		gotSets := map[string]bool{}
+		for setID, err := range tr.EachSet() {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotSets[setID] {
+				t.Errorf("got duplicate set %q", setID)
+			}
+			gotSets[setID] = true
+		}
+
+		if len(gotSets) != len(wantSets) {
+			t.Errorf("got %d sets, want %d", len(gotSets), len(wantSets))
+		}
+		for setID := range wantSets {
+			if !gotSets[setID] {
+				t.Errorf("missing set %q", setID)
+			}
+		}
+	})
+}
+
+func TestEachSetEmpty(t *testing.T) {
+	WithTree(t, func(tr *Tree) {
+		// Empty tree should yield nothing
+		count := 0
+		for _, err := range tr.EachSet() {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+		if count != 0 {
+			t.Errorf("got %d sets from empty tree, want 0", count)
+		}
+	})
+}
+
+func TestEachSetWithRandomData(t *testing.T) {
+	WithTree(t, func(tr *Tree) {
+		rng := rand.New(&rand.PCG{})
+		wantSets := map[string]bool{}
+		numSets := 50
+		entriesPerSet := 20
+
+		// Create random sets
+		for range numSets {
+			setID := randBytes(rng)
+			wantSets[setID] = true
+			for range entriesPerSet {
+				valID := randBytes(rng)
+				if err := tr.SubSet(setID, valID, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+
+		// Verify EachSet returns all unique sets
+		gotSets := map[string]bool{}
+		for setID, err := range tr.EachSet() {
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotSets[setID] = true
+		}
+
+		if len(gotSets) != len(wantSets) {
+			t.Errorf("got %d sets, want %d", len(gotSets), len(wantSets))
+		}
+		for setID := range wantSets {
+			if !gotSets[setID] {
+				t.Errorf("missing set %q", setID)
+			}
+		}
+	})
+}

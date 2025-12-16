@@ -10,6 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+)
+
+const (
+	// connectionTimeout is the maximum time for the entire admin operation.
+	connectionTimeout = 30 * time.Second
 )
 
 func main() {
@@ -58,6 +64,9 @@ func switchSources(socketPath, targetPath string) error {
 		return fmt.Errorf("failed to connect to control socket %s: %w", socketPath, err)
 	}
 	defer conn.Close()
+
+	// Set timeout for the entire operation
+	conn.SetDeadline(time.Now().Add(connectionTimeout))
 
 	// Send command
 	var cmd string
