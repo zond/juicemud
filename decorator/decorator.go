@@ -135,6 +135,8 @@ func main() {
 						jen.Defer().Id("v").Dot("RUnlock").Call(),
 						jen.Id("v").Dot("Unsafe").Dot("Marshal").Call(jen.Id("b")),
 					)
+					// Unmarshal deserializes from benc format (disk storage).
+					// Calls PostUnmarshal to initialize nil map fields.
 					f.Func().Params(
 						jen.Id("v").Op("*").Id(backendName),
 					).Id("Unmarshal").Params(
@@ -163,7 +165,6 @@ func main() {
 						jen.Id("v").Dot("PostUnlock").Op("=").Id("p"),
 					)
 					// MarshalJSON marshals just the Unsafe field, hiding the wrapper structure.
-					// This allows JavaScript to access object fields directly without the Unsafe wrapper.
 					f.Func().Params(
 						jen.Id("v").Op("*").Id(backendName),
 					).Id("MarshalJSON").Params().Parens(jen.List(jen.Id("[]byte"), jen.Id("error"))).Block(
@@ -172,6 +173,7 @@ func main() {
 						jen.Return(jen.Qual("github.com/goccy/go-json", "Marshal").Call(jen.Id("v").Dot("Unsafe"))),
 					)
 					// UnmarshalJSON unmarshals directly into the Unsafe field.
+					// No PostUnmarshal needed since JSON comes from in-memory objects with maps already initialized.
 					f.Func().Params(
 						jen.Id("v").Op("*").Id(backendName),
 					).Id("UnmarshalJSON").Params(jen.Id("data").Id("[]byte")).Id("error").Block(
