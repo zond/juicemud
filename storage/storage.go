@@ -401,6 +401,10 @@ func (s *Storage) ChangeSource(ctx context.Context, obj *structs.Object, newSour
 	return juicemud.WithStack(s.sourceObjects.SubDel(oldSourcePath, obj.Unsafe.Id))
 }
 
+// ErrCircularContainer is returned when trying to move an object into itself or
+// into something contained within it, which would create a containment cycle.
+var ErrCircularContainer = errors.New("cannot move object into itself or its contents")
+
 func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID string) error {
 	if obj.PostUnlock == nil {
 		return errors.Errorf("can't move object unknown to storage: %+v", obj)
@@ -408,6 +412,20 @@ func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID st
 
 	id := obj.GetId()
 	sourceID := obj.GetLocation()
+
+	// Check for circular containment: walk up from destID to ensure we don't find id
+	// This prevents moving an object into itself or into something it contains.
+	currentID := destID
+	for currentID != "" {
+		if currentID == id {
+			return ErrCircularContainer
+		}
+		current, err := s.objects.Get(currentID)
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		currentID = current.GetLocation()
+	}
 
 	source, err := s.objects.Get(sourceID)
 	if err != nil {

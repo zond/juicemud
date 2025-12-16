@@ -76,6 +76,17 @@ func (tc *terminalClient) waitForLocation(target, expectedLocation string, timeo
 	})
 }
 
+// getLocation returns the current location of an object via /inspect.
+// Use empty string as target to inspect the current user's object, or "#<id>" for other objects.
+// Returns empty string on error.
+func (tc *terminalClient) getLocation(target string) string {
+	result, err := tc.inspect(target)
+	if err != nil {
+		return ""
+	}
+	return result.GetLocation()
+}
+
 // waitForLookMatch polls with look commands until the output contains the expected string.
 // Drains any buffered data after success to prevent interference with subsequent commands.
 func (tc *terminalClient) waitForLookMatch(expected string, timeout time.Duration) (string, bool) {

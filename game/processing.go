@@ -223,10 +223,6 @@ func (g *Game) createObject(ctx context.Context, obj *structs.Object) error {
 	return juicemud.WithStack(g.emitMovement(ctx, obj, nil, &dest))
 }
 
-var (
-	ErrCircularContainer = errors.New("Objects can't contain themselves.")
-)
-
 func (g *Game) moveObject(ctx context.Context, obj *structs.Object, destination string) error {
 	source := obj.GetLocation()
 	if err := g.storage.MoveObject(ctx, obj, destination); err != nil {

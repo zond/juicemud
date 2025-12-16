@@ -32,7 +32,8 @@ For verifying object state and waiting for object creation, tests prefer:
 | `/ls` | 3 | Called but output not verified |
 | `/enter` | 4 | Moving into rooms as wizard |
 | `/exit` | 4 | Moving out of rooms as wizard |
-| `/move` | 5, 12 | Moving objects between locations |
+| `/move` | 5, 12, 24 | Moving objects between locations |
+| `/move` circular prevention | 24 | Rejects moving object into its contents |
 | `/remove` | 11 | Deletes objects, verifies self-removal fails |
 | `setDescriptions()` | All | Used in all JS sources, updated dynamically |
 | `setExits()` | 5 | Creating exits between rooms |
@@ -76,10 +77,7 @@ For verifying object state and waiting for object creation, tests prefer:
 
 ### Wizard Commands
 
-| Command | Description | Priority |
-|---------|-------------|----------|
-| `/chread` / `/chwrite` | File read/write permissions | Medium |
-| `/checkperm` | Dry-run permission check (not implemented) | Low |
+(All wizard commands are now tested or removed)
 
 ### JavaScript API Functions
 
@@ -102,14 +100,10 @@ For verifying object state and waiting for object creation, tests prefer:
 
 | Case | Description | Priority |
 |------|-------------|----------|
-| Circular container prevention | `/move` should fail if dest is inside obj | Medium |
 | Can't exit universe | `/exit` at top level should fail | Low |
-| WebDAV unauthorized access | Non-owner/non-wizard can't access WebDAV | Medium |
 | `/remove` current location | Should fail with error message | Low |
 
 ## Suggested Next Tests
 
-### 1. Edge cases (Lower Priority)
+### 1. Edge cases (Low Priority)
 - `/exit` at genesis should fail gracefully
-- `/move #obj #obj` should fail (circular)
-- WebDAV access without wizard privileges

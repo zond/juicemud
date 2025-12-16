@@ -1987,5 +1987,91 @@ addCallback('mindspeak', ['action'], (msg) => {
 
 	fmt.Println("  /addwiz and /delwiz commands: OK")
 
+	// === Test 24: Circular container prevention ===
+	fmt.Println("Testing circular container prevention...")
+
+	// Create two container objects with distinct names
+	containerASource := `// Container A
+setDescriptions([{
+	Short: 'outer box',
+	Long: 'The outer container.',
+}]);
+`
+	containerBSource := `// Container B
+setDescriptions([{
+	Short: 'inner box',
+	Long: 'The inner container.',
+}]);
+`
+	if err := ts.WriteSource("/containerA.js", containerASource); err != nil {
+		return fmt.Errorf("failed to create /containerA.js: %w", err)
+	}
+	if err := ts.WriteSource("/containerB.js", containerBSource); err != nil {
+		return fmt.Errorf("failed to create /containerB.js: %w", err)
+	}
+
+	// Create container A (outer box)
+	if err := tc.sendLine("/create /containerA.js"); err != nil {
+		return fmt.Errorf("/create container A: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create container A did not complete")
+	}
+	containerAID, found := tc.waitForObject("*outer*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("container A (outer box) was not created")
+	}
+
+	// Create container B (inner box)
+	if err := tc.sendLine("/create /containerB.js"); err != nil {
+		return fmt.Errorf("/create container B: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create container B did not complete")
+	}
+	containerBID, found := tc.waitForObject("*inner*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("container B (inner box) was not created")
+	}
+
+	// Get container A's original location before moving B into it
+	containerAOriginalLoc := tc.getLocation(fmt.Sprintf("#%s", containerAID))
+	if containerAOriginalLoc == "" {
+		return fmt.Errorf("could not determine container A's location")
+	}
+
+	// Move B into A (should succeed)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerBID, containerAID)); err != nil {
+		return fmt.Errorf("/move B into A: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/move B into A did not complete: %q", output)
+	}
+	// Verify B is now inside A
+	if !tc.waitForLocation(fmt.Sprintf("#%s", containerBID), containerAID, defaultWaitTimeout) {
+		return fmt.Errorf("container B did not move into A")
+	}
+
+	// Try to move A into B (should fail - circular)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerAID, containerBID)); err != nil {
+		return fmt.Errorf("/move A into B: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/move A into B did not complete: %q", output)
+	}
+	// Should contain error about circular containment
+	if !strings.Contains(output, "cannot move object into itself") {
+		return fmt.Errorf("circular move should fail with error, got: %q", output)
+	}
+
+	// Verify A is still in its original location
+	if !tc.waitForLocation(fmt.Sprintf("#%s", containerAID), containerAOriginalLoc, defaultWaitTimeout) {
+		return fmt.Errorf("container A should still be in %s after failed circular move", containerAOriginalLoc)
+	}
+
+	fmt.Println("  Circular container prevention: OK")
+
 	return nil
 }
