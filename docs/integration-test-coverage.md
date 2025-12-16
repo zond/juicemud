@@ -33,7 +33,7 @@ For verifying object state and waiting for object creation, tests prefer:
 | `/enter` | 4 | Moving into rooms as wizard |
 | `/exit` | 4 | Moving out of rooms as wizard |
 | `/move` | 5, 12, 24 | Moving objects between locations |
-| `/move` circular prevention | 24 | Rejects moving object into its contents |
+| `/move` circular prevention | 24 | Rejects self-move, 2-level, and 3-level cycles |
 | `/remove` | 11 | Deletes objects, verifies self-removal fails |
 | `setDescriptions()` | All | Used in all JS sources, updated dynamically |
 | `setExits()` | 5 | Creating exits between rooms |
