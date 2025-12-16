@@ -3,8 +3,8 @@ package storage
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"iter"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -305,8 +305,10 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 	}, obj, loc); err != nil {
 		// Rollback: remove from sourceObjects on failure.
 		// This is safe because object IDs are unique and an object can only be created once.
-		if delerr := s.sourceObjects.SubDel(obj.Unsafe.SourcePath, obj.Unsafe.Id); !errors.Is(delerr, os.ErrNotExist) && delerr != nil {
-			return fmt.Errorf("trying to remove source mapping when handling %w: %w", err, delerr)
+		// If rollback fails, log but don't compound errors - the primary error is more important,
+		// and orphaned sourceObjects entries are cleaned up by EachSourceObject.
+		if delerr := s.sourceObjects.SubDel(obj.Unsafe.SourcePath, obj.Unsafe.Id); delerr != nil && !errors.Is(delerr, os.ErrNotExist) {
+			log.Printf("CreateObject rollback failed for %q/%q: %v", obj.Unsafe.SourcePath, obj.Unsafe.Id, delerr)
 		}
 		return juicemud.WithStack(err)
 	}

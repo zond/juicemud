@@ -135,12 +135,14 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "usage: /create [path]")
 					return nil
 				}
-				exists, err := c.game.storage.SourceExists(c.ctx, parts[1])
+				// Normalize path to ensure consistent storage (avoids /foo/bar vs foo/bar vs ./foo/bar)
+				sourcePath := filepath.Clean(parts[1])
+				exists, err := c.game.storage.SourceExists(c.ctx, sourcePath)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
 				if !exists {
-					fmt.Fprintf(c.term, "%q doesn't exist\n", parts[1])
+					fmt.Fprintf(c.term, "%q doesn't exist\n", sourcePath)
 					return nil
 				}
 				self, err := c.game.accessObject(c.ctx, c.user.Object)
@@ -151,7 +153,7 @@ func (c *Connection) wizCommands() commands {
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				obj.Unsafe.SourcePath = parts[1]
+				obj.Unsafe.SourcePath = sourcePath
 				obj.Unsafe.Location = self.GetLocation()
 				if err := c.game.createObject(c.ctx, obj); err != nil {
 					return juicemud.WithStack(err)
@@ -276,11 +278,17 @@ func (c *Connection) wizCommands() commands {
 						}
 						t.AddRow(part+"/", "dir", "")
 						for _, entry := range entries {
-							entryPath := filepath.Join(part, entry.Name())
+							// Normalize and validate the constructed path
+							entryPath := filepath.Clean(filepath.Join(part, entry.Name()))
+							if _, err := c.game.storage.SafeSourcePath(entryPath); err != nil {
+								// Skip entries with invalid paths (shouldn't happen normally)
+								continue
+							}
 							entryType := "file"
+							displayPath := entryPath
 							if entry.IsDir() {
 								entryType = "dir"
-								entryPath += "/"
+								displayPath += "/"
 							}
 							// Count objects using this source
 							objCount := 0
@@ -291,7 +299,7 @@ func (c *Connection) wizCommands() commands {
 							if objCount > 0 {
 								objStr = fmt.Sprintf("%d", objCount)
 							}
-							t.AddRow(entryPath, entryType, objStr)
+							t.AddRow(displayPath, entryType, objStr)
 						}
 					} else {
 						// Single file
