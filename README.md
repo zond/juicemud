@@ -17,6 +17,9 @@ A MUD (Multi-User Dungeon) game server written in Go, featuring JavaScript-based
 # Build the server
 go build -o juicemud ./bin/server
 
+# Build the admin CLI
+go build -o juicemud-admin ./bin/admin
+
 # Run the server (default port: SSH 15000)
 ./juicemud
 
@@ -228,11 +231,48 @@ Objects only receive events they've registered callbacks for with the matching t
 **Code generation:**
 - bencgen: Code generator for binary serialization (install separately for schema changes)
 
+## Administration
+
+The server exposes a Unix domain socket for runtime administration at `<dir>/control.sock`. The `juicemud-admin` CLI tool communicates with this socket.
+
+### Source Versioning
+
+JavaScript sources can be organized into version directories for zero-downtime updates:
+
+```
+<dir>/src/
+├── current -> v2/     # Symlink to active version
+├── v1/                # Previous version
+└── v2/                # Current version
+```
+
+The server follows the `src/current` symlink at startup. To deploy a new version:
+
+1. Create a new version directory (e.g., `v3/`) with updated sources
+2. Update the symlink: `ln -sfn v3 src/current`
+3. Validate and switch atomically:
+   ```bash
+   juicemud-admin switch-sources
+   ```
+
+The `switch-sources` command resolves symlinks, validates all source files referenced by existing objects exist in the new directory, and only switches if validation passes. If sources are missing, it reports them:
+
+```
+Error: missing source files:
+  /room.js (3 objects)
+  /player.js (1 objects)
+```
+
+Options:
+- `juicemud-admin switch-sources src/v3` - switch to a specific path
+- `juicemud-admin -socket /path/to/control.sock switch-sources` - use a different socket
+
 ## Project Structure
 
 ```
 juicemud/
 ├── bin/
+│   ├── admin/               # Admin CLI for runtime management
 │   └── server/              # Main server binary
 ├── crypto/                  # SSH key generation
 ├── decorator/               # Object decoration utilities
