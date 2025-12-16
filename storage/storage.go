@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
@@ -58,13 +59,21 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	return s, nil
 }
 
+// Storage manages persistent storage for the game.
+//
+// Lock ordering (must always be acquired in this order to prevent deadlocks):
+//  1. sourceObjectsMu (Storage-level)
+//  2. Object locks (via structs.WithLock, sorted by ID)
+//  3. LiveTypeHash.stageMutex
+//  4. Tree.mutex / Hash.mutex (tkrzw internal)
 type Storage struct {
-	queue         *queue.Queue
-	sql           *sqly.DB
-	sourcesDir    string
-	sourceObjects *dbm.Tree
-	objects       *dbm.LiveTypeHash[structs.Object, *structs.Object]
-	audit         *AuditLogger
+	queue           *queue.Queue
+	sql             *sqly.DB
+	sourcesDir      string
+	sourceObjects   *dbm.Tree
+	sourceObjectsMu sync.RWMutex // Protects sourceObjects operations
+	objects         *dbm.LiveTypeHash[structs.Object, *structs.Object]
+	audit           *AuditLogger
 }
 
 func (s *Storage) Close() error {
@@ -217,11 +226,16 @@ func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
 
 	id := obj.GetId()
 	locID := obj.GetLocation()
+	sourcePath := obj.GetSourcePath()
 
 	loc, err := s.objects.Get(locID)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
+
+	// Lock before object removal to ensure EachSourceObject sees a consistent state.
+	s.sourceObjectsMu.Lock()
+	defer s.sourceObjectsMu.Unlock()
 
 	if err := structs.WithLock(func() error {
 		if obj.Unsafe.Location != locID {
@@ -249,7 +263,7 @@ func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
 		return juicemud.WithStack(err)
 	}
 
-	return juicemud.WithStack(s.sourceObjects.SubDel(obj.Unsafe.SourcePath, id))
+	return juicemud.WithStack(s.sourceObjects.SubDel(sourcePath, id))
 }
 
 func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
@@ -264,6 +278,9 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
+
+	s.sourceObjectsMu.Lock()
+	defer s.sourceObjectsMu.Unlock()
 
 	if err := s.sourceObjects.SubSet(obj.Unsafe.SourcePath, obj.Unsafe.Id, nil); err != nil {
 		return juicemud.WithStack(err)
@@ -286,8 +303,10 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 			}),
 		}))
 	}, obj, loc); err != nil {
+		// Rollback: remove from sourceObjects on failure.
+		// This is safe because object IDs are unique and an object can only be created once.
 		if delerr := s.sourceObjects.SubDel(obj.Unsafe.SourcePath, obj.Unsafe.Id); !errors.Is(delerr, os.ErrNotExist) && delerr != nil {
-			return fmt.Errorf("trying to remove source user when handling %w: %w", err, delerr)
+			return fmt.Errorf("trying to remove source mapping when handling %w: %w", err, delerr)
 		}
 		return juicemud.WithStack(err)
 	}
@@ -312,15 +331,15 @@ func (s *Storage) CountSourceObjects(ctx context.Context, path string) (int, err
 
 // EachSourceObject iterates over all object IDs created from the given source file path.
 // It also performs cleanup: if an object no longer exists but is still indexed under this
-// source path, it removes the stale index entry. The iteration must collect IDs first
-// because SubEach holds a read lock, and deletion requires a write lock.
+// source path, it removes the stale index entry.
 //
 // Errors are yielded to callers but do not stop iteration - callers may receive errors
 // interspersed with valid IDs and should handle both.
 func (s *Storage) EachSourceObject(ctx context.Context, path string) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
-		// Collect IDs during iteration since we can't delete while SubEach holds its read lock.
-		var validIDs []string
+		s.sourceObjectsMu.Lock()
+		defer s.sourceObjectsMu.Unlock()
+
 		var staleIDs []string
 		for entry, err := range s.sourceObjects.SubEach(path) {
 			if err != nil {
@@ -330,12 +349,14 @@ func (s *Storage) EachSourceObject(ctx context.Context, path string) iter.Seq2[s
 				continue
 			}
 			if s.objects.Has(entry.K) {
-				validIDs = append(validIDs, entry.K)
+				if !yield(entry.K, nil) {
+					return
+				}
 			} else {
 				staleIDs = append(staleIDs, entry.K)
 			}
 		}
-		// Clean up stale entries (objects that no longer exist)
+		// Clean up stale entries while still holding lock
 		for _, id := range staleIDs {
 			if err := s.sourceObjects.SubDel(path, id); err != nil {
 				if !yield("", juicemud.WithStack(err)) {
@@ -343,27 +364,27 @@ func (s *Storage) EachSourceObject(ctx context.Context, path string) iter.Seq2[s
 				}
 			}
 		}
-		// Yield valid object IDs
-		for _, id := range validIDs {
-			if !yield(id, nil) {
-				return
-			}
-		}
 	}
 }
 
+// ChangeSource updates the source path for an object.
+// PRECONDITION: Caller must have exclusive access to the object (typically via holding its lock
+// or being the only goroutine accessing it).
 func (s *Storage) ChangeSource(ctx context.Context, obj *structs.Object, newSourcePath string) error {
 	if obj.PostUnlock == nil {
 		return errors.Errorf("can't set source of an object unknown to storage: %+v", obj)
 	}
 
-	if err := s.sourceObjects.SubSet(newSourcePath, obj.Unsafe.Id, nil); err != nil {
-		return juicemud.WithStack(err)
-	}
-
 	oldSourcePath := obj.GetSourcePath()
 	if oldSourcePath == "" {
 		return errors.Errorf("can't change the source of an object that doesn't have a source: %+v", obj)
+	}
+
+	s.sourceObjectsMu.Lock()
+	defer s.sourceObjectsMu.Unlock()
+
+	if err := s.sourceObjects.SubSet(newSourcePath, obj.Unsafe.Id, nil); err != nil {
+		return juicemud.WithStack(err)
 	}
 
 	obj.SetSourcePath(newSourcePath)
@@ -460,6 +481,9 @@ type Movement struct {
 // UNSAFEEnsureObject creates an object if it doesn't exist, bypassing normal validation.
 // Used only during initialization to bootstrap the world.
 func (s *Storage) UNSAFEEnsureObject(ctx context.Context, obj *structs.Object) error {
+	s.sourceObjectsMu.Lock()
+	defer s.sourceObjectsMu.Unlock()
+
 	if err := s.sourceObjects.SubSet(obj.GetSourcePath(), obj.GetId(), nil); err != nil {
 		return juicemud.WithStack(err)
 	}
