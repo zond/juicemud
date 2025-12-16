@@ -2,6 +2,8 @@
 
 This document summarizes findings from a comprehensive review of the test suite conducted December 2025.
 
+**Status**: Most high and medium priority issues have been fixed (December 2025).
+
 ## Overview
 
 The codebase contains:
@@ -12,94 +14,37 @@ The codebase contains:
 
 ### High Priority
 
-#### Test 28: Invalid Object Reference
-**Location**: `integration_test/run_all.go` Test 28
+#### Test 28: Invalid Object Reference - FIXED
+~~The test used `#lookroom` as an object ID, but the codebase doesn't support `#lookroom` as a valid ID reference.~~
 
-The test uses `#lookroom` as an object ID, but the codebase doesn't support `#lookroom` as a valid ID reference. The test should capture the room ID when it's created and use that instead.
+**Fix**: Changed to use the `lookRoomID` variable that was already captured earlier in the test file.
 
-```go
-// Current (broken):
-if err := ts.wizard.ensureSetLocation(ctx, "#look", "#lookroom"); err != nil {
+#### Documentation Claims Non-Existent Features - FIXED
+~~The documentation claimed Test 13 tested group commands that don't exist.~~
 
-// Should be:
-roomID := ts.wizard.sendAndCapture(ctx, `/inspect genesis`, `"id": "(.*)"`)
-if err := ts.wizard.ensureSetLocation(ctx, "#look", roomID); err != nil {
-```
-
-#### Documentation Claims Non-Existent Features
-**Location**: `docs/integration-test-coverage.md` claims Test 13 tests group commands
-
-The documentation claims that Test 13 tests `/mkgroup`, `/lsgroup`, `/rmgroup`, `/addgroup`, `/rmfromgroup`, and `/lsmember` commands. However, these commands do not exist in the codebase. The documentation should be corrected to reflect what Test 13 actually tests (wizard help commands).
+**Fix**: Removed incorrect group command entries from `docs/integration-test-coverage.md` and fixed test numbers.
 
 ### Medium Priority
 
-#### Test 3: Unverified Output
-**Location**: `integration_test/run_all.go` Test 3
+#### Test 3: Unverified Output - FIXED
+~~The test ran `/ls` but didn't verify the output.~~
 
-The test runs `/ls` but doesn't verify the output contains expected content.
+**Fix**: Added verification that output contains `box.js` which was created in the test.
 
-```go
-// Current:
-if err := ts.wizard.send(ctx, `/ls`); err != nil {
-    return err
-}
-// Output is not verified
+#### Test 20: Fixed Sleep Instead of Polling - FIXED
+~~Used `time.Sleep(300 * time.Millisecond)` instead of polling.~~
 
-// Recommended: Add verification
-output := ts.wizard.captureOutput(ctx, `/ls`)
-if !strings.Contains(output, "expected_file.js") {
-    return fmt.Errorf("expected file not in ls output")
-}
-```
+**Fix**: Removed the sleep since emit processing is synchronous - by the time the command completes, any emits have already been processed.
 
-#### Test 20: Fixed Sleep Instead of Polling
-**Location**: `integration_test/run_all.go` Test 20
+#### Test 11: Missing Error Message Verification - FIXED
+~~The test didn't verify the "Can't remove yourself" error message.~~
 
-Uses `time.Sleep(300 * time.Millisecond)` instead of polling-based verification. Per project guidelines, tests should avoid fixed sleeps.
-
-```go
-// Current:
-time.Sleep(300 * time.Millisecond)
-
-// Recommended: Use polling pattern
-if err := ts.waitForCondition(ctx, func() bool {
-    // check condition
-}); err != nil {
-    return err
-}
-```
-
-#### Test 11: Missing Error Message Verification
-**Location**: `integration_test/run_all.go` Test 11
-
-The test for `/rm` self-removal relies on checking `err != nil` but doesn't verify the specific error message "Can't remove yourself".
-
-```go
-// Current:
-if err := ts.wizard.send(ctx, `/rm `+ts.wizard.id); err == nil {
-    return fmt.Errorf("removing self should fail")
-}
-
-// Recommended: Verify error message
-output, err := ts.wizard.sendAndCapture(ctx, `/rm `+ts.wizard.id)
-if !strings.Contains(output, "Can't remove yourself") {
-    return fmt.Errorf("expected 'Can't remove yourself' error")
-}
-```
+**Fix**: Added verification of the error message. Also fixed to use `#<user-object-id>` instead of "self" since "self" isn't a special keyword.
 
 #### Test 12: Unnecessary Go API Usage
-**Location**: `integration_test/run_all.go` Test 12
+**Status**: Open (Low impact)
 
 Uses `ts.waitForSourceObject` for visible objects that could be verified through SSH commands. Per project guidelines, integration tests should prefer SSH/WebDAV interfaces.
-
-```go
-// Current:
-obj, err := ts.waitForSourceObject(ctx, lookID, "look.js")
-
-// Could use SSH instead:
-output := ts.wizard.sendAndCapture(ctx, `/inspect `+lookID)
-// Parse output to verify source path
-```
 
 ### Low Priority
 

@@ -202,12 +202,16 @@ setDescriptions([{
 		return fmt.Errorf("/inspect command did not complete")
 	}
 
-	// Test /ls
+	// Test /ls - verify output contains box.js which was just created
 	if err := tc.sendLine("/ls /"); err != nil {
 		return fmt.Errorf("/ls command: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+	lsOutput, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
 		return fmt.Errorf("/ls command did not complete")
+	}
+	if !strings.Contains(lsOutput, "box.js") {
+		return fmt.Errorf("/ls output should contain box.js: %q", lsOutput)
 	}
 
 	fmt.Println("  Wizard commands: OK")
@@ -936,13 +940,17 @@ addCallback('timeout', ['emit'], (msg) => {
 		return fmt.Errorf("removable object should not exist after removal: %q", output)
 	}
 
-	// Test edge case: can't remove self - verify we stay logged in
-	if err := tc.sendLine("/remove self"); err != nil {
+	// Test edge case: can't remove self - verify error message and we stay logged in
+	// Use #<user-object-id> since "self" isn't a special keyword
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", user.Object)); err != nil {
 		return fmt.Errorf("/remove self command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
 		return fmt.Errorf("/remove self command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Can't remove yourself") {
+		return fmt.Errorf("/remove self should show error 'Can't remove yourself': %q", output)
 	}
 	// Verify we're still logged in by checking we can look around
 	if err := tc.sendLine("look"); err != nil {
@@ -1640,15 +1648,14 @@ addCallback('whisper', ['action'], (msg) => {
 	}
 
 	// Whisper to the low-perception receiver - should fail (no event received)
+	// Emit processing is synchronous, so by the time the command completes,
+	// the emit has either been delivered or filtered by the challenge system.
 	if err := tc.sendLine(fmt.Sprintf("whisper %s", dimID)); err != nil {
 		return fmt.Errorf("whisper to dim: %w", err)
 	}
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("whisper to dim did not complete")
 	}
-
-	// Wait a bit for any potential emit to arrive
-	time.Sleep(300 * time.Millisecond)
 
 	// Dim should NOT have received the secret (should still be waiting)
 	tc.sendLine("look")
@@ -2458,7 +2465,7 @@ addCallback('teleport', ['action'], (msg) => {
 		return fmt.Errorf("/create teleporter did not complete")
 	}
 
-	_, found = tc.waitForObject("*teleporter*ready*", defaultWaitTimeout)
+	teleporterID, found := tc.waitForObject("*teleporter*ready*", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("teleporter was not created")
 	}
@@ -2476,19 +2483,13 @@ addCallback('teleport', ['action'], (msg) => {
 	}
 
 	// Move to a different room first (lookroom)
-	if err := tc.sendLine("/enter #lookroom"); err != nil {
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", lookRoomID)); err != nil {
 		return fmt.Errorf("/enter lookroom: %w", err)
 	}
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		return fmt.Errorf("/enter lookroom did not complete")
 	}
-
-	// Move the teleporter there using /move command
-	teleporterID, found := tc.waitForObject("*teleporter*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("couldn't find teleporter")
-	}
-	if err := tc.sendLine(fmt.Sprintf("/move #%s #lookroom", teleporterID)); err != nil {
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", teleporterID, lookRoomID)); err != nil {
 		return fmt.Errorf("/move teleporter: %w", err)
 	}
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {

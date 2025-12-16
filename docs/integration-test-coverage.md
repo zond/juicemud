@@ -31,12 +31,12 @@ For verifying object state and waiting for object creation, tests prefer:
 | WebDAV PUT | 2 | Creating `/testroom.js`, `/box.js`, etc. |
 | `/create` | 3 | Creating objects from source files |
 | `/inspect` | 3, 11 | Verifying object properties, existence before/after removal |
-| `/ls` | 3 | Called but output not verified |
+| `/ls` | 3 | Lists files, verifies created file appears |
 | `/enter` | 4 | Moving into rooms as wizard |
 | `/exit` | 4 | Moving out of rooms as wizard |
 | `/move` | 5, 12, 24 | Moving objects between locations |
 | `/move` circular prevention | 24 | Rejects self-move, 2-level, and 3-level cycles |
-| `/remove` | 11 | Deletes objects, verifies self-removal fails |
+| `/remove` | 11 | Deletes objects, verifies self-removal error message |
 | `setDescriptions()` | All | Used in all JS sources, updated dynamically |
 | `setExits()` | 5 | Creating exits between rooms |
 | `addCallback('connected', ['emit'])` | 1 | Implicitly via user.js |
@@ -54,18 +54,10 @@ For verifying object state and waiting for object creation, tests prefer:
 | `getId()` | 20 | Used implicitly in emitToLocation (emitter ID for challenges) |
 | `setTimeout()` | 10 | Timer schedules delayed event |
 | `movement` event | 12 | Observer sees object move out of room |
-| `/mkgroup` | 13 | Create groups with owner and supergroup flags |
-| `/rmgroup` | 13 | Delete empty groups |
-| `/adduser` | 13 | Add user to group |
-| `/rmuser` | 13 | Remove user from group |
-| `/editgroup` | 13 | Edit group name, owner, supergroup flag |
-| `/listgroups` | 13 | List all groups with properties |
-| `/members` | 13 | List members of a group |
-| `/groups` | 13 | Show user's group memberships |
-| `/debug` | 14 | Attach to object console |
-| `/undebug` | 14 | Detach from object console |
-| `log()` | 14 | Console output appears when debug attached |
-| `created` event | 15 | Object receives creator info on `/create` |
+| `/debug` | 13 | Attach to object console |
+| `/undebug` | 13 | Detach from object console |
+| `log()` | 13 | Console output appears when debug attached |
+| `created` event | 14 | Object receives creator info on `/create` |
 | Room `action` handler | 18 | Room receives action commands issued by player |
 | Sibling `action` handler | 18 | Objects in same room receive action commands |
 | `state` persistence | 19 | JS state object persists across multiple command invocations |
