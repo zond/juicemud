@@ -2071,6 +2071,62 @@ setDescriptions([{
 		return fmt.Errorf("container A should still be in %s after failed circular move", containerAOriginalLoc)
 	}
 
+	// Test self-move: try to move A into A (should fail)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerAID, containerAID)); err != nil {
+		return fmt.Errorf("/move A into A: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/move A into A did not complete: %q", output)
+	}
+	if !strings.Contains(output, "cannot move object into itself") {
+		return fmt.Errorf("self-move should fail with error, got: %q", output)
+	}
+
+	// Test deeper nesting: A contains B, B contains C, try to move A into C
+	containerCSource := `// Container C
+setDescriptions([{
+	Short: 'deep box',
+	Long: 'The deepest container.',
+}]);
+`
+	if err := ts.WriteSource("/containerC.js", containerCSource); err != nil {
+		return fmt.Errorf("failed to create /containerC.js: %w", err)
+	}
+	if err := tc.sendLine("/create /containerC.js"); err != nil {
+		return fmt.Errorf("/create container C: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create container C did not complete")
+	}
+	containerCID, found := tc.waitForObject("*deep*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("container C (deep box) was not created")
+	}
+
+	// Move C into B (so now A > B > C)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerCID, containerBID)); err != nil {
+		return fmt.Errorf("/move C into B: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/move C into B did not complete")
+	}
+	if !tc.waitForLocation(fmt.Sprintf("#%s", containerCID), containerBID, defaultWaitTimeout) {
+		return fmt.Errorf("container C did not move into B")
+	}
+
+	// Try to move A into C (should fail - C is inside B which is inside A)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerAID, containerCID)); err != nil {
+		return fmt.Errorf("/move A into C: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/move A into C did not complete: %q", output)
+	}
+	if !strings.Contains(output, "cannot move object into itself") {
+		return fmt.Errorf("deep circular move should fail with error, got: %q", output)
+	}
+
 	fmt.Println("  Circular container prevention: OK")
 
 	return nil

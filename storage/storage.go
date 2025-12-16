@@ -405,6 +405,10 @@ func (s *Storage) ChangeSource(ctx context.Context, obj *structs.Object, newSour
 // into something contained within it, which would create a containment cycle.
 var ErrCircularContainer = errors.New("cannot move object into itself or its contents")
 
+// maxContainmentDepth is the maximum depth for containment chain walks.
+// This prevents infinite loops on corrupted data and bounds performance.
+const maxContainmentDepth = 1000
+
 func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID string) error {
 	if obj.PostUnlock == nil {
 		return errors.Errorf("can't move object unknown to storage: %+v", obj)
@@ -413,10 +417,11 @@ func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID st
 	id := obj.GetId()
 	sourceID := obj.GetLocation()
 
-	// Check for circular containment: walk up from destID to ensure we don't find id
+	// Check for circular containment: walk up from destID to ensure we don't find id.
 	// This prevents moving an object into itself or into something it contains.
+	// We re-check the immediate parent inside the lock to prevent TOCTOU races.
 	currentID := destID
-	for currentID != "" {
+	for depth := 0; currentID != "" && depth < maxContainmentDepth; depth++ {
 		if currentID == id {
 			return ErrCircularContainer
 		}
@@ -425,6 +430,9 @@ func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID st
 			return juicemud.WithStack(err)
 		}
 		currentID = current.GetLocation()
+	}
+	if currentID != "" {
+		return errors.New("containment chain too deep or already circular")
 	}
 
 	source, err := s.objects.Get(sourceID)
@@ -438,6 +446,14 @@ func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID st
 	}
 
 	return juicemud.WithStack(structs.WithLock(func() error {
+		// Re-check that destination is not inside the object we're moving.
+		// This check uses the locked dest object to prevent TOCTOU races.
+		// For deeper nesting, the outer check handles it (since object locks
+		// serialize concurrent moves, races creating deep cycles aren't possible).
+		if dest.Unsafe.Location == id {
+			return ErrCircularContainer
+		}
+
 		if obj.Unsafe.Location != sourceID {
 			return errors.Errorf("%q no longer located in %q", id, sourceID)
 		}
