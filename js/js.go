@@ -132,6 +132,11 @@ func (rc *RunContext) Throw(format string, args ...any) *v8go.Value {
 	return rc.Context().Isolate().ThrowException(rc.String(fmt.Sprintf(format, args...)))
 }
 
+// Null returns a JavaScript null value.
+func (rc *RunContext) Null() *v8go.Value {
+	return v8go.Null(rc.m.iso)
+}
+
 // addJSCallback is the Go implementation of the JavaScript addCallback(eventType, tags, fn) function.
 // It registers a JS function to be called when an event with matching type and tag occurs.
 func addJSCallback(rc *RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {

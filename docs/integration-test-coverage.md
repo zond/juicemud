@@ -13,7 +13,9 @@ Integration tests use SSH and WebDAV interfaces for all interactions, matching h
 For verifying object state and waiting for object creation, tests prefer:
 1. `tc.waitForObject(pattern)` - polls via `/inspect` to find objects by description pattern
 2. `tc.waitForLocation(target, location)` - polls via `/inspect` to check object location
-3. `tc.inspect(target)` - runs `/inspect` and parses the JSON result
+3. `tc.waitForSourcePath(target, path)` - polls via `/inspect` to check object source path
+4. `tc.inspect(target)` - runs `/inspect` and parses the JSON result
+5. `tc.enterIsolatedRoom(ts, name)` - creates a room and enters it to prevent action name collisions
 
 ## Currently Tested
 
@@ -23,7 +25,7 @@ For verifying object state and waiting for object creation, tests prefer:
 | User login/reconnect | 1 | `loginUser()` via SSH prompts |
 | User persistence | 1 | `LoadUser` after creation (storage access justified for verification) |
 | `look` command | 1, 5, 6 | Verify room descriptions, exits, and contents |
-| `look [target]` | - | Not tested - looking at specific objects |
+| `look [target]` | 16 | Look at specific object, shows name and Long description |
 | Exit-based movement | 5, 6 | `south`, `north` commands via exits |
 | WebDAV GET | 2 | Reading `/user.js` |
 | WebDAV PUT | 2 | Creating `/testroom.js`, `/box.js`, etc. |
@@ -64,11 +66,17 @@ For verifying object state and waiting for object creation, tests prefer:
 | `/undebug` | 14 | Detach from object console |
 | `log()` | 14 | Console output appears when debug attached |
 | `created` event | 15 | Object receives creator info on `/create` |
-| `look [target]` | 16 | Look at specific object, shows name and Long description |
 | Room `action` handler | 18 | Room receives action commands issued by player |
 | Sibling `action` handler | 18 | Objects in same room receive action commands |
 | `state` persistence | 19 | JS state object persists across multiple command invocations |
 | `getNeighbourhood()` | 25 | Returns current location and neighboring rooms via exits |
+| `removeCallback()` | 26 | Unregister a callback, verify action no longer triggers |
+| `getSkillConfig()` / `casSkillConfig()` | 27 | Get and update skill configuration with CAS |
+| `getLocation()` | 28 | Get object's current location ID |
+| `moveObject()` | 28 | Move object to new location, replaces setLocation() |
+| `getContent()` | 29 | Get IDs of objects contained within |
+| `getSourcePath()` / `setSourcePath()` | 30 | Get and change object's source file path |
+| `getLearning()` / `setLearning()` | 31 | Get and toggle learning mode |
 
 ## Not Tested
 
@@ -84,13 +92,9 @@ For verifying object state and waiting for object creation, tests prefer:
 
 | Function | Description | Priority |
 |----------|-------------|----------|
-| `removeCallback()` | Unregister a callback | Low |
-| `getSkillConfig()` / `setSkillConfig()` | Individual skill configuration | Low |
 | `getSkillConfigs()` / `setSkillConfigs()` | Bulk skill configuration | Low |
-| `getLocation()` / `setLocation()` | Direct location manipulation | Low |
-| `getContent()` / `setContent()` | Direct content manipulation | Low |
-| `getSourcePath()` / `setSourcePath()` | Source path access | Low |
-| `getLearning()` / `setLearning()` | Learning mode toggle | Low |
+
+Note: `setLocation()` and `setContent()` were removed from the API in favor of `moveObject()`.
 
 ### Events
 

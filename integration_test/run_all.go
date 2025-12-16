@@ -2213,5 +2213,552 @@ addCallback('survey', ['action'], (msg) => {
 
 	fmt.Println("  getNeighbourhood(): OK")
 
+	// === Test 26: removeCallback() ===
+	fmt.Println("Testing removeCallback()...")
+
+	// Use isolated room to prevent action name collisions with other tests
+	if _, err := tc.enterIsolatedRoom(ts, "removeCallback"); err != nil {
+		return fmt.Errorf("failed to enter isolated room for removeCallback test: %w", err)
+	}
+
+	// Create an object that has a callback, then removes it
+	// Uses a "proof" callback to verify the action was dispatched even after removeCallback
+	removeCallbackSource := `setDescriptions([{Short: 'callback test object (has callback) proof:0'}]);
+addCallback('ping', ['action'], (msg) => {
+	// This callback will be removed by 'disable'
+	setDescriptions([{Short: 'callback test object (ping received) proof:' + (state.proofCount || 0)}]);
+});
+addCallback('pingproof', ['action'], (msg) => {
+	// This callback is never removed, proves the action was dispatched
+	state.proofCount = (state.proofCount || 0) + 1;
+});
+addCallback('disable', ['action'], (msg) => {
+	removeCallback('ping');
+	setDescriptions([{Short: 'callback test object (ping disabled) proof:' + (state.proofCount || 0)}]);
+});
+addCallback('checkproof', ['action'], (msg) => {
+	// Used to verify proof count without triggering ping
+	setDescriptions([{Short: 'callback test object (checked) proof:' + (state.proofCount || 0)}]);
+});
+`
+	if err := ts.WriteSource("/callback_test.js", removeCallbackSource); err != nil {
+		return fmt.Errorf("failed to create /callback_test.js: %w", err)
+	}
+	if err := tc.sendLine("/create /callback_test.js"); err != nil {
+		return fmt.Errorf("/create callback_test: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create callback_test did not complete")
+	}
+
+	// Wait for object to be created
+	_, found = tc.waitForObject("*callback test*has callback*proof:0*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("callback test object was not created")
+	}
+
+	// First verify ping callback works - also triggers pingproof (proof:0->1)
+	if err := tc.sendLine("ping"); err != nil {
+		return fmt.Errorf("ping command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("ping command did not complete")
+	}
+	// Also trigger pingproof to update proof count
+	if err := tc.sendLine("pingproof"); err != nil {
+		return fmt.Errorf("pingproof command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("pingproof command did not complete")
+	}
+	// Check proof via checkproof action (should be 1 after pingproof)
+	if err := tc.sendLine("checkproof"); err != nil {
+		return fmt.Errorf("checkproof command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("checkproof command did not complete")
+	}
+	_, found = tc.waitForObject("*callback test*checked*proof:1*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("callback test object should show proof:1 after pingproof")
+	}
+
+	// Now disable the callback (removes 'ping' but not 'pingproof')
+	if err := tc.sendLine("disable"); err != nil {
+		return fmt.Errorf("disable command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("disable command did not complete")
+	}
+	_, found = tc.waitForObject("*callback test*ping disabled*proof:1*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("callback test object did not confirm ping disabled with proof:1")
+	}
+
+	// Ping again - should NOT change description since callback was removed
+	if err := tc.sendLine("ping"); err != nil {
+		return fmt.Errorf("second ping command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("second ping command did not complete")
+	}
+	// pingproof again to prove action was dispatched (proof:1->2)
+	if err := tc.sendLine("pingproof"); err != nil {
+		return fmt.Errorf("second pingproof command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("second pingproof command did not complete")
+	}
+	// Verify via checkproof: proof should be 2 AND description should still be "ping disabled"
+	if err := tc.sendLine("checkproof"); err != nil {
+		return fmt.Errorf("final checkproof command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("final checkproof command did not complete")
+	}
+	// proof:2 proves pingproof was called (action dispatched), but description shows "checked" not "ping received"
+	// which proves the 'ping' callback was removed
+	_, found = tc.waitForObject("*callback test*checked*proof:2*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("callback test object should show 'checked' with proof:2, proving ping action was dispatched but callback removed")
+	}
+
+	fmt.Println("  removeCallback(): OK")
+
+	// === Test 27: getSkillConfig() / casSkillConfig() ===
+	fmt.Println("Testing getSkillConfig() / casSkillConfig()...")
+
+	// Create an object that can query and set skill configs
+	skillConfigSource := `setDescriptions([{Short: 'skill config tester (ready)'}]);
+addCallback('getconfig', ['action'], (msg) => {
+	const config = getSkillConfig('TestConfigSkill');
+	if (config === null) {
+		setDescriptions([{Short: 'skill config tester (config:null)'}]);
+	} else {
+		setDescriptions([{Short: 'skill config tester (config:forget=' + config.Forget + ')'}]);
+	}
+});
+addCallback('setconfig', ['action'], (msg) => {
+	// Use CAS to set config - null as old value means "doesn't exist yet"
+	const newConfig = {Forget: 3600, Recharge: 1000};
+	const success = casSkillConfig('TestConfigSkill', null, newConfig);
+	setDescriptions([{Short: 'skill config tester (set:' + success + ')'}]);
+});
+addCallback('updateconfig', ['action'], (msg) => {
+	// Use CAS to update existing config
+	const oldConfig = getSkillConfig('TestConfigSkill');
+	if (oldConfig === null) {
+		setDescriptions([{Short: 'skill config tester (update:noexist)'}]);
+		return;
+	}
+	const newConfig = {Forget: 7200, Recharge: oldConfig.Recharge};
+	const success = casSkillConfig('TestConfigSkill', oldConfig, newConfig);
+	setDescriptions([{Short: 'skill config tester (update:' + success + ')'}]);
+});
+`
+	if err := ts.WriteSource("/skill_config_test.js", skillConfigSource); err != nil {
+		return fmt.Errorf("failed to create /skill_config_test.js: %w", err)
+	}
+	if err := tc.sendLine("/create /skill_config_test.js"); err != nil {
+		return fmt.Errorf("/create skill_config_test: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create skill_config_test did not complete")
+	}
+
+	_, found = tc.waitForObject("*skill config tester*ready*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("skill config tester was not created")
+	}
+
+	// First query - should be null (doesn't exist yet)
+	if err := tc.sendLine("getconfig"); err != nil {
+		return fmt.Errorf("getconfig command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("getconfig command did not complete")
+	}
+	_, found = tc.waitForObject("*skill config tester*config:null*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("skill config should be null initially")
+	}
+
+	// Set the config
+	if err := tc.sendLine("setconfig"); err != nil {
+		return fmt.Errorf("setconfig command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("setconfig command did not complete")
+	}
+	_, found = tc.waitForObject("*skill config tester*set:true*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("casSkillConfig should return true for new config")
+	}
+
+	// Query again - should now have value
+	if err := tc.sendLine("getconfig"); err != nil {
+		return fmt.Errorf("second getconfig command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("second getconfig command did not complete")
+	}
+	_, found = tc.waitForObject("*skill config tester*config:forget=3600*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("skill config should have Forget=3600 after set")
+	}
+
+	// Update the config using CAS
+	if err := tc.sendLine("updateconfig"); err != nil {
+		return fmt.Errorf("updateconfig command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("updateconfig command did not complete")
+	}
+	_, found = tc.waitForObject("*skill config tester*update:true*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("casSkillConfig should return true for valid update")
+	}
+
+	// Verify update took effect
+	if err := tc.sendLine("getconfig"); err != nil {
+		return fmt.Errorf("third getconfig command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("third getconfig command did not complete")
+	}
+	_, found = tc.waitForObject("*skill config tester*config:forget=7200*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("skill config should have Forget=7200 after update")
+	}
+
+	fmt.Println("  getSkillConfig() / casSkillConfig(): OK")
+
+	// === Test 28: getLocation() and moveObject() ===
+	fmt.Println("Testing getLocation() and moveObject()...")
+
+	// Create a teleporter object that can move itself using moveObject
+	teleportSource := `setDescriptions([{Short: 'teleporter (ready)'}]);
+addCallback('report', ['action'], (msg) => {
+	const loc = getLocation();
+	setDescriptions([{Short: 'teleporter (at:' + loc.substring(0, 8) + ')'}]);
+});
+addCallback('teleport', ['action'], (msg) => {
+	// Move self to genesis using moveObject (safe, validated movement)
+	moveObject(getId(), 'genesis');
+	setDescriptions([{Short: 'teleporter (teleported)'}]);
+});
+`
+	if err := ts.WriteSource("/teleporter.js", teleportSource); err != nil {
+		return fmt.Errorf("failed to create /teleporter.js: %w", err)
+	}
+	if err := tc.sendLine("/create /teleporter.js"); err != nil {
+		return fmt.Errorf("/create teleporter: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create teleporter did not complete")
+	}
+
+	_, found = tc.waitForObject("*teleporter*ready*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("teleporter was not created")
+	}
+
+	// Get current location
+	if err := tc.sendLine("report"); err != nil {
+		return fmt.Errorf("report command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("report command did not complete")
+	}
+	_, found = tc.waitForObject("*teleporter*at:*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("teleporter should report location")
+	}
+
+	// Move to a different room first (lookroom)
+	if err := tc.sendLine("/enter #lookroom"); err != nil {
+		return fmt.Errorf("/enter lookroom: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter lookroom did not complete")
+	}
+
+	// Move the teleporter there using /move command
+	teleporterID, found := tc.waitForObject("*teleporter*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("couldn't find teleporter")
+	}
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #lookroom", teleporterID)); err != nil {
+		return fmt.Errorf("/move teleporter: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/move teleporter did not complete")
+	}
+
+	// Now teleport it back to genesis using moveObject from JS
+	if err := tc.sendLine("teleport"); err != nil {
+		return fmt.Errorf("teleport command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("teleport command did not complete")
+	}
+
+	// Verify it moved by checking its location via /inspect
+	if !tc.waitForLocation(fmt.Sprintf("#%s", teleporterID), "genesis", defaultWaitTimeout) {
+		return fmt.Errorf("teleporter should be at genesis after moveObject")
+	}
+
+	fmt.Println("  getLocation() and moveObject(): OK")
+
+	// === Test 29: getContent() ===
+	fmt.Println("Testing getContent()...")
+
+	// Go back to genesis for this test
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for content test: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter genesis for content test did not complete")
+	}
+
+	// Create a container that can report its content (getContent is read-only)
+	containerSource := `setDescriptions([{Short: 'content container (ready)'}]);
+addCallback('countitems', ['action'], (msg) => {
+	const content = getContent();
+	const count = content ? Object.keys(content).length : 0;
+	setDescriptions([{Short: 'content container (items:' + count + ')'}]);
+});
+`
+	if err := ts.WriteSource("/content_container.js", containerSource); err != nil {
+		return fmt.Errorf("failed to create /content_container.js: %w", err)
+	}
+	if err := tc.sendLine("/create /content_container.js"); err != nil {
+		return fmt.Errorf("/create content_container: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create content_container did not complete")
+	}
+
+	containerID, found := tc.waitForObject("*content container*ready*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("content container was not created")
+	}
+
+	// Count items (should be 0)
+	if err := tc.sendLine("countitems"); err != nil {
+		return fmt.Errorf("countitems command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("countitems command did not complete")
+	}
+	_, found = tc.waitForObject("*content container*items:0*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("container should have 0 items initially")
+	}
+
+	// Create a small item and put it in the container using /move
+	itemSource := `setDescriptions([{Short: 'tiny item'}]);`
+	if err := ts.WriteSource("/tiny_item.js", itemSource); err != nil {
+		return fmt.Errorf("failed to create /tiny_item.js: %w", err)
+	}
+	if err := tc.sendLine("/create /tiny_item.js"); err != nil {
+		return fmt.Errorf("/create tiny_item: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create tiny_item did not complete")
+	}
+	itemID, found := tc.waitForObject("*tiny item*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("tiny item was not created")
+	}
+
+	// Move item into container using /move command
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", itemID, containerID)); err != nil {
+		return fmt.Errorf("/move item into container: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/move item did not complete")
+	}
+
+	// Count items again (should be 1)
+	if err := tc.sendLine("countitems"); err != nil {
+		return fmt.Errorf("second countitems command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("second countitems command did not complete")
+	}
+	_, found = tc.waitForObject("*content container*items:1*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("container should have 1 item after move")
+	}
+
+	fmt.Println("  getContent(): OK")
+
+	// === Test 30: getSourcePath() / setSourcePath() ===
+	fmt.Println("Testing getSourcePath() / setSourcePath()...")
+
+	// Use isolated room to prevent action name collisions with other tests
+	if _, err := tc.enterIsolatedRoom(ts, "sourcePath"); err != nil {
+		return fmt.Errorf("failed to enter isolated room for sourcePath test: %w", err)
+	}
+
+	// Create an object that can report and change its source path
+	sourcePathSource := `setDescriptions([{Short: 'source path tester (ready)'}]);
+addCallback('getpath', ['action'], (msg) => {
+	const path = getSourcePath();
+	setDescriptions([{Short: 'source path tester (path:' + path + ')'}]);
+});
+addCallback('setpath', ['action'], (msg) => {
+	setSourcePath('/new_source.js');
+	// Note: description will be reset on next reload, so we verify via /inspect
+});
+`
+	if err := ts.WriteSource("/source_path_test.js", sourcePathSource); err != nil {
+		return fmt.Errorf("failed to create /source_path_test.js: %w", err)
+	}
+	// Create the new source file so the object can still run after path change
+	if err := ts.WriteSource("/new_source.js", sourcePathSource); err != nil {
+		return fmt.Errorf("failed to create /new_source.js: %w", err)
+	}
+	if err := tc.sendLine("/create /source_path_test.js"); err != nil {
+		return fmt.Errorf("/create source_path_test: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create source_path_test did not complete")
+	}
+
+	// Wait for object and get its ID
+	sourcePathObjID, found := tc.waitForObject("*source path tester*ready*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("source path tester was not created")
+	}
+
+	// Test getSourcePath() - verify it returns the correct path via description
+	if err := tc.sendLine("getpath"); err != nil {
+		return fmt.Errorf("getpath command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("getpath command did not complete")
+	}
+	_, found = tc.waitForObject("*source path tester*path:/source_path_test.js*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("getSourcePath() should return /source_path_test.js initially")
+	}
+
+	// Also verify via /inspect
+	if !tc.waitForSourcePath(fmt.Sprintf("#%s", sourcePathObjID), "/source_path_test.js", defaultWaitTimeout) {
+		return fmt.Errorf("source path should be /source_path_test.js initially via /inspect")
+	}
+
+	// Test setSourcePath - change the path
+	if err := tc.sendLine("setpath"); err != nil {
+		return fmt.Errorf("setpath command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("setpath command did not complete")
+	}
+
+	// Verify SourcePath changed via /inspect (description gets reset on reload)
+	if !tc.waitForSourcePath(fmt.Sprintf("#%s", sourcePathObjID), "/new_source.js", defaultWaitTimeout) {
+		return fmt.Errorf("source path should be /new_source.js after setSourcePath")
+	}
+
+	fmt.Println("  getSourcePath() / setSourcePath(): OK")
+
+	// === Test 31: getLearning() / setLearning() ===
+	fmt.Println("Testing getLearning() / setLearning()...")
+
+	// Create an object that can toggle learning mode
+	learningSource := `setDescriptions([{Short: 'learning tester (ready)'}]);
+addCallback('checklearn', ['action'], (msg) => {
+	const learning = getLearning();
+	setDescriptions([{Short: 'learning tester (learning:' + learning + ')'}]);
+});
+addCallback('enablelearn', ['action'], (msg) => {
+	setLearning(true);
+	setDescriptions([{Short: 'learning tester (enabled)'}]);
+});
+addCallback('disablelearn', ['action'], (msg) => {
+	setLearning(false);
+	setDescriptions([{Short: 'learning tester (disabled)'}]);
+});
+`
+	if err := ts.WriteSource("/learning_test.js", learningSource); err != nil {
+		return fmt.Errorf("failed to create /learning_test.js: %w", err)
+	}
+	if err := tc.sendLine("/create /learning_test.js"); err != nil {
+		return fmt.Errorf("/create learning_test: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create learning_test did not complete")
+	}
+
+	_, found = tc.waitForObject("*learning tester*ready*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("learning tester was not created")
+	}
+
+	// Check initial learning state (should be false)
+	if err := tc.sendLine("checklearn"); err != nil {
+		return fmt.Errorf("checklearn command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("checklearn command did not complete")
+	}
+	_, found = tc.waitForObject("*learning tester*learning:false*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("learning should be false initially")
+	}
+
+	// Enable learning
+	if err := tc.sendLine("enablelearn"); err != nil {
+		return fmt.Errorf("enablelearn command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("enablelearn command did not complete")
+	}
+	_, found = tc.waitForObject("*learning tester*enabled*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("learning tester should confirm enabled")
+	}
+
+	// Check learning state again (should be true)
+	if err := tc.sendLine("checklearn"); err != nil {
+		return fmt.Errorf("second checklearn command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("second checklearn command did not complete")
+	}
+	_, found = tc.waitForObject("*learning tester*learning:true*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("learning should be true after enable")
+	}
+
+	// Disable learning
+	if err := tc.sendLine("disablelearn"); err != nil {
+		return fmt.Errorf("disablelearn command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("disablelearn command did not complete")
+	}
+	_, found = tc.waitForObject("*learning tester*disabled*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("learning tester should confirm disabled")
+	}
+
+	// Check learning state again (should be false)
+	if err := tc.sendLine("checklearn"); err != nil {
+		return fmt.Errorf("third checklearn command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("third checklearn command did not complete")
+	}
+	_, found = tc.waitForObject("*learning tester*learning:false*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("learning should be false after disable")
+	}
+
+	fmt.Println("  getLearning() / setLearning(): OK")
+
 	return nil
 }

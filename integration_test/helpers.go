@@ -12,13 +12,15 @@ import (
 // Only includes fields we need for testing.
 // Note: Object.MarshalJSON serializes the Unsafe fields directly (no wrapper).
 type inspectResult struct {
-	ID       string `json:"Id"`
-	Location string `json:"Location"`
+	ID         string `json:"Id"`
+	Location   string `json:"Location"`
+	SourcePath string `json:"SourcePath"`
 }
 
 // Helper methods to access fields
-func (r *inspectResult) GetID() string       { return r.ID }
-func (r *inspectResult) GetLocation() string { return r.Location }
+func (r *inspectResult) GetID() string         { return r.ID }
+func (r *inspectResult) GetLocation() string   { return r.Location }
+func (r *inspectResult) GetSourcePath() string { return r.SourcePath }
 
 // jsonExtractor matches the JSON object in /inspect output.
 // Uses greedy matching which works correctly here because /inspect outputs
@@ -84,6 +86,18 @@ func (tc *terminalClient) getLocation(target string) string {
 		return ""
 	}
 	return result.GetLocation()
+}
+
+// waitForSourcePath polls via /inspect until the object has the expected SourcePath.
+// Use "#<id>" as target to inspect a specific object.
+func (tc *terminalClient) waitForSourcePath(target, expectedPath string, timeout time.Duration) bool {
+	return waitForCondition(timeout, 50*time.Millisecond, func() bool {
+		result, err := tc.inspect(target)
+		if err != nil {
+			return false
+		}
+		return result.GetSourcePath() == expectedPath
+	})
 }
 
 // waitForLookMatch polls with look commands until the output contains the expected string.
@@ -225,4 +239,55 @@ func loginUser(sshAddr, username, password string) (*terminalClient, error) {
 		return nil, fmt.Errorf("login did not complete (no prompt)")
 	}
 	return tc, nil
+}
+
+// enterIsolatedRoom creates a new room inside genesis for the test and moves the player into it.
+// This prevents action name collisions between tests since actions only dispatch to siblings.
+// Returns the room ID or an error.
+func (tc *terminalClient) enterIsolatedRoom(ts *TestServer, testName string) (string, error) {
+	// First ensure we're in genesis so the room is created there
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return "", fmt.Errorf("/enter genesis: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return "", fmt.Errorf("/enter genesis did not complete")
+	}
+	// Verify we're actually in genesis
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		return "", fmt.Errorf("failed to enter genesis")
+	}
+
+	roomSource := fmt.Sprintf(`setDescriptions([{Short: '%s room', Long: 'Isolated test room for %s'}]);
+setExits([{Name: 'out', Destination: 'genesis'}]);
+`, testName, testName)
+
+	sourcePath := fmt.Sprintf("/%s_room.js", testName)
+	if err := ts.WriteSource(sourcePath, roomSource); err != nil {
+		return "", fmt.Errorf("failed to create %s: %w", sourcePath, err)
+	}
+
+	if err := tc.sendLine(fmt.Sprintf("/create %s", sourcePath)); err != nil {
+		return "", fmt.Errorf("/create room: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return "", fmt.Errorf("/create room did not complete")
+	}
+
+	roomID, found := tc.waitForObject(fmt.Sprintf("*%s room*", testName), defaultWaitTimeout)
+	if !found {
+		return "", fmt.Errorf("%s room was not created", testName)
+	}
+
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomID)); err != nil {
+		return "", fmt.Errorf("/enter room: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return "", fmt.Errorf("/enter room did not complete")
+	}
+	// Verify we're actually in the new room
+	if !tc.waitForLocation("", roomID, defaultWaitTimeout) {
+		return "", fmt.Errorf("failed to enter %s room", testName)
+	}
+
+	return roomID, nil
 }

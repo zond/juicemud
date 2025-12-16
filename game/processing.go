@@ -29,8 +29,8 @@ type RWMutex interface {
 	RUnlock()
 }
 
-// addGetSetPair registers JavaScript getter/setter functions for an object property.
-func addGetSetPair(name string, source any, mutex RWMutex, callbacks js.Callbacks) {
+// addGetter registers a JavaScript getter function for an object property (read-only).
+func addGetter(name string, source any, mutex RWMutex, callbacks js.Callbacks) {
 	callbacks[fmt.Sprintf("get%s", name)] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		mutex.RLock()
 		defer mutex.RUnlock()
@@ -40,6 +40,11 @@ func addGetSetPair(name string, source any, mutex RWMutex, callbacks js.Callback
 		}
 		return res
 	}
+}
+
+// addGetSetPair registers JavaScript getter/setter functions for an object property.
+func addGetSetPair(name string, source any, mutex RWMutex, callbacks js.Callbacks) {
+	addGetter(name, source, mutex, callbacks)
 	callbacks[fmt.Sprintf("set%s", name)] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		mutex.Lock()
 		defer mutex.Unlock()
@@ -336,7 +341,7 @@ func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
 		}
 		skill, found := structs.SkillConfigs.Get(args[0].String())
 		if !found {
-			return nil
+			return rc.Null()
 		}
 		res, err := rc.JSFromGo(skill)
 		if err != nil {
@@ -392,13 +397,42 @@ func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
 }
 
 func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, callbacks js.Callbacks) {
-	addGetSetPair("Location", &object.Unsafe.Location, object, callbacks)
-	addGetSetPair("Content", &object.Unsafe.Content, object, callbacks)
+	// Location and Content are read-only - use moveObject() for safe modifications
+	addGetter("Location", &object.Unsafe.Location, object, callbacks)
+	addGetter("Content", &object.Unsafe.Content, object, callbacks)
 	addGetSetPair("Skills", &object.Unsafe.Skills, object, callbacks)
 	addGetSetPair("Descriptions", &object.Unsafe.Descriptions, object, callbacks)
 	addGetSetPair("Exits", &object.Unsafe.Exits, object, callbacks)
 	addGetSetPair("SourcePath", &object.Unsafe.SourcePath, object, callbacks)
 	addGetSetPair("Learning", &object.Unsafe.Learning, object, callbacks)
+
+	// moveObject(objectId, destinationId) - safely moves an object using storage.MoveObject
+	// which validates containment, prevents cycles, and atomically updates all references.
+	callbacks["moveObject"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 2 || !args[0].IsString() || !args[1].IsString() {
+			return rc.Throw("moveObject takes [string, string] arguments (objectId, destinationId)")
+		}
+		objectId := args[0].String()
+		if objectId == "" {
+			return rc.Throw("moveObject: objectId cannot be empty")
+		}
+		destId := args[1].String()
+		if destId == "" {
+			return rc.Throw("moveObject: destinationId cannot be empty")
+		}
+		// Load the object to move
+		obj, err := g.storage.AccessObject(ctx, objectId, nil)
+		if err != nil {
+			return rc.Throw("moveObject: object %q not found: %v", objectId, err)
+		}
+		// Use storage.MoveObject for safe, validated movement
+		if err := g.storage.MoveObject(ctx, obj, destId); err != nil {
+			return rc.Throw("moveObject: %v", err)
+		}
+		return nil
+	}
+
 	callbacks["setTimeout"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 3 || !args[1].IsString() {
