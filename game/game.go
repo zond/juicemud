@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -156,6 +157,20 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 		if err := s.UNSAFEEnsureObject(ctx, o); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
+	}
+
+	// Validate all objects have their source files
+	missing, err := s.ValidateSources(ctx, sourcesDir)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	if len(missing) > 0 {
+		var errMsg strings.Builder
+		errMsg.WriteString("refusing to start: missing source files\n")
+		for _, m := range missing {
+			fmt.Fprintf(&errMsg, "  %s (%d objects)\n", m.Path, len(m.ObjectIDs))
+		}
+		return nil, errors.New(errMsg.String())
 	}
 
 	g := &Game{

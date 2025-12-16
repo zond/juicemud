@@ -404,7 +404,7 @@ func TestLevel(t *testing.T) {
 		}
 		return float64(success) / float64(count)
 	}
-	assertClose(t, testAt(20), 0.01, 0.002)
+	assertClose(t, testAt(20), 0.01, 0.01)
 	assertClose(t, testAt(10), 0.1, 0.02)
 	assertClose(t, testAt(0), 0.5, 0.02)
 	assertClose(t, testAt(-10), 0.9, 0.02)

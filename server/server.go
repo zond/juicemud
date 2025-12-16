@@ -1,11 +1,14 @@
 package server
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/gliderlabs/ssh"
@@ -19,16 +22,23 @@ import (
 
 // Config holds the server configuration.
 type Config struct {
-	SSHAddr string // Address for SSH connections (e.g., "127.0.0.1:15000")
-	Dir     string // Directory for database and settings
+	SSHAddr     string // Address for SSH connections (e.g., "127.0.0.1:15000")
+	Dir         string // Directory for database and settings
+	SourcesPath string // Path to sources directory (relative to Dir, or absolute). Symlinks are resolved.
 }
 
 // DefaultConfig returns the default server configuration.
 func DefaultConfig() Config {
 	return Config{
-		SSHAddr: "127.0.0.1:15000",
-		Dir:     filepath.Join(os.Getenv("HOME"), ".juicemud"),
+		SSHAddr:     "127.0.0.1:15000",
+		Dir:         filepath.Join(os.Getenv("HOME"), ".juicemud"),
+		SourcesPath: "src/current", // Default: resolve src/current symlink
 	}
+}
+
+// ControlSocketPath returns the path to the control socket.
+func (c Config) ControlSocketPath() string {
+	return filepath.Join(c.Dir, "control.sock")
 }
 
 // Server represents a running JuiceMUD server instance.
@@ -115,7 +125,23 @@ func (s *Server) startWithListener(ctx context.Context, sshLn net.Listener) erro
 	}
 	defer store.Close()
 
-	// Initialize game
+	// Resolve sources path (follows symlinks)
+	sourcesPath := s.config.SourcesPath
+	if sourcesPath == "" {
+		sourcesPath = "src/current"
+	}
+	resolvedSourcesDir, err := storage.ResolveSourcePath(s.config.Dir, sourcesPath)
+	if err != nil {
+		// If symlink doesn't exist yet, fall back to default src/ directory
+		// This handles first-time startup before any versions are created
+		log.Printf("Could not resolve sources path %q, using default: %v", sourcesPath, err)
+		resolvedSourcesDir = store.SourcesDir()
+	} else {
+		store.SetSourcesDir(resolvedSourcesDir)
+		log.Printf("Using sources directory: %s", resolvedSourcesDir)
+	}
+
+	// Initialize game (this validates sources exist)
 	g, err := game.New(ctx, store)
 	if err != nil {
 		return juicemud.WithStack(err)
@@ -132,6 +158,13 @@ func (s *Server) startWithListener(ctx context.Context, sshLn net.Listener) erro
 		s.storage = nil
 		s.game = nil
 		s.mu.Unlock()
+	}()
+
+	// Start control socket for admin commands
+	go func() {
+		if err := s.startControlSocket(ctx); err != nil {
+			log.Printf("Control socket error: %v", err)
+		}
 	}()
 
 	// Create SSH server
@@ -181,4 +214,122 @@ func (s *Server) Game() *game.Game {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.game
+}
+
+// startControlSocket starts the Unix domain socket for admin commands.
+// It runs until the context is cancelled.
+func (s *Server) startControlSocket(ctx context.Context) error {
+	socketPath := s.config.ControlSocketPath()
+
+	// Remove stale socket file if it exists
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		return juicemud.WithStack(err)
+	}
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	defer listener.Close()
+	defer os.Remove(socketPath)
+
+	log.Printf("Control socket listening on %s", socketPath)
+
+	// Accept connections until context is cancelled
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil // Normal shutdown
+			default:
+				log.Printf("Control socket accept error: %v", err)
+				continue
+			}
+		}
+		go s.handleControlConnection(ctx, conn)
+	}
+}
+
+// handleControlConnection handles a single admin connection.
+func (s *Server) handleControlConnection(ctx context.Context, conn net.Conn) {
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(conn, "ERROR: read error: %v\n", err)
+		return
+	}
+
+	line = strings.TrimSpace(line)
+	parts := strings.SplitN(line, " ", 2)
+	command := parts[0]
+
+	switch command {
+	case "SWITCH_SOURCES":
+		var targetPath string
+		if len(parts) > 1 {
+			targetPath = parts[1]
+		} else {
+			targetPath = s.config.SourcesPath // Default to configured path
+		}
+		s.handleSwitchSources(ctx, conn, targetPath)
+
+	default:
+		fmt.Fprintf(conn, "ERROR: unknown command: %s\n", command)
+	}
+}
+
+// handleSwitchSources handles the SWITCH_SOURCES command.
+func (s *Server) handleSwitchSources(ctx context.Context, conn net.Conn, targetPath string) {
+	store := s.Storage()
+	if store == nil {
+		fmt.Fprintf(conn, "ERROR: server not running\n")
+		return
+	}
+
+	// Resolve symlinks to get actual directory
+	resolvedPath, err := storage.ResolveSourcePath(s.config.Dir, targetPath)
+	if err != nil {
+		fmt.Fprintf(conn, "ERROR: failed to resolve path %q: %v\n", targetPath, err)
+		return
+	}
+
+	// Check that it's a directory
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		fmt.Fprintf(conn, "ERROR: cannot access %q: %v\n", resolvedPath, err)
+		return
+	}
+	if !info.IsDir() {
+		fmt.Fprintf(conn, "ERROR: %q is not a directory\n", resolvedPath)
+		return
+	}
+
+	// Validate all object sources exist in new root
+	missing, err := store.ValidateSources(ctx, resolvedPath)
+	if err != nil {
+		fmt.Fprintf(conn, "ERROR: validation failed: %v\n", err)
+		return
+	}
+	if len(missing) > 0 {
+		var errMsg strings.Builder
+		errMsg.WriteString("ERROR: missing source files:\n")
+		for _, m := range missing {
+			fmt.Fprintf(&errMsg, "  %s (%d objects)\n", m.Path, len(m.ObjectIDs))
+		}
+		fmt.Fprint(conn, errMsg.String())
+		return
+	}
+
+	// Switch to new sources directory
+	store.SetSourcesDir(resolvedPath)
+	log.Printf("Switched sources to %s", resolvedPath)
+	fmt.Fprintf(conn, "OK\n")
 }

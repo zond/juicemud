@@ -606,3 +606,69 @@ func (s *Storage) SetUserWizard(ctx context.Context, username string, wizard boo
 func (s *Storage) EachObject(_ context.Context) iter.Seq2[*structs.Object, error] {
 	return s.objects.Each()
 }
+
+// MissingSource describes a source file that is missing and the objects that reference it.
+type MissingSource struct {
+	Path      string
+	ObjectIDs []string
+}
+
+// ValidateSources checks that all object source paths exist in the given root directory.
+// Returns nil if all sources exist, or a list of missing sources with their affected objects.
+func (s *Storage) ValidateSources(ctx context.Context, rootDir string) ([]MissingSource, error) {
+	// Collect all source paths and their objects
+	sourceToObjects := make(map[string][]string)
+	for obj, err := range s.EachObject(ctx) {
+		if err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+		sourcePath := obj.GetSourcePath()
+		if sourcePath != "" {
+			sourceToObjects[sourcePath] = append(sourceToObjects[sourcePath], obj.GetId())
+		}
+	}
+
+	// Check each source path exists
+	var missing []MissingSource
+	for sourcePath, objectIDs := range sourceToObjects {
+		fullPath := filepath.Join(rootDir, sourcePath)
+		if _, err := os.Stat(fullPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				missing = append(missing, MissingSource{
+					Path:      sourcePath,
+					ObjectIDs: objectIDs,
+				})
+			} else {
+				return nil, juicemud.WithStack(err)
+			}
+		}
+	}
+
+	return missing, nil
+}
+
+// SetSourcesDir atomically updates the sources directory.
+// This should only be called after ValidateSources confirms the new directory is valid.
+func (s *Storage) SetSourcesDir(dir string) {
+	s.sourceObjectsMu.Lock()
+	defer s.sourceObjectsMu.Unlock()
+	s.sourcesDir = dir
+}
+
+// ResolveSourcePath resolves symlinks in a source path and returns the real path.
+// If the path is relative, it's joined with baseDir first.
+func ResolveSourcePath(baseDir, sourcePath string) (string, error) {
+	var fullPath string
+	if filepath.IsAbs(sourcePath) {
+		fullPath = sourcePath
+	} else {
+		fullPath = filepath.Join(baseDir, sourcePath)
+	}
+
+	resolved, err := filepath.EvalSymlinks(fullPath)
+	if err != nil {
+		return "", juicemud.WithStack(err)
+	}
+
+	return resolved, nil
+}
