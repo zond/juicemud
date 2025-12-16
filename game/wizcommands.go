@@ -137,6 +137,11 @@ func (c *Connection) wizCommands() commands {
 				}
 				// Normalize path to ensure consistent storage (avoids /foo/bar vs foo/bar vs ./foo/bar)
 				sourcePath := filepath.Clean(parts[1])
+				// Reject empty or root paths that would point to the sources directory itself
+				if sourcePath == "." || sourcePath == "/" {
+					fmt.Fprintln(c.term, "path must specify a source file, not the sources directory")
+					return nil
+				}
 				exists, err := c.game.storage.SourceExists(c.ctx, sourcePath)
 				if err != nil {
 					return juicemud.WithStack(err)
@@ -256,7 +261,9 @@ func (c *Connection) wizCommands() commands {
 					parts = append(parts, "/")
 				}
 				t := table.New("Path", "Type", "Objects").WithWriter(c.term)
-				for _, part := range parts[1:] {
+				for _, rawPart := range parts[1:] {
+					// Normalize path for consistent display and querying
+					part := filepath.Clean(rawPart)
 					fullPath, err := c.game.storage.SafeSourcePath(part)
 					if err != nil {
 						t.AddRow(part, "error", err.Error())
