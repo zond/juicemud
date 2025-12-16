@@ -10,16 +10,15 @@ import (
 
 // inspectResult holds the parsed JSON from /inspect command.
 // Only includes fields we need for testing.
+// Note: Object.MarshalJSON serializes the Unsafe fields directly (no wrapper).
 type inspectResult struct {
-	Unsafe struct {
-		ID       string `json:"Id"`
-		Location string `json:"Location"`
-	} `json:"Unsafe"`
+	ID       string `json:"Id"`
+	Location string `json:"Location"`
 }
 
-// Helper methods to access nested fields
-func (r *inspectResult) GetID() string       { return r.Unsafe.ID }
-func (r *inspectResult) GetLocation() string { return r.Unsafe.Location }
+// Helper methods to access fields
+func (r *inspectResult) GetID() string       { return r.ID }
+func (r *inspectResult) GetLocation() string { return r.Location }
 
 // jsonExtractor matches the JSON object in /inspect output.
 // Uses greedy matching which works correctly here because /inspect outputs

@@ -969,7 +969,7 @@ addCallback('timeout', ['emit'], (msg) => {
 	// Observer updates its description when it sees movement
 	observerSource := `setDescriptions([{Short: 'watcher orb (watching)'}]);
 addCallback('movement', ['emit'], (msg) => {
-	const id = msg.Object && msg.Object.Unsafe ? msg.Object.Unsafe.Id : 'unknown';
+	const id = msg.Object ? msg.Object.Id : 'unknown';
 	setDescriptions([{Short: 'watcher orb (saw: ' + id + ')'}]);
 });
 `
@@ -1165,8 +1165,8 @@ addCallback('trigger', ['action'], (msg) => {
 	// Create an object that captures creator info on creation
 	createdSource := `setDescriptions([{Short: 'witness stone (waiting)'}]);
 addCallback('created', ['emit'], (msg) => {
-	if (msg.creator && msg.creator.Unsafe) {
-		setDescriptions([{Short: 'witness stone (created by ' + msg.creator.Unsafe.Id + ')'}]);
+	if (msg.creator) {
+		setDescriptions([{Short: 'witness stone (created by ' + msg.creator.Id + ')'}]);
 	} else {
 		setDescriptions([{Short: 'witness stone (no creator info)'}]);
 	}
@@ -1873,8 +1873,8 @@ addCallback('mindspeak', ['action'], (msg) => {
 	if !ok {
 		return fmt.Errorf("/inspect did not complete: %q", output)
 	}
-	// Non-wizards should NOT see JSON output from /inspect
-	if strings.Contains(output, "\"Unsafe\"") {
+	// Non-wizards should NOT see JSON output from /inspect (check for Id field in JSON)
+	if strings.Contains(output, "\"Id\":") {
 		return fmt.Errorf("non-wizard should not see /inspect output: %q", output)
 	}
 
@@ -1906,8 +1906,8 @@ addCallback('mindspeak', ['action'], (msg) => {
 	if !ok {
 		return fmt.Errorf("/inspect as wizard did not complete: %q", output)
 	}
-	// Wizards should see JSON output from /inspect
-	if !strings.Contains(output, "\"Unsafe\"") {
+	// Wizards should see JSON output from /inspect (check for Id field in JSON)
+	if !strings.Contains(output, "\"Id\":") {
 		return fmt.Errorf("wizard should see /inspect output: %q", output)
 	}
 
@@ -1939,8 +1939,8 @@ addCallback('mindspeak', ['action'], (msg) => {
 	if !ok {
 		return fmt.Errorf("/inspect after revoke did not complete: %q", output)
 	}
-	// Revoked user should NOT see JSON output from /inspect
-	if strings.Contains(output, "\"Unsafe\"") {
+	// Revoked user should NOT see JSON output from /inspect (check for Id field in JSON)
+	if strings.Contains(output, "\"Id\":") {
 		return fmt.Errorf("revoked user should not see /inspect output: %q", output)
 	}
 
@@ -2128,6 +2128,90 @@ setDescriptions([{
 	}
 
 	fmt.Println("  Circular container prevention: OK")
+
+	// === Test 25: getNeighbourhood() ===
+	fmt.Println("Testing getNeighbourhood()...")
+
+	// Ensure we're in genesis where we have exits to other rooms
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for getNeighbourhood: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter genesis for getNeighbourhood did not complete")
+	}
+
+	// Create a scout object that uses getNeighbourhood() on a "survey" action
+	// and reports what it finds in its description
+	scoutSource := `setDescriptions([{Short: 'scout drone (idle)'}]);
+addCallback('survey', ['action'], (msg) => {
+	const hood = getNeighbourhood();
+	// Build a report of what we see
+	const locName = hood.Location.Container.Descriptions[0].Short;
+	const contentCount = hood.Location.Content ? Object.keys(hood.Location.Content).length : 0;
+	const neighborKeys = Object.keys(hood.Neighbours || {});
+	const neighborCount = neighborKeys.length;
+	// Get first neighbor's name if any
+	let neighborInfo = 'none';
+	if (neighborCount > 0) {
+		const firstNeighborLoc = hood.Neighbours[neighborKeys[0]];
+		if (firstNeighborLoc && firstNeighborLoc.Container) {
+			neighborInfo = firstNeighborLoc.Container.Descriptions[0].Short;
+		}
+	}
+	setDescriptions([{
+		Short: 'scout drone (loc:' + locName + ' content:' + contentCount + ' neighbors:' + neighborCount + ' first:' + neighborInfo + ')'
+	}]);
+});
+`
+	if err := ts.WriteSource("/scout.js", scoutSource); err != nil {
+		return fmt.Errorf("failed to create /scout.js: %w", err)
+	}
+	if err := tc.sendLine("/create /scout.js"); err != nil {
+		return fmt.Errorf("/create scout: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/create scout did not complete")
+	}
+
+	// Wait for the scout to be created
+	_, found = tc.waitForObject("*scout*idle*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("scout drone was not created")
+	}
+
+	// Trigger the survey action
+	if err := tc.sendLine("survey"); err != nil {
+		return fmt.Errorf("survey command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("survey command did not complete")
+	}
+
+	// Wait for the scout to update its description with neighbourhood info
+	// It should see genesis as location and have at least 1 neighbor (lookroom via south exit)
+	// The pattern checks for: location info, content count, and neighbor info
+	_, found = tc.waitForObject("*scout*loc:*content:*neighbors:*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("scout did not report neighbourhood info")
+	}
+
+	// Verify it found neighbors (not neighbors:0) by checking for at least 1 neighbor
+	_, found = tc.waitForObject("*scout*neighbors:1*", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("scout should see at least 1 neighbor via exits")
+	}
+
+	// Verify it got a real neighbor name (not "first:none")
+	_, found = tc.waitForObject("*scout*first:*", defaultWaitTimeout)
+	_, foundNone := tc.waitForObject("*scout*first:none*", 100*time.Millisecond)
+	if foundNone {
+		return fmt.Errorf("scout should see actual neighbor info, not 'none'")
+	}
+	if !found {
+		return fmt.Errorf("scout should report first neighbor name")
+	}
+
+	fmt.Println("  getNeighbourhood(): OK")
 
 	return nil
 }

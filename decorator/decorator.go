@@ -162,6 +162,26 @@ func main() {
 					).Id("SetPostUnlock").Params(jen.Id("p").Func().Params(jen.Op("*").Id(backendName))).Block(
 						jen.Id("v").Dot("PostUnlock").Op("=").Id("p"),
 					)
+					// MarshalJSON marshals just the Unsafe field, hiding the wrapper structure.
+					// This allows JavaScript to access object fields directly without the Unsafe wrapper.
+					f.Func().Params(
+						jen.Id("v").Op("*").Id(backendName),
+					).Id("MarshalJSON").Params().Parens(jen.List(jen.Id("[]byte"), jen.Id("error"))).Block(
+						jen.Id("v").Dot("RLock").Call(),
+						jen.Defer().Id("v").Dot("RUnlock").Call(),
+						jen.Return(jen.Qual("github.com/goccy/go-json", "Marshal").Call(jen.Id("v").Dot("Unsafe"))),
+					)
+					// UnmarshalJSON unmarshals directly into the Unsafe field.
+					f.Func().Params(
+						jen.Id("v").Op("*").Id(backendName),
+					).Id("UnmarshalJSON").Params(jen.Id("data").Id("[]byte")).Id("error").Block(
+						jen.Id("v").Dot("Lock").Call(),
+						jen.Defer().Id("v").Dot("Unlock").Call(),
+						jen.If(jen.Id("v").Dot("Unsafe").Op("==").Id("nil")).Block(
+							jen.Id("v").Dot("Unsafe").Op("=").Id("new").Call(jen.Id(match[0])),
+						),
+						jen.Return(jen.Qual("github.com/goccy/go-json", "Unmarshal").Call(jen.Id("data"), jen.Id("v").Dot("Unsafe"))),
+					)
 					for i := 0; i < structType.NumFields(); i++ {
 						field := structType.Field(i)
 						f.Func().Params(

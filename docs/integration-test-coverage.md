@@ -68,6 +68,7 @@ For verifying object state and waiting for object creation, tests prefer:
 | Room `action` handler | 18 | Room receives action commands issued by player |
 | Sibling `action` handler | 18 | Objects in same room receive action commands |
 | `state` persistence | 19 | JS state object persists across multiple command invocations |
+| `getNeighbourhood()` | 25 | Returns current location and neighboring rooms via exits |
 
 ## Not Tested
 
@@ -83,7 +84,6 @@ For verifying object state and waiting for object creation, tests prefer:
 
 | Function | Description | Priority |
 |----------|-------------|----------|
-| `getNeighbourhood()` | Get surrounding rooms/objects | Medium |
 | `removeCallback()` | Unregister a callback | Low |
 | `getSkillConfig()` / `setSkillConfig()` | Individual skill configuration | Low |
 | `getSkillConfigs()` / `setSkillConfigs()` | Bulk skill configuration | Low |

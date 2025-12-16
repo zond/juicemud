@@ -49,6 +49,8 @@ func (v *Live) RUnlock() {
 	v.mutex.RUnlock()
 }
 func (v *Live) Size() int {
+	v.RLock()
+	defer v.RUnlock()
 	return v.Unsafe.Size()
 }
 func (v *Live) Marshal(b []byte) {
@@ -70,6 +72,19 @@ func (v *Live) Unmarshal(b []byte) error {
 }
 func (v *Live) SetPostUnlock(p func(*Live)) {
 	v.PostUnlock = p
+}
+func (v *Live) MarshalJSON() ([]byte, error) {
+	v.RLock()
+	defer v.RUnlock()
+	return gojson.Marshal(v.Unsafe)
+}
+func (v *Live) UnmarshalJSON(data []byte) error {
+	v.Lock()
+	defer v.Unlock()
+	if v.Unsafe == nil {
+		v.Unsafe = new(LiveDO)
+	}
+	return gojson.Unmarshal(data, v.Unsafe)
 }
 func (v *Live) GetId() string {
 	v.RLock()

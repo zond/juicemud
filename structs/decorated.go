@@ -73,6 +73,19 @@ func (v *Object) Unmarshal(b []byte) error {
 func (v *Object) SetPostUnlock(p func(*Object)) {
 	v.PostUnlock = p
 }
+func (v *Object) MarshalJSON() ([]byte, error) {
+	v.RLock()
+	defer v.RUnlock()
+	return gojson.Marshal(v.Unsafe)
+}
+func (v *Object) UnmarshalJSON(data []byte) error {
+	v.Lock()
+	defer v.Unlock()
+	if v.Unsafe == nil {
+		v.Unsafe = new(ObjectDO)
+	}
+	return gojson.Unmarshal(data, v.Unsafe)
+}
 func (v *Object) GetId() string {
 	v.RLock()
 	defer v.RUnlock()
