@@ -403,6 +403,9 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	addGetSetPair("Skills", &object.Unsafe.Skills, object, callbacks)
 	addGetSetPair("Descriptions", &object.Unsafe.Descriptions, object, callbacks)
 	addGetSetPair("Exits", &object.Unsafe.Exits, object, callbacks)
+	// SourcePath can be set to any value, but path traversal is prevented at load time
+	// by storage.safePath() which validates all paths stay within the sources directory.
+	// This allows wizards to reassign object sources while maintaining security.
 	addGetSetPair("SourcePath", &object.Unsafe.SourcePath, object, callbacks)
 	addGetSetPair("Learning", &object.Unsafe.Learning, object, callbacks)
 

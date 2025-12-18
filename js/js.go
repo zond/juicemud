@@ -45,10 +45,25 @@ const (
 )
 
 func newMachine() (*machine, error) {
-	// Note: v8go doesn't expose V8's memory limit configuration (ResourceConstraints).
-	// We rely on execution timeouts to prevent runaway scripts. The state size is
-	// limited post-execution via maxStateSize, but memory usage during execution
-	// is unconstrained. This is a known limitation of the v8go wrapper.
+	// MEMORY LIMITATION: The v8go library does not expose V8's ResourceConstraints API,
+	// which means we CANNOT limit memory usage of JavaScript execution. V8 internally
+	// supports heap size limits via Isolate::CreateParams::constraints, but v8go's
+	// NewIsolate() doesn't accept these parameters.
+	//
+	// Mitigations in place:
+	// - Execution timeout (200ms) limits how long scripts can allocate memory
+	// - State size limit (maxStateSize = 1MB) bounds persistent state
+	// - Isolate pool (NumCPU isolates) limits concurrent memory pressure
+	//
+	// Risks accepted:
+	// - A malicious script could allocate large amounts of memory within the timeout
+	// - Memory is only reclaimed when the isolate is garbage collected
+	// - We rely on the OS/container limits as the ultimate backstop
+	//
+	// Potential future fixes:
+	// - Fork v8go to expose ResourceConstraints
+	// - Switch to a different JS engine with memory limits (goja, otto)
+	// - Use cgroups/containers to enforce memory limits externally
 	m := &machine{
 		iso: v8go.NewIsolate(),
 	}

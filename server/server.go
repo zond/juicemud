@@ -219,6 +219,12 @@ func (s *Server) Game() *game.Game {
 
 // startControlSocket starts the Unix domain socket for admin commands.
 // It runs until the context is cancelled.
+//
+// SECURITY NOTE: This socket is intentionally unauthenticated. Access control is
+// delegated to the filesystem - the socket is created with default permissions,
+// and system administrators are responsible for securing it appropriately (e.g.,
+// restrictive directory permissions, running as a dedicated user). This is a
+// standard pattern for local admin sockets (similar to Docker, MySQL, PostgreSQL).
 func (s *Server) startControlSocket(ctx context.Context) error {
 	socketPath := s.config.ControlSocketPath()
 

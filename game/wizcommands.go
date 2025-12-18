@@ -2,7 +2,6 @@ package game
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -497,6 +496,3 @@ func (c *Connection) wizCommands() commands {
 		},
 	}
 }
-
-// Ensure fs.DirEntry is used (imported for os.ReadDir return type)
-var _ fs.DirEntry

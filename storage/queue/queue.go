@@ -114,9 +114,10 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 		q.offset.Store(int64(next.At))
 	}
 
-	// Create a stopped timer for reuse.
-	timer := time.NewTimer(time.Hour)
-	timer.Stop()
+	// Create a stopped, drained timer for reuse. We create an already-expired timer
+	// and drain it to ensure a clean initial state (stopped and channel empty).
+	timer := time.NewTimer(0)
+	<-timer.C
 	defer timer.Stop()
 
 	for {
