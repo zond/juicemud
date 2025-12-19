@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"io"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"golang.org/x/term"
@@ -49,15 +48,6 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
-// countingWriter counts the number of writes.
-type countingWriter struct {
-	count atomic.Int32
-}
-
-func (w *countingWriter) Write(p []byte) (int, error) {
-	w.count.Add(1)
-	return len(p), nil
-}
 
 func TestSwitchboardAttachDetach(t *testing.T) {
 	s := NewSwitchboard()
