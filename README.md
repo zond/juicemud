@@ -107,8 +107,35 @@ go generate ./structs
 - Objects run JavaScript source files that register callbacks via `addCallback(eventType, tags, handler)`
 - State persists between executions as JSON
 - 200ms timeout per execution
+- Supports imports via `// @import` directive (see below)
 
 ### Key Concepts
+
+**JavaScript Imports**: Source files can import other source files using the `// @import` directive:
+
+```javascript
+// /lib/util.js - A shared library
+var util = util || {};
+util.greet = function(name) { return 'Hello, ' + name + '!'; };
+```
+
+```javascript
+// /mobs/dog.js - Imports the utility library
+// @import /lib/util.js
+// @import ./base.js      // Relative import from same directory
+// @import ../lib/math.js // Relative import from parent directory
+
+addCallback('bark', ['action'], (msg) => {
+    log(util.greet('World'));
+});
+```
+
+Import behavior:
+- Imports are resolved at source load time (build-time concatenation)
+- Dependencies are included in topological order (imported code comes first)
+- Circular imports are detected and produce an error
+- Diamond dependencies are handled correctly (each file included once)
+- Modifying any file in the import chain triggers a refresh
 
 **Event System**: Objects communicate through events. Objects register callbacks with `addCallback(eventType, tags, handler)`:
 

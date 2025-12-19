@@ -13,6 +13,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
+	"github.com/zond/juicemud/js/imports"
 	"github.com/zond/juicemud/storage/dbm"
 	"github.com/zond/juicemud/storage/queue"
 	"github.com/zond/juicemud/structs"
@@ -50,6 +51,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 		objects:       objects,
 		queue:         queue.New(ctx, queueTree),
 		audit:         audit,
+		resolver:      imports.NewResolver(),
 	}
 	for _, prototype := range []any{User{}} {
 		if err := sql.CreateTableIfNotExists(ctx, prototype); err != nil {
@@ -74,6 +76,7 @@ type Storage struct {
 	sourceObjectsMu sync.RWMutex // Protects sourceObjects operations
 	objects         *dbm.LiveTypeHash[structs.Object, *structs.Object]
 	audit           *AuditLogger
+	resolver        *imports.Resolver
 }
 
 func (s *Storage) Close() error {
@@ -188,6 +191,47 @@ func (s *Storage) SourceModTime(_ context.Context, path string) (int64, error) {
 		return 0, juicemud.WithStack(err)
 	}
 	return info.ModTime().UnixNano(), nil
+}
+
+// LoadResolvedSource loads a source file with all `// @import` directives resolved.
+// Returns the concatenated source with dependencies prepended in topological order,
+// the maximum modification time across all files in the dependency tree, and any error.
+func (s *Storage) LoadResolvedSource(ctx context.Context, path string) ([]byte, int64, error) {
+	// Check if cache needs invalidation by comparing current mtimes to cached max
+	cachedMtime := s.resolver.GetCachedMaxMtime(path)
+	if cachedMtime > 0 {
+		currentMaxMtime, err := s.ResolvedSourceModTime(ctx, path)
+		if err != nil {
+			return nil, 0, juicemud.WithStack(err)
+		}
+		if currentMaxMtime > cachedMtime {
+			s.resolver.InvalidateCache(path)
+		}
+	}
+
+	result, err := s.resolver.Resolve(ctx, path, s.LoadSource)
+	if err != nil {
+		return nil, 0, juicemud.WithStack(err)
+	}
+	return []byte(result.Source), result.MaxMtime, nil
+}
+
+// ResolvedSourceModTime returns the maximum modification time across all files
+// in a source's dependency tree. This is the fast path for checking if any file
+// in the dependency chain has been modified without loading the actual source.
+func (s *Storage) ResolvedSourceModTime(ctx context.Context, path string) (int64, error) {
+	deps := s.resolver.GetCachedDeps(path)
+	var maxMtime int64
+	for _, dep := range deps {
+		mtime, err := s.SourceModTime(ctx, dep)
+		if err != nil {
+			return 0, juicemud.WithStack(err)
+		}
+		if mtime > maxMtime {
+			maxMtime = mtime
+		}
+	}
+	return maxMtime, nil
 }
 
 // SourceExists checks if a source file exists on the filesystem.

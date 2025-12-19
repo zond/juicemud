@@ -2490,6 +2490,9 @@ addCallback('disablelearn', ['action'], (msg) => {
 		return fmt.Errorf("should be in genesis for exit test")
 	}
 
+	// Drain any stale notifications before the command
+	tc.readUntil(50*time.Millisecond, nil)
+
 	// Try to /exit from genesis - should fail with error message
 	// Note: The error is "destination ID cannot be empty" because genesis has no parent location.
 	// The code checks if the player has no location, but should ideally check if the location has no parent.
@@ -2540,6 +2543,9 @@ setExits([{Name: 'out', Destination: 'genesis'}]);
 		return fmt.Errorf("should be in removetestroom")
 	}
 
+	// Drain any stale notifications before the command
+	tc.readUntil(50*time.Millisecond, nil)
+
 	// Try to /remove our current location - should fail
 	if err := tc.sendLine(fmt.Sprintf("/remove #%s", removeTestRoomID)); err != nil {
 		return fmt.Errorf("/remove current location: %w", err)
@@ -2575,6 +2581,137 @@ setExits([{Name: 'out', Destination: 'genesis'}]);
 	}
 
 	fmt.Println("  /remove current location: OK")
+
+	// === Test 34: JavaScript imports (@import directive) ===
+	fmt.Println("Testing JavaScript imports...")
+
+	// Create a library file that exports a utility function
+	libSource := `// /lib/greeter.js - A library that provides greeting functionality
+var greeter = greeter || {};
+greeter.hello = function(name) {
+    return 'Hello, ' + name + '!';
+};
+`
+	if err := ts.WriteSource("/lib/greeter.js", libSource); err != nil {
+		return fmt.Errorf("failed to create /lib/greeter.js: %w", err)
+	}
+
+	// Create an object that imports the library
+	// Note: Using 'action' tag since this object is a sibling, not the player
+	importerSource := `// @import /lib/greeter.js
+
+addCallback('greet', ['action'], function(msg) {
+    // Use the imported greeter library
+    var greeting = greeter.hello('World');
+    setDescriptions([{Short: 'greeter (' + greeting + ')'}]);
+    log('Greeting result: ' + greeting);
+    return true;
+});
+
+setDescriptions([{Short: 'greeter (idle)'}]);
+`
+	if err := ts.WriteSource("/importer.js", importerSource); err != nil {
+		return fmt.Errorf("failed to create /importer.js: %w", err)
+	}
+
+	// Create an object using the importer source
+	importerID, err := tc.createObject("/importer.js")
+	if err != nil {
+		return fmt.Errorf("create importer object: %w", err)
+	}
+
+	// Verify the object was created with initial description
+	output, ok = tc.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("look for importer did not complete")
+	}
+	if !strings.Contains(output, "greeter (idle)") {
+		return fmt.Errorf("importer should show initial 'greeter (idle)' description: %q", output)
+	}
+
+	// Invoke the greet command which uses the imported library
+	output, ok = tc.sendCommand("greet", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("greet command did not complete")
+	}
+
+	// Verify the command worked by checking the updated description
+	greetLookOutput, ok := tc.waitForLookMatch("greeter (Hello, World!)", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("greet command should update description to show greeting, got: %q", greetLookOutput)
+	}
+
+	// Test relative imports - create a chain of imports
+	baseSource := `// /mobs/base.js - Base functionality for mobs
+var mobBase = mobBase || {};
+mobBase.species = 'unknown';
+mobBase.describe = function() {
+    return 'A ' + this.species + ' creature';
+};
+`
+	if err := ts.WriteSource("/mobs/base.js", baseSource); err != nil {
+		return fmt.Errorf("failed to create /mobs/base.js: %w", err)
+	}
+
+	dogSource := `// @import ./base.js
+
+// Override species
+mobBase.species = 'canine';
+
+addCallback('bark', ['action'], function(msg) {
+    setDescriptions([{Short: 'dog (' + mobBase.describe() + ')'}]);
+    return true;
+});
+
+setDescriptions([{Short: 'dog (sleeping)'}]);
+`
+	if err := ts.WriteSource("/mobs/dog.js", dogSource); err != nil {
+		return fmt.Errorf("failed to create /mobs/dog.js: %w", err)
+	}
+
+	// Create a dog object
+	dogID, err := tc.createObject("/mobs/dog.js")
+	if err != nil {
+		return fmt.Errorf("create dog object: %w", err)
+	}
+
+	// Verify initial state
+	output, ok = tc.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("look for dog did not complete")
+	}
+	if !strings.Contains(output, "dog (sleeping)") {
+		return fmt.Errorf("dog should show initial 'dog (sleeping)' description: %q", output)
+	}
+
+	// Invoke bark command which uses the relatively imported base
+	output, ok = tc.sendCommand("bark", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("bark command did not complete")
+	}
+
+	// Verify the command worked with the imported base functionality
+	_, ok = tc.waitForLookMatch("dog (A canine creature)", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("bark command should update description using imported base")
+	}
+
+	// Clean up test objects
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", importerID)); err != nil {
+		return fmt.Errorf("/remove importer: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/remove importer did not complete")
+	}
+
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", dogID)); err != nil {
+		return fmt.Errorf("/remove dog: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/remove dog did not complete")
+	}
+
+	fmt.Println("  JavaScript imports: OK")
 
 	return nil
 }

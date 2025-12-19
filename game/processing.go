@@ -599,7 +599,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 				}
 			}
 
-			t, err := g.storage.SourceModTime(ctx, object.GetSourcePath())
+			t, err := g.storage.ResolvedSourceModTime(ctx, object.GetSourcePath())
 			if err != nil {
 				return false, juicemud.WithStack(err)
 			}
@@ -609,7 +609,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		}
 	}
 
-	source, modTime, err := g.storage.LoadSource(ctx, object.GetSourcePath())
+	source, modTime, err := g.storage.LoadResolvedSource(ctx, object.GetSourcePath())
 	if err != nil {
 		return false, juicemud.WithStack(err)
 	}
