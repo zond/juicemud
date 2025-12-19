@@ -4,7 +4,7 @@ This document tracks what functionality is covered by the integration tests and 
 
 ## Testing Philosophy
 
-Integration tests use SSH and WebDAV interfaces for all interactions, matching how users and wizards interact with the game in production. Direct storage access is only used for:
+Integration tests use SSH interfaces for all interactions, matching how users and wizards interact with the game in production. Source files are written directly via `TestServer.WriteSource()` since there is no WebDAV interface. Direct storage access is only used for:
 
 - **Setup operations** (e.g., `makeUserWizard` to grant wizard privileges)
 - **Verifying persistence** (e.g., `LoadUser` in Test 1 to confirm user was saved)
@@ -27,8 +27,8 @@ For verifying object state and waiting for object creation, tests prefer:
 | `look` command | 1, 5, 6 | Verify room descriptions, exits, and contents |
 | `look [target]` | 16 | Look at specific object, shows name and Long description |
 | Exit-based movement | 5, 6 | `south`, `north` commands via exits |
-| WebDAV GET | 2 | Reading `/user.js` |
-| WebDAV PUT | 2 | Creating `/testroom.js`, `/box.js`, etc. |
+| Source file read | 2 | Reading `/user.js` via `TestServer.ReadSource()` |
+| Source file write | 2 | Creating `/testroom.js`, `/box.js`, etc. via `TestServer.WriteSource()` |
 | `/create` | 3 | Creating objects from source files |
 | `/inspect` | 3, 11 | Verifying object properties, existence before/after removal |
 | `/ls` | 3 | Lists files, verifies created file appears |

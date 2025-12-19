@@ -115,7 +115,8 @@ go generate ./structs
 ```javascript
 // Register a callback for the "greet" event with the "command" tag
 addCallback('greet', ['command'], (msg) => {
-    send(msg.name + ' greets everyone warmly.');
+    // Update the object's description to show what happened
+    setDescriptions([{Short: 'greeter (just greeted ' + msg.line + ')'}]);
 });
 ```
 
@@ -160,7 +161,7 @@ addCallback('movement', ['emit'], (msg) => {
     // msg.Source: old location ID (or null if created)
     // msg.Destination: new location ID (or null if removed)
     if (msg.Object && msg.Destination) {
-        send('You notice ' + msg.Object.Unsafe.Name + ' arriving.');
+        log('Detected arrival:', msg.Object.Unsafe.Name);
     }
 });
 ```
@@ -178,24 +179,24 @@ addCallback('transmitted', ['emit'], (msg) => {
 });
 ```
 
-**Calling Other Objects**: Use `call(target, eventType, line)` to trigger actions on other objects:
-```javascript
-// Trigger the "trigger" event on an object matching "logger"
-call('logger', 'trigger', 'with some extra args');
-```
-
-**Object Identification**: Commands that target objects (like `look`, `call`, action commands) use pattern matching against Short descriptions:
+**Object Identification**: Commands that target objects (like `look`, action commands) use pattern matching against Short descriptions:
 - **Word matching**: `tome` matches "dusty tome", `torch` matches "burning torch"
 - **Glob patterns**: `dust*` matches "dusty", `*orch` matches "torch"
 - **Full description**: `"dusty tome"` matches exactly (use quotes for multi-word patterns)
 - **Indexed selection**: When multiple objects match, use `0.torch`, `1.torch` to select which one
 - **Wizard ID syntax**: Wizards can use `#objectid` to target by internal ID
 
-**Delayed Execution**: Use `setTimeout(handler, ms)` to schedule code to run later:
+**Delayed Execution**: Use `setTimeout(ms, eventName, message)` to schedule an event to be delivered later:
 ```javascript
-setTimeout(() => {
-    setDescriptions([{Short: 'timer (activated)'}]);
-}, 1000);
+// Schedule a "tick" event to be delivered in 1000ms
+setTimeout(1000, 'tick', {count: 1});
+
+// Handle the delayed event
+addCallback('tick', ['emit'], (msg) => {
+    setDescriptions([{Short: 'timer (count: ' + msg.count + ')'}]);
+    // Schedule the next tick
+    setTimeout(1000, 'tick', {count: msg.count + 1});
+});
 ```
 
 **Debugging**: Wizards can attach to an object's console with `/debug #objectid` to see `log()` output, and detach with `/undebug #objectid`.
@@ -220,6 +221,7 @@ Objects only receive events they've registered callbacks for with the matching t
 - Object management: `/create`, `/inspect`, `/move`, `/remove`, `/enter`, `/exit`
 - Debugging: `/debug`, `/undebug`
 - Source files: `/ls`
+- Monitoring: `/queuestats`, `/flushstatus`
 - Admin: `/addwiz`, `/delwiz`
 
 ## Dependencies
