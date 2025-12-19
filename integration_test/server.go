@@ -92,24 +92,6 @@ func (ts *TestServer) SSHAddr() string {
 	return ts.sshListener.Addr().String()
 }
 
-// waitForSourceObject polls until an object with the given source path exists.
-// Use this for objects that can't be seen via /inspect (e.g., hidden objects with challenges).
-// Returns the object ID and true if found, or empty string and false on timeout.
-func (ts *TestServer) waitForSourceObject(ctx context.Context, sourcePath string, timeout time.Duration) (string, bool) {
-	var objectID string
-	found := waitForCondition(timeout, 50*time.Millisecond, func() bool {
-		for id, err := range ts.Storage().EachSourceObject(ctx, sourcePath) {
-			if err != nil {
-				return false
-			}
-			objectID = id
-			return true
-		}
-		return false
-	})
-	return objectID, found
-}
-
 // SourcesDir returns the path to the sources directory.
 func (ts *TestServer) SourcesDir() string {
 	return filepath.Join(ts.tmpDir, "src")

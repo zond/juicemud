@@ -2,7 +2,7 @@
 
 This document summarizes findings from a comprehensive review of the test suite conducted December 2025.
 
-**Status**: Most high and medium priority issues have been fixed (December 2025).
+**Status**: All high and medium priority issues have been fixed (December 2025).
 
 ## Overview
 
@@ -41,10 +41,10 @@ The codebase contains:
 
 **Fix**: Added verification of the error message. Also fixed to use `#<user-object-id>` instead of "self" since "self" isn't a special keyword.
 
-#### Test 12: Unnecessary Go API Usage
-**Status**: Open (Low impact)
+#### Test 12: Unnecessary Go API Usage - FIXED
+~~Used `ts.waitForSourceObject` for visible objects that could be verified through SSH commands.~~
 
-Uses `ts.waitForSourceObject` for visible objects that could be verified through SSH commands. Per project guidelines, integration tests should prefer SSH/WebDAV interfaces.
+**Fix**: Added `createObject` helper that parses object ID from `/create` command output and waits for the object to be inspectable via `/inspect #<id>`. Replaced all `/create` + `waitForObject` patterns throughout the test suite with this helper. Removed the `waitForSourceObject` Go API function entirely.
 
 ### Low Priority
 
@@ -121,13 +121,11 @@ Uses `ts.waitForSourceObject` for visible objects that could be verified through
 
 5. **Add output verification**: Tests that run commands should verify the output matches expectations
 
-6. **Reduce Go API usage**: Where practical, replace direct Go API calls with SSH command equivalents
-
 ### Long-term Improvements (Low Priority)
 
-7. **Improve test documentation**: Add more detailed comments explaining what each test section verifies
-8. **Add negative test cases**: More tests for error conditions and edge cases
-9. **Consider test isolation**: Review if any other tests could benefit from isolated rooms (like Tests 26 and 30)
+6. **Improve test documentation**: Add more detailed comments explaining what each test section verifies
+7. **Add negative test cases**: More tests for error conditions and edge cases
+8. **Consider test isolation**: Review if any other tests could benefit from isolated rooms (like Tests 26 and 30)
 
 ## Test Coverage Summary
 
@@ -144,3 +142,4 @@ Uses `ts.waitForSourceObject` for visible objects that could be verified through
 ## Revision History
 
 - **December 2025**: Initial review completed
+- **December 2025**: Fixed Test 12 - replaced Go API usage with SSH-based `createObject` helper

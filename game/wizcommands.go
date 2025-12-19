@@ -171,6 +171,7 @@ func (c *Connection) wizCommands() commands {
 				}); err != nil {
 					return juicemud.WithStack(err)
 				}
+				fmt.Fprintf(c.term, "Created #%s\n", obj.GetId())
 				return nil
 			},
 		},

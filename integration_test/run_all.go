@@ -182,16 +182,8 @@ setDescriptions([{
 	}
 
 	// Create an object (user is already connected and is now a wizard)
-	if err := tc.sendLine("/create /box.js"); err != nil {
-		return fmt.Errorf("/create command: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create command did not complete")
-	}
-
-	// Poll for object creation via /inspect (uses glob matching, so *box* matches "wooden box")
-	if _, found := tc.waitForObject("*box*", defaultWaitTimeout); !found {
-		return fmt.Errorf("box object was not created")
+	if _, err := tc.createObject("/box.js"); err != nil {
+		return fmt.Errorf("create box: %w", err)
 	}
 
 	// Test /inspect
@@ -242,26 +234,12 @@ setDescriptions([{
 	}
 
 	// Create rooms
-	if err := tc.sendLine("/create /room1.js"); err != nil {
-		return fmt.Errorf("/create room1: %w", err)
+	room1ID, err := tc.createObject("/room1.js")
+	if err != nil {
+		return fmt.Errorf("create room1: %w", err)
 	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create room1 did not complete")
-	}
-	if err := tc.sendLine("/create /room2.js"); err != nil {
-		return fmt.Errorf("/create room2: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create room2 did not complete")
-	}
-
-	// Poll for room creation via /inspect
-	room1ID, found := tc.waitForObject("Room One", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("room1 was not created")
-	}
-	if _, found := tc.waitForObject("Room Two", defaultWaitTimeout); !found {
-		return fmt.Errorf("room2 was not created")
+	if _, err := tc.createObject("/room2.js"); err != nil {
+		return fmt.Errorf("create room2: %w", err)
 	}
 
 	// Move into room1 using /enter
@@ -341,28 +319,14 @@ setDescriptions([{
 		return fmt.Errorf("failed to create /book.js: %w", err)
 	}
 
-	if err := tc.sendLine("/create /lookroom.js"); err != nil {
-		return fmt.Errorf("/create lookroom: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create lookroom did not complete")
+	lookRoomID, err := tc.createObject("/lookroom.js")
+	if err != nil {
+		return fmt.Errorf("create lookroom: %w", err)
 	}
 
-	lookRoomID, found := tc.waitForObject("*Library*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("lookroom was not created")
-	}
-
-	if err := tc.sendLine("/create /book.js"); err != nil {
-		return fmt.Errorf("/create book: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create book did not complete")
-	}
-
-	bookID, found := tc.waitForObject("*book*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("book was not created")
+	bookID, err := tc.createObject("/book.js")
+	if err != nil {
+		return fmt.Errorf("create book: %w", err)
 	}
 
 	// Move the book into the look room
@@ -583,30 +547,15 @@ setDescriptions([{
 	}
 
 	// Create the challenge room
-	if err := tc.sendLine("/create /challenge_room.js"); err != nil {
-		return fmt.Errorf("/create challenge_room: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create challenge_room did not complete")
+	challengeRoomID, err := tc.createObject("/challenge_room.js")
+	if err != nil {
+		return fmt.Errorf("create challenge_room: %w", err)
 	}
 
-	challengeRoomID, found := tc.waitForObject("*Challenge*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("challenge_room was not created")
-	}
-
-	// Create the hidden gem
-	if err := tc.sendLine("/create /hidden_gem.js"); err != nil {
-		return fmt.Errorf("/create hidden_gem: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create hidden_gem did not complete")
-	}
-
-	// Hidden gem has a perception challenge, so user can't see it - use direct storage access
-	hiddenGemID, found := ts.waitForSourceObject(ctx, "/hidden_gem.js", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("hidden_gem was not created")
+	// Create the hidden gem (ID returned by /create since perception challenge makes it invisible)
+	hiddenGemID, err := tc.createObject("/hidden_gem.js")
+	if err != nil {
+		return fmt.Errorf("create hidden_gem: %w", err)
 	}
 
 	// Move the gem into the challenge room
@@ -794,25 +743,13 @@ addCallback('ping', ['action'], (msg) => {
 		return fmt.Errorf("failed to create /sender.js: %w", err)
 	}
 
-	if err := tc.sendLine("/create /receiver.js"); err != nil {
-		return fmt.Errorf("/create receiver: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create receiver did not complete")
-	}
-	receiverID, found := tc.waitForObject("*receiver*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("receiver was not created")
+	receiverID, err := tc.createObject("/receiver.js")
+	if err != nil {
+		return fmt.Errorf("create receiver: %w", err)
 	}
 
-	if err := tc.sendLine("/create /sender.js"); err != nil {
-		return fmt.Errorf("/create sender: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create sender did not complete")
-	}
-	if _, found := tc.waitForObject("*sender*", defaultWaitTimeout); !found {
-		return fmt.Errorf("sender was not created")
+	if _, err := tc.createObject("/sender.js"); err != nil {
+		return fmt.Errorf("create sender: %w", err)
 	}
 
 	// Ping the sender with the receiver's ID as target
@@ -859,14 +796,8 @@ addCallback('timeout', ['emit'], (msg) => {
 		return fmt.Errorf("failed to create /timer.js: %w", err)
 	}
 
-	if err := tc.sendLine("/create /timer.js"); err != nil {
-		return fmt.Errorf("/create timer: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create timer did not complete")
-	}
-	if _, found := tc.waitForObject("*timer*", defaultWaitTimeout); !found {
-		return fmt.Errorf("timer was not created")
+	if _, err := tc.createObject("/timer.js"); err != nil {
+		return fmt.Errorf("create timer: %w", err)
 	}
 
 	// Poll until timer is visible in room
@@ -908,16 +839,9 @@ addCallback('timeout', ['emit'], (msg) => {
 		return fmt.Errorf("failed to create /removable.js: %w", err)
 	}
 
-	if err := tc.sendLine("/create /removable.js"); err != nil {
-		return fmt.Errorf("/create removable: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create removable did not complete")
-	}
-
-	removableID, found := tc.waitForObject("*removable*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("removable was not created")
+	removableID, err := tc.createObject("/removable.js")
+	if err != nil {
+		return fmt.Errorf("create removable: %w", err)
 	}
 
 	// Verify object exists via /inspect
@@ -991,26 +915,13 @@ addCallback('movement', ['emit'], (msg) => {
 		return fmt.Errorf("failed to create /moveable.js: %w", err)
 	}
 
-	if err := tc.sendLine("/create /observer.js"); err != nil {
-		return fmt.Errorf("/create observer: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create observer did not complete")
-	}
-	if _, found := ts.waitForSourceObject(ctx, "/observer.js", defaultWaitTimeout); !found {
-		return fmt.Errorf("observer was not created")
+	if _, err := tc.createObject("/observer.js"); err != nil {
+		return fmt.Errorf("create observer: %w", err)
 	}
 
-	if err := tc.sendLine("/create /moveable.js"); err != nil {
-		return fmt.Errorf("/create moveable: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create moveable did not complete")
-	}
-
-	moveableID, found := ts.waitForSourceObject(ctx, "/moveable.js", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("moveable was not created")
+	moveableID, err := tc.createObject("/moveable.js")
+	if err != nil {
+		return fmt.Errorf("create moveable: %w", err)
 	}
 
 	// Move the moveable to lookroom
@@ -1051,16 +962,9 @@ addCallback('trigger', ['action'], (msg) => {
 		return fmt.Errorf("failed to create /logger.js: %w", err)
 	}
 
-	if err := tc.sendLine("/create /logger.js"); err != nil {
-		return fmt.Errorf("/create logger: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create logger did not complete")
-	}
-
-	loggerID, found := tc.waitForObject("*logger*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("logger was not created")
+	loggerID, err := tc.createObject("/logger.js")
+	if err != nil {
+		return fmt.Errorf("create logger: %w", err)
 	}
 
 	// Test 1: Without /debug, log output should NOT appear
@@ -1188,11 +1092,8 @@ addCallback('created', ['emit'], (msg) => {
 	userID := user.Object
 
 	// Create the witness object
-	if err := tc.sendLine("/create /witness.js"); err != nil {
-		return fmt.Errorf("/create witness: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create witness did not complete")
+	if _, err := tc.createObject("/witness.js"); err != nil {
+		return fmt.Errorf("create witness: %w", err)
 	}
 
 	// Wait for the witness to appear with the creator's ID in its description
@@ -1225,16 +1126,8 @@ addCallback('created', ['emit'], (msg) => {
 	}
 
 	// Create the tome object
-	if err := tc.sendLine("/create /tome.js"); err != nil {
-		return fmt.Errorf("/create tome: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create tome did not complete")
-	}
-
-	// Wait for the tome to appear
-	if _, found := tc.waitForObject("*dusty*", defaultWaitTimeout); !found {
-		return fmt.Errorf("tome was not created")
+	if _, err := tc.createObject("/tome.js"); err != nil {
+		return fmt.Errorf("create tome: %w", err)
 	}
 
 	// Look at the tome using a single word from its Short description
@@ -1408,17 +1301,9 @@ addCallback('shake', ['action'], (msg) => {
 	}
 
 	// Create the room
-	if err := tc.sendLine("/create /actionroom.js"); err != nil {
-		return fmt.Errorf("/create actionroom: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create actionroom did not complete")
-	}
-
-	// Wait for the room to exist
-	actionRoomID, found := tc.waitForObject("*shaky chamber*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("actionroom was not created")
+	actionRoomID, err := tc.createObject("/actionroom.js")
+	if err != nil {
+		return fmt.Errorf("create actionroom: %w", err)
 	}
 
 	// Enter the action room
@@ -1457,16 +1342,8 @@ addCallback('poke', ['action'], (msg) => {
 	}
 
 	// Create the pokeable object (it will be created in our current room - the actionroom)
-	if err := tc.sendLine("/create /pokeable.js"); err != nil {
-		return fmt.Errorf("/create pokeable: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create pokeable did not complete")
-	}
-
-	// Wait for the pokeable to exist
-	if _, found := tc.waitForObject("*pokeable orb*", defaultWaitTimeout); !found {
-		return fmt.Errorf("pokeable was not created")
+	if _, err := tc.createObject("/pokeable.js"); err != nil {
+		return fmt.Errorf("create pokeable: %w", err)
 	}
 
 	// Issue "poke" command - the sibling object should handle this action
@@ -1522,16 +1399,8 @@ addCallback('tap', ['action'], (msg) => {
 	}
 
 	// Create the counter object
-	if err := tc.sendLine("/create /counter.js"); err != nil {
-		return fmt.Errorf("/create counter: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create counter did not complete")
-	}
-
-	// Wait for the counter to exist
-	if _, found := tc.waitForObject("*tap counter*", defaultWaitTimeout); !found {
-		return fmt.Errorf("counter was not created")
+	if _, err := tc.createObject("/counter.js"); err != nil {
+		return fmt.Errorf("create counter: %w", err)
 	}
 
 	// Tap the counter three times
@@ -1600,37 +1469,19 @@ addCallback('whisper', ['action'], (msg) => {
 	}
 
 	// Create receivers
-	if err := tc.sendLine("/create /eaglereceiver.js"); err != nil {
-		return fmt.Errorf("/create eaglereceiver: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create eaglereceiver did not complete")
-	}
-	eagleID, found := tc.waitForObject("*eagle orb*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("eagle receiver was not created")
+	eagleID, err := tc.createObject("/eaglereceiver.js")
+	if err != nil {
+		return fmt.Errorf("create eaglereceiver: %w", err)
 	}
 
-	if err := tc.sendLine("/create /dimreceiver.js"); err != nil {
-		return fmt.Errorf("/create dimreceiver: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create dimreceiver did not complete")
-	}
-	dimID, found := tc.waitForObject("*dim orb*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("dim receiver was not created")
+	dimID, err := tc.createObject("/dimreceiver.js")
+	if err != nil {
+		return fmt.Errorf("create dimreceiver: %w", err)
 	}
 
 	// Create sender
-	if err := tc.sendLine("/create /challengesender.js"); err != nil {
-		return fmt.Errorf("/create challengesender: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create challengesender did not complete")
-	}
-	if _, found := tc.waitForObject("*whisperer orb*", defaultWaitTimeout); !found {
-		return fmt.Errorf("whisperer was not created")
+	if _, err := tc.createObject("/challengesender.js"); err != nil {
+		return fmt.Errorf("create challengesender: %w", err)
 	}
 
 	// Whisper to the high-perception receiver - should succeed
@@ -1687,15 +1538,9 @@ setExits([{Name: 'out', Destination: 'genesis'}]);
 	if err := ts.WriteSource("/broadcastroom.js", broadcastRoomSource); err != nil {
 		return fmt.Errorf("failed to create /broadcastroom.js: %w", err)
 	}
-	if err := tc.sendLine("/create /broadcastroom.js"); err != nil {
-		return fmt.Errorf("/create broadcastroom: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create broadcastroom did not complete")
-	}
-	broadcastRoomID, found := tc.waitForObject("*broadcast chamber*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("broadcast room was not created")
+	broadcastRoomID, err := tc.createObject("/broadcastroom.js")
+	if err != nil {
+		return fmt.Errorf("create broadcastroom: %w", err)
 	}
 
 	// Enter the broadcast room
@@ -1715,14 +1560,8 @@ addCallback('announce', ['emit'], (msg) => {
 	if err := ts.WriteSource("/listener1.js", listener1Source); err != nil {
 		return fmt.Errorf("failed to create /listener1.js: %w", err)
 	}
-	if err := tc.sendLine("/create /listener1.js"); err != nil {
-		return fmt.Errorf("/create listener1: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create listener1 did not complete")
-	}
-	if _, found := tc.waitForObject("*listener alpha*", defaultWaitTimeout); !found {
-		return fmt.Errorf("listener1 was not created")
+	if _, err := tc.createObject("/listener1.js"); err != nil {
+		return fmt.Errorf("create listener1: %w", err)
 	}
 
 	// Listener 2 - also receives broadcasts
@@ -1734,14 +1573,8 @@ addCallback('announce', ['emit'], (msg) => {
 	if err := ts.WriteSource("/listener2.js", listener2Source); err != nil {
 		return fmt.Errorf("failed to create /listener2.js: %w", err)
 	}
-	if err := tc.sendLine("/create /listener2.js"); err != nil {
-		return fmt.Errorf("/create listener2: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create listener2 did not complete")
-	}
-	if _, found := tc.waitForObject("*listener beta*", defaultWaitTimeout); !found {
-		return fmt.Errorf("listener2 was not created")
+	if _, err := tc.createObject("/listener2.js"); err != nil {
+		return fmt.Errorf("create listener2: %w", err)
 	}
 
 	// Broadcaster - uses emitToLocation to broadcast to all in the room
@@ -1758,14 +1591,8 @@ addCallback('announce', ['emit'], (msg) => {
 	if err := ts.WriteSource("/broadcaster.js", broadcasterSource); err != nil {
 		return fmt.Errorf("failed to create /broadcaster.js: %w", err)
 	}
-	if err := tc.sendLine("/create /broadcaster.js"); err != nil {
-		return fmt.Errorf("/create broadcaster: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create broadcaster did not complete")
-	}
-	if _, found := tc.waitForObject("*broadcaster orb*", defaultWaitTimeout); !found {
-		return fmt.Errorf("broadcaster was not created")
+	if _, err := tc.createObject("/broadcaster.js"); err != nil {
+		return fmt.Errorf("create broadcaster: %w", err)
 	}
 
 	// Issue the broadcast command
@@ -2018,27 +1845,15 @@ setDescriptions([{
 	}
 
 	// Create container A (outer box)
-	if err := tc.sendLine("/create /containerA.js"); err != nil {
-		return fmt.Errorf("/create container A: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create container A did not complete")
-	}
-	containerAID, found := tc.waitForObject("*outer*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("container A (outer box) was not created")
+	containerAID, err := tc.createObject("/containerA.js")
+	if err != nil {
+		return fmt.Errorf("create container A: %w", err)
 	}
 
 	// Create container B (inner box)
-	if err := tc.sendLine("/create /containerB.js"); err != nil {
-		return fmt.Errorf("/create container B: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create container B did not complete")
-	}
-	containerBID, found := tc.waitForObject("*inner*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("container B (inner box) was not created")
+	containerBID, err := tc.createObject("/containerB.js")
+	if err != nil {
+		return fmt.Errorf("create container B: %w", err)
 	}
 
 	// Get container A's original location before moving B into it
@@ -2100,15 +1915,9 @@ setDescriptions([{
 	if err := ts.WriteSource("/containerC.js", containerCSource); err != nil {
 		return fmt.Errorf("failed to create /containerC.js: %w", err)
 	}
-	if err := tc.sendLine("/create /containerC.js"); err != nil {
-		return fmt.Errorf("/create container C: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create container C did not complete")
-	}
-	containerCID, found := tc.waitForObject("*deep*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("container C (deep box) was not created")
+	containerCID, err := tc.createObject("/containerC.js")
+	if err != nil {
+		return fmt.Errorf("create container C: %w", err)
 	}
 
 	// Move C into B (so now A > B > C)
@@ -2173,17 +1982,8 @@ addCallback('survey', ['action'], (msg) => {
 	if err := ts.WriteSource("/scout.js", scoutSource); err != nil {
 		return fmt.Errorf("failed to create /scout.js: %w", err)
 	}
-	if err := tc.sendLine("/create /scout.js"); err != nil {
-		return fmt.Errorf("/create scout: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create scout did not complete")
-	}
-
-	// Wait for the scout to be created
-	_, found = tc.waitForObject("*scout*idle*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("scout drone was not created")
+	if _, err := tc.createObject("/scout.js"); err != nil {
+		return fmt.Errorf("create scout: %w", err)
 	}
 
 	// Trigger the survey action
@@ -2251,17 +2051,8 @@ addCallback('checkproof', ['action'], (msg) => {
 	if err := ts.WriteSource("/callback_test.js", removeCallbackSource); err != nil {
 		return fmt.Errorf("failed to create /callback_test.js: %w", err)
 	}
-	if err := tc.sendLine("/create /callback_test.js"); err != nil {
-		return fmt.Errorf("/create callback_test: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create callback_test did not complete")
-	}
-
-	// Wait for object to be created
-	_, found = tc.waitForObject("*callback test*has callback*proof:0*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("callback test object was not created")
+	if _, err := tc.createObject("/callback_test.js"); err != nil {
+		return fmt.Errorf("create callback_test: %w", err)
 	}
 
 	// First verify ping callback works - also triggers pingproof (proof:0->1)
@@ -2366,16 +2157,8 @@ addCallback('updateconfig', ['action'], (msg) => {
 	if err := ts.WriteSource("/skill_config_test.js", skillConfigSource); err != nil {
 		return fmt.Errorf("failed to create /skill_config_test.js: %w", err)
 	}
-	if err := tc.sendLine("/create /skill_config_test.js"); err != nil {
-		return fmt.Errorf("/create skill_config_test: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create skill_config_test did not complete")
-	}
-
-	_, found = tc.waitForObject("*skill config tester*ready*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("skill config tester was not created")
+	if _, err := tc.createObject("/skill_config_test.js"); err != nil {
+		return fmt.Errorf("create skill_config_test: %w", err)
 	}
 
 	// First query - should be null (doesn't exist yet)
@@ -2458,16 +2241,9 @@ addCallback('teleport', ['action'], (msg) => {
 	if err := ts.WriteSource("/teleporter.js", teleportSource); err != nil {
 		return fmt.Errorf("failed to create /teleporter.js: %w", err)
 	}
-	if err := tc.sendLine("/create /teleporter.js"); err != nil {
-		return fmt.Errorf("/create teleporter: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create teleporter did not complete")
-	}
-
-	teleporterID, found := tc.waitForObject("*teleporter*ready*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("teleporter was not created")
+	teleporterID, err := tc.createObject("/teleporter.js")
+	if err != nil {
+		return fmt.Errorf("create teleporter: %w", err)
 	}
 
 	// Get current location
@@ -2533,16 +2309,9 @@ addCallback('countitems', ['action'], (msg) => {
 	if err := ts.WriteSource("/content_container.js", containerSource); err != nil {
 		return fmt.Errorf("failed to create /content_container.js: %w", err)
 	}
-	if err := tc.sendLine("/create /content_container.js"); err != nil {
-		return fmt.Errorf("/create content_container: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create content_container did not complete")
-	}
-
-	containerID, found := tc.waitForObject("*content container*ready*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("content container was not created")
+	containerID, err := tc.createObject("/content_container.js")
+	if err != nil {
+		return fmt.Errorf("create content_container: %w", err)
 	}
 
 	// Count items (should be 0)
@@ -2562,15 +2331,9 @@ addCallback('countitems', ['action'], (msg) => {
 	if err := ts.WriteSource("/tiny_item.js", itemSource); err != nil {
 		return fmt.Errorf("failed to create /tiny_item.js: %w", err)
 	}
-	if err := tc.sendLine("/create /tiny_item.js"); err != nil {
-		return fmt.Errorf("/create tiny_item: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create tiny_item did not complete")
-	}
-	itemID, found := tc.waitForObject("*tiny item*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("tiny item was not created")
+	itemID, err := tc.createObject("/tiny_item.js")
+	if err != nil {
+		return fmt.Errorf("create tiny_item: %w", err)
 	}
 
 	// Move item into container using /move command
@@ -2621,17 +2384,9 @@ addCallback('setpath', ['action'], (msg) => {
 	if err := ts.WriteSource("/new_source.js", sourcePathSource); err != nil {
 		return fmt.Errorf("failed to create /new_source.js: %w", err)
 	}
-	if err := tc.sendLine("/create /source_path_test.js"); err != nil {
-		return fmt.Errorf("/create source_path_test: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create source_path_test did not complete")
-	}
-
-	// Wait for object and get its ID
-	sourcePathObjID, found := tc.waitForObject("*source path tester*ready*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("source path tester was not created")
+	sourcePathObjID, err := tc.createObject("/source_path_test.js")
+	if err != nil {
+		return fmt.Errorf("create source_path_test: %w", err)
 	}
 
 	// Test getSourcePath() - verify it returns the correct path via description
@@ -2687,16 +2442,8 @@ addCallback('disablelearn', ['action'], (msg) => {
 	if err := ts.WriteSource("/learning_test.js", learningSource); err != nil {
 		return fmt.Errorf("failed to create /learning_test.js: %w", err)
 	}
-	if err := tc.sendLine("/create /learning_test.js"); err != nil {
-		return fmt.Errorf("/create learning_test: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/create learning_test did not complete")
-	}
-
-	_, found = tc.waitForObject("*learning tester*ready*", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("learning tester was not created")
+	if _, err := tc.createObject("/learning_test.js"); err != nil {
+		return fmt.Errorf("create learning_test: %w", err)
 	}
 
 	// Check initial learning state (should be false)

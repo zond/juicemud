@@ -26,8 +26,8 @@ Instructions for Claude Code when working with this repository.
 - Always test functionality if reasonably possible.
 
 ### Integration tests
-- Integration tests should use the SSH and WebDAV interfaces for all interactions with the server, except when it's
-  unreasonably difficult or messy not to, in which case they are allowed to run direct function calls on the test client
+- Integration tests should use the SSH interfaces for all interactions with the server, except when it's unreasonably
+  difficult or messy not to, in which case they are allowed to run direct function calls on the test client
   or test server objects. This will ensure that we test the ways users and wizards interact with the game.
 - Integration tests should avoid sleeping fixed times to wait for events to occur, instead they should wait to be notified,
   or if that's impossible, loop around a short sleep/check block that polls. This will ensure the integration tests don't

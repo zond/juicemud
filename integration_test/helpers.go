@@ -27,6 +27,36 @@ func (r *inspectResult) GetSourcePath() string { return r.SourcePath }
 // exactly one well-formed JSON object with no stray braces in the output.
 var jsonExtractor = regexp.MustCompile(`(?s)\{.*\}`)
 
+// createdIDExtractor matches the object ID in /create output (e.g., "Created #abc123_XYZ").
+// Object IDs use base64url encoding which includes alphanumeric, underscore, and hyphen.
+var createdIDExtractor = regexp.MustCompile(`Created #([a-zA-Z0-9_-]+)`)
+
+// createObject runs /create and returns the created object's ID.
+// Waits for the object to be fully ready (inspectable by ID) before returning.
+// Returns the object ID and nil on success, or empty string and an error on failure.
+func (tc *terminalClient) createObject(sourcePath string) (string, error) {
+	output, ok := tc.sendCommand(fmt.Sprintf("/create %s", sourcePath), defaultWaitTimeout)
+	if !ok {
+		return "", fmt.Errorf("/create did not complete: %q", output)
+	}
+	match := createdIDExtractor.FindStringSubmatch(output)
+	if match == nil {
+		return "", fmt.Errorf("no object ID in /create output: %q", output)
+	}
+	objectID := match[1]
+
+	// Wait for the object to be fully ready by polling /inspect #<id>
+	// This ensures the object is accessible for subsequent commands like /enter or /move
+	found := waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
+		_, err := tc.inspect(fmt.Sprintf("#%s", objectID))
+		return err == nil
+	})
+	if !found {
+		return "", fmt.Errorf("object #%s was created but not inspectable", objectID)
+	}
+	return objectID, nil
+}
+
 // waitForObject polls via /inspect until an object matching the pattern exists in the room.
 // The pattern uses glob matching against object descriptions (e.g., "*box*" matches "wooden box").
 // Returns the object ID and true if found, or empty string and false on timeout.
@@ -266,16 +296,9 @@ setExits([{Name: 'out', Destination: 'genesis'}]);
 		return "", fmt.Errorf("failed to create %s: %w", sourcePath, err)
 	}
 
-	if err := tc.sendLine(fmt.Sprintf("/create %s", sourcePath)); err != nil {
-		return "", fmt.Errorf("/create room: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return "", fmt.Errorf("/create room did not complete")
-	}
-
-	roomID, found := tc.waitForObject(fmt.Sprintf("*%s room*", testName), defaultWaitTimeout)
-	if !found {
-		return "", fmt.Errorf("%s room was not created", testName)
+	roomID, err := tc.createObject(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("create room: %w", err)
 	}
 
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomID)); err != nil {
