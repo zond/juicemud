@@ -205,7 +205,10 @@ func (s *Storage) LoadResolvedSource(ctx context.Context, path string) ([]byte, 
 			return nil, 0, juicemud.WithStack(err)
 		}
 		if currentMaxMtime > cachedMtime {
-			s.resolver.InvalidateCache(path)
+			// Only invalidate if the cache still has the stale entry.
+			// This prevents a race where we invalidate a fresh cache entry
+			// that another goroutine just created after we checked.
+			s.resolver.InvalidateCacheIfStale(path, cachedMtime)
 		}
 	}
 

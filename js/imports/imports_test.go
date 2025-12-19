@@ -156,6 +156,12 @@ func TestResolvePath(t *testing.T) {
 			importPath: "./lib/util.js",
 			expected:   "/lib/util.js",
 		},
+		{
+			name:       "cleans paths with dotdot",
+			fromPath:   "/mobs/dog.js",
+			importPath: "/../../../etc/passwd",
+			expected:   "/etc/passwd", // Cleaned but still within virtual root
+		},
 	}
 
 	for _, tt := range tests {
@@ -388,6 +394,126 @@ func TestInvalidateCache(t *testing.T) {
 	// Should be gone
 	if r.GetCachedMaxMtime("/main.js") != 0 {
 		t.Error("GetCachedMaxMtime() != 0 after invalidate, want 0")
+	}
+}
+
+func TestInvalidateCacheIfStale(t *testing.T) {
+	sources := map[string]string{
+		"/main.js": "var x = 1;",
+	}
+
+	// Create a loader that returns mtime 1000
+	loaderOld := func(ctx context.Context, path string) ([]byte, int64, error) {
+		source, ok := sources[path]
+		if !ok {
+			return nil, 0, fmt.Errorf("file not found: %s", path)
+		}
+		return []byte(source), 1000, nil
+	}
+
+	// Create a loader that returns mtime 2000
+	loaderNew := func(ctx context.Context, path string) ([]byte, int64, error) {
+		source, ok := sources[path]
+		if !ok {
+			return nil, 0, fmt.Errorf("file not found: %s", path)
+		}
+		return []byte(source), 2000, nil
+	}
+
+	r := NewResolver()
+	_, err := r.Resolve(context.Background(), "/main.js", loaderOld)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	oldMtime := r.GetCachedMaxMtime("/main.js")
+	if oldMtime != 1000 {
+		t.Fatalf("GetCachedMaxMtime() = %d, want 1000", oldMtime)
+	}
+
+	// Simulate another goroutine refreshing the cache:
+	// invalidate and re-resolve with a loader that returns a newer mtime
+	r.InvalidateCache("/main.js")
+	_, err = r.Resolve(context.Background(), "/main.js", loaderNew)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	newMtime := r.GetCachedMaxMtime("/main.js")
+	if newMtime != 2000 {
+		t.Fatalf("GetCachedMaxMtime() = %d, want 2000", newMtime)
+	}
+
+	// Try to invalidate with the OLD stale mtime we observed earlier.
+	// Since the cache now has a newer mtime, this should NOT invalidate.
+	r.InvalidateCacheIfStale("/main.js", oldMtime)
+	if r.GetCachedMaxMtime("/main.js") == 0 {
+		t.Error("InvalidateCacheIfStale with old stale mtime invalidated fresh cache, should not")
+	}
+
+	// Try to invalidate with the current mtime - should invalidate
+	r.InvalidateCacheIfStale("/main.js", newMtime)
+	if r.GetCachedMaxMtime("/main.js") != 0 {
+		t.Error("InvalidateCacheIfStale with current mtime did not invalidate cache")
+	}
+}
+
+func TestResolve_DepthLimit(t *testing.T) {
+	// Create a chain that exceeds maxImportDepth (100)
+	sources := make(map[string]string)
+	for i := 0; i <= 101; i++ {
+		path := fmt.Sprintf("/chain%d.js", i)
+		if i == 0 {
+			sources[path] = "var x = 0;"
+		} else {
+			prevPath := fmt.Sprintf("/chain%d.js", i-1)
+			sources[path] = fmt.Sprintf("// @import %s\nvar x = %d;", prevPath, i)
+		}
+	}
+
+	r := NewResolver()
+	_, err := r.Resolve(context.Background(), "/chain101.js", mockLoader(sources))
+	if err == nil {
+		t.Fatal("Resolve() expected error for depth limit exceeded, got nil")
+	}
+	if !contains(err.Error(), "depth") {
+		t.Errorf("Resolve() error = %v, want error containing 'depth'", err)
+	}
+}
+
+func TestResolve_FileCountLimit(t *testing.T) {
+	// Create a flat structure that exceeds maxImportFiles (1000)
+	sources := make(map[string]string)
+	var mainImports string
+	for i := 0; i < 1001; i++ {
+		path := fmt.Sprintf("/file%d.js", i)
+		sources[path] = "var x = 1;"
+		mainImports += fmt.Sprintf("// @import %s\n", path)
+	}
+	sources["/main.js"] = mainImports + "var main = 1;"
+
+	r := NewResolver()
+	_, err := r.Resolve(context.Background(), "/main.js", mockLoader(sources))
+	if err == nil {
+		t.Fatal("Resolve() expected error for file count limit exceeded, got nil")
+	}
+	if !contains(err.Error(), "file count") {
+		t.Errorf("Resolve() error = %v, want error containing 'file count'", err)
+	}
+}
+
+func TestResolve_CancelledContext(t *testing.T) {
+	sources := map[string]string{
+		"/lib/util.js": "var util = 'util';",
+		"/main.js":     "// @import /lib/util.js\nvar x = util;",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	r := NewResolver()
+	_, err := r.Resolve(ctx, "/main.js", mockLoader(sources))
+	if err == nil {
+		t.Fatal("Resolve() expected error for cancelled context, got nil")
 	}
 }
 

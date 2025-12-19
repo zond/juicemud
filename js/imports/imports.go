@@ -11,6 +11,13 @@ import (
 	"sync"
 )
 
+const (
+	// maxImportDepth is the maximum depth of import chains to prevent DoS.
+	maxImportDepth = 100
+	// maxImportFiles is the maximum number of files in a single import tree.
+	maxImportFiles = 1000
+)
+
 // importPattern matches `// @import path` at the start of a line.
 // Only matches if @import is at the very start (after //) to prevent
 // accidental matches in comments like "// note: @import is cool".
@@ -122,6 +129,20 @@ func (r *Resolver) InvalidateCache(sourcePath string) {
 	delete(r.cache, sourcePath)
 }
 
+// InvalidateCacheIfStale removes a path from the cache only if the cached
+// maxMtime is less than or equal to the provided staleMtime.
+// This prevents a race where one goroutine invalidates a fresh cache entry
+// that another goroutine just created.
+func (r *Resolver) InvalidateCacheIfStale(sourcePath string, staleMtime int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.cache[sourcePath]; ok {
+		if entry.maxMtime <= staleMtime {
+			delete(r.cache, sourcePath)
+		}
+	}
+}
+
 // InvalidateAll clears the entire cache.
 func (r *Resolver) InvalidateAll() {
 	r.mu.Lock()
@@ -134,28 +155,44 @@ type resolveContext struct {
 	inProgress map[string]bool // Current resolution stack (cycle detection)
 	included   map[string]bool // Files already in output (deduplication)
 	load       LoadFunc
+	depth      int // Current recursion depth
+	fileCount  int // Total files processed
 }
 
 // resolveRecursive performs depth-first resolution of imports.
 func (r *Resolver) resolveRecursive(ctx context.Context, sourcePath string, rctx *resolveContext) (string, int64, []string, error) {
+	// Check for context cancellation
+	if err := ctx.Err(); err != nil {
+		return "", 0, nil, err
+	}
+
+	// Depth limit check
+	if rctx.depth >= maxImportDepth {
+		return "", 0, nil, fmt.Errorf("import depth limit exceeded (%d): %s", maxImportDepth, sourcePath)
+	}
+
+	// File count limit check
+	if rctx.fileCount >= maxImportFiles {
+		return "", 0, nil, fmt.Errorf("import file count limit exceeded (%d)", maxImportFiles)
+	}
+
 	// Cycle detection
 	if rctx.inProgress[sourcePath] {
 		return "", 0, nil, fmt.Errorf("circular import detected: %s", sourcePath)
 	}
 
-	// Already included? Skip source output but still track mtime
+	// Already included? Skip - source already output, mtime already tracked
 	if rctx.included[sourcePath] {
-		// We need to get the mtime even for already-included files
-		// to ensure the max mtime calculation is correct
-		_, mtime, err := rctx.load(ctx, sourcePath)
-		if err != nil {
-			return "", 0, nil, fmt.Errorf("loading %s: %w", sourcePath, err)
-		}
-		return "", mtime, []string{sourcePath}, nil
+		return "", 0, nil, nil
 	}
 
 	rctx.inProgress[sourcePath] = true
-	defer delete(rctx.inProgress, sourcePath)
+	rctx.depth++
+	rctx.fileCount++
+	defer func() {
+		delete(rctx.inProgress, sourcePath)
+		rctx.depth--
+	}()
 
 	// Load the source file
 	sourceBytes, mtime, err := rctx.load(ctx, sourcePath)
@@ -215,11 +252,12 @@ func RemoveImports(source string) string {
 }
 
 // ResolvePath resolves an import path relative to the importing file.
-// Absolute paths (starting with /) are returned as-is.
-// Relative paths (starting with ./ or ../) are resolved relative to the importing file's directory.
+// Absolute paths (starting with /) are returned as-is after cleaning.
+// Relative paths are resolved relative to the importing file's directory.
+// Note: Path traversal security is handled by the storage layer's safePath function.
 func ResolvePath(fromPath, importPath string) string {
 	if strings.HasPrefix(importPath, "/") {
-		return importPath
+		return path.Clean(importPath)
 	}
 	dir := path.Dir(fromPath)
 	return path.Clean(path.Join(dir, importPath))
