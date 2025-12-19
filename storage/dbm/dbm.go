@@ -103,6 +103,46 @@ func (h *Hash) Del(k string) error {
 	return nil
 }
 
+const (
+	flushBaseInterval = time.Second
+	flushMaxBackoff   = 30 * time.Second
+)
+
+// FlushHealth contains information about the flush loop's current state.
+type FlushHealth struct {
+	LastFlushAt    time.Time     // When the last successful flush occurred
+	LastErrorAt    time.Time     // When the last error occurred (zero if none)
+	LastError      error         // The most recent error (nil if healthy)
+	ConsecErrors   int           // Number of consecutive errors
+	CurrentBackoff time.Duration // Current backoff duration
+}
+
+// Healthy returns true if the last flush succeeded (no current error).
+func (h *FlushHealth) Healthy() bool {
+	return h.LastError == nil
+}
+
+// recordSuccess updates state after a successful flush and returns the next interval.
+func (h *FlushHealth) recordSuccess() time.Duration {
+	h.LastFlushAt = time.Now()
+	h.LastError = nil
+	h.ConsecErrors = 0
+	h.CurrentBackoff = flushBaseInterval
+	return flushBaseInterval
+}
+
+// recordError updates state after a failed flush and returns the next interval (with backoff).
+func (h *FlushHealth) recordError(err error) time.Duration {
+	h.LastError = err
+	h.LastErrorAt = time.Now()
+	h.ConsecErrors++
+	h.CurrentBackoff = min(h.CurrentBackoff*2, flushMaxBackoff)
+	if h.CurrentBackoff < flushBaseInterval {
+		h.CurrentBackoff = flushBaseInterval
+	}
+	return h.CurrentBackoff
+}
+
 // LiveTypeHash is an in-memory cache over a TypeHash that automatically flushes
 // dirty entries to disk every second. Objects are tracked for changes via PostUnlock.
 //
@@ -116,15 +156,18 @@ type LiveTypeHash[T any, S structs.Snapshottable[T]] struct {
 	stage        map[string]*T
 	stageMutex   sync.RWMutex
 	updates      map[string]bool
-	lastUpdate   time.Time
 	updatesMutex sync.RWMutex
 	done         chan struct{} // Closed when flush goroutine exits
+
+	// Flush health tracking (protected by updatesMutex)
+	flushHealth FlushHealth
 }
 
-func (l *LiveTypeHash[T, S]) Age() time.Duration {
+// FlushHealth returns a snapshot of the current flush health state.
+func (l *LiveTypeHash[T, S]) FlushHealth() FlushHealth {
 	l.updatesMutex.RLock()
 	defer l.updatesMutex.RUnlock()
-	return time.Since(l.lastUpdate)
+	return l.flushHealth
 }
 
 // Flush writes all dirty entries to disk.
@@ -135,7 +178,6 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 	for key := range l.updates {
 		toUpdate = append(toUpdate, key)
 	}
-	l.lastUpdate = time.Now()
 	l.updates = map[string]bool{}
 	l.updatesMutex.Unlock()
 	// updatesMutex released above before acquiring stageMutex below
@@ -178,18 +220,32 @@ func (l *LiveTypeHash[T, S]) Each() iter.Seq2[*T, error] {
 }
 
 // runFlushLoop periodically flushes dirty entries to disk until context is cancelled.
+// Uses exponential backoff on errors (1s -> 2s -> 4s -> ... -> 30s max).
 func (l *LiveTypeHash[T, S]) runFlushLoop(ctx context.Context) {
 	defer close(l.done)
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+
+	interval := flushBaseInterval
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			if err := l.Flush(); err != nil {
-				log.Printf("LiveTypeHash flush error: %v", err)
+		case <-timer.C:
+			err := l.Flush()
+
+			l.updatesMutex.Lock()
+			if err != nil {
+				interval = l.flushHealth.recordError(err)
+				log.Printf("LiveTypeHash flush error (attempt %d, next retry in %v): %v",
+					l.flushHealth.ConsecErrors, interval, err)
+			} else {
+				interval = l.flushHealth.recordSuccess()
 			}
+			l.updatesMutex.Unlock()
+
+			timer.Reset(interval)
 		}
 	}
 }

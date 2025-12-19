@@ -494,5 +494,28 @@ func (c *Connection) wizCommands() commands {
 				return nil
 			},
 		},
+		{
+			names: m("/flushstatus"),
+			f: func(c *Connection, s string) error {
+				health := c.game.storage.FlushHealth()
+				if health.Healthy() {
+					fmt.Fprintln(c.term, "Flush status: OK")
+					if !health.LastFlushAt.IsZero() {
+						fmt.Fprintf(c.term, "Last successful flush: %v ago\n", time.Since(health.LastFlushAt).Truncate(time.Second))
+					}
+				} else {
+					fmt.Fprintln(c.term, "Flush status: FAILING")
+					if !health.LastFlushAt.IsZero() {
+						fmt.Fprintf(c.term, "Last successful flush: %v ago\n", time.Since(health.LastFlushAt).Truncate(time.Second))
+					} else {
+						fmt.Fprintln(c.term, "Last successful flush: never")
+					}
+					fmt.Fprintf(c.term, "Consecutive errors: %d\n", health.ConsecErrors)
+					fmt.Fprintf(c.term, "Current backoff: %v\n", health.CurrentBackoff)
+					fmt.Fprintf(c.term, "Last error: %v\n", health.LastError)
+				}
+				return nil
+			},
+		},
 	}
 }

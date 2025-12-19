@@ -514,6 +514,15 @@ func (c *Connection) Process() error {
 	}
 
 	for {
+		// Update prompt for wizards to show flush health status
+		if c.wiz {
+			if health := c.game.storage.FlushHealth(); !health.Healthy() {
+				c.term.SetPrompt("[!]> ")
+			} else {
+				c.term.SetPrompt("> ")
+			}
+		}
+
 		line, err := c.term.ReadLine()
 		if err != nil {
 			return juicemud.WithStack(err)
@@ -612,6 +621,18 @@ func (c *Connection) loginUser() error {
 		Remote: c.sess.RemoteAddr().String(),
 	})
 	fmt.Fprintf(c.term, "Welcome back, %v!\n\n", c.user.Name)
+
+	// Warn wizards if database flush is failing
+	if c.user.Wizard {
+		if health := c.game.storage.FlushHealth(); !health.Healthy() {
+			if health.LastFlushAt.IsZero() {
+				fmt.Fprint(c.term, "WARNING: Database flush failing (no successful flush yet)\n")
+			} else {
+				fmt.Fprintf(c.term, "WARNING: Database flush failing (last success %v ago)\n", time.Since(health.LastFlushAt).Truncate(time.Second))
+			}
+			fmt.Fprintf(c.term, "Error: %v\n\n", health.LastError)
+		}
+	}
 	if _, _, err := c.game.loadRun(c.ctx, c.user.Object, &structs.AnyCall{
 		Name: connectedEventType,
 		Tag:  emitEventTag,

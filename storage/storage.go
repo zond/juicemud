@@ -102,6 +102,11 @@ func (s *Storage) Queue() *queue.Queue {
 	return s.queue
 }
 
+// FlushHealth returns the current health state of the object flush loop.
+func (s *Storage) FlushHealth() dbm.FlushHealth {
+	return s.objects.FlushHealth()
+}
+
 // AuditLog writes a structured audit entry to the log.
 // Note: The "remote" field in login events reflects the direct connection peer,
 // which may be a proxy/load balancer rather than the actual client if the server

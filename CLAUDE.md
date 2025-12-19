@@ -21,6 +21,9 @@ Instructions for Claude Code when working with this repository.
   This will make sure readers and authors of our code know what they functions are supposed to do, and have an
   easier time learning about them.
 - Always ask your agent to review each new git commit.
+- Always make sure the README is up to date with relevant new information, and doesn't contain redundant or outdated
+  information.
+- Always test functionality if reasonably possible.
 
 ### Integration tests
 - Integration tests should use the SSH and WebDAV interfaces for all interactions with the server, except when it's
