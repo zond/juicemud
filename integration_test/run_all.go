@@ -351,16 +351,9 @@ setDescriptions([{
 	}
 
 	// Now test the look command
-	if err := tc.sendLine("look"); err != nil {
-		return fmt.Errorf("look command: %w", err)
-	}
-
-	// Verify look shows the room description
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	// Use waitForLookMatch to handle any stale /inspect output from waitForLocation
+	output, ok = tc.waitForLookMatch("Cozy Library", defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("look in lookroom did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Cozy Library") {
 		return fmt.Errorf("look did not show room name: %q", output)
 	}
 
@@ -399,14 +392,9 @@ setDescriptions([{
 	fmt.Println("Testing bidirectional movement...")
 
 	// Debug: verify look works before updating genesis.js
-	if err := tc.sendLine("look"); err != nil {
-		return fmt.Errorf("look before genesis update: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	// Use waitForLookMatch to handle any stale async notifications
+	output, ok = tc.waitForLookMatch("Black cosmos", defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("look before genesis update did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Black cosmos") {
 		return fmt.Errorf("look before genesis update failed - not in genesis: %q", output)
 	}
 
@@ -427,14 +415,9 @@ setExits([{
 	}
 
 	// Verify we're in genesis (user is already connected, no need to reconnect)
-	if err := tc.sendLine("look"); err != nil {
-		return fmt.Errorf("look in genesis: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	// Use waitForLookMatch to handle any stale async notifications
+	output, ok = tc.waitForLookMatch("Black cosmos", defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("look in genesis did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Black cosmos") {
 		return fmt.Errorf("not in genesis: %q", output)
 	}
 
@@ -591,15 +574,9 @@ setDescriptions([{
 	}
 
 	// Test 1: Look should NOT show the hidden gem (user has no perception skill)
-	if err := tc.sendLine("look"); err != nil {
-		return fmt.Errorf("look in challenge_room: %w", err)
-	}
-
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	// Use waitForLookMatch to handle any stale /inspect output from waitForLocation
+	output, ok = tc.waitForLookMatch("Challenge Room", defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("look in challenge_room did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Challenge Room") {
 		return fmt.Errorf("look did not show challenge room: %q", output)
 	}
 	if strings.Contains(output, "hidden gem") {
@@ -683,15 +660,9 @@ addCallback('train', ['command'], (msg) => {
 	}
 
 	// Test 5a: Look should now show the hidden gem (user has perception skill)
-	if err := tc.sendLine("look"); err != nil {
-		return fmt.Errorf("look in challenge_room with skills: %w", err)
-	}
-
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	// Use waitForLookMatch to handle any stale async notifications in the buffer
+	output, ok = tc.waitForLookMatch("hidden gem", defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("look in challenge_room with skills did not complete: %q", output)
-	}
-	if !strings.Contains(output, "hidden gem") {
 		return fmt.Errorf("look SHOULD show hidden gem with perception skill: %q", output)
 	}
 

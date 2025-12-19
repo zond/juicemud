@@ -46,6 +46,19 @@ The codebase contains:
 
 **Fix**: Added `createObject` helper that parses object ID from `/create` command output and waits for the object to be inspectable via `/inspect #<id>`. Replaced all `/create` + `waitForObject` patterns throughout the test suite with this helper. Removed the `waitForSourceObject` Go API function entirely.
 
+#### Race Mode Timing Issues - FIXED
+~~Integration tests would fail intermittently with `-race` due to async notifications interfering with command output parsing.~~
+
+**Fix**:
+- Increased test timeout from 30s to 60s (race mode is ~3-4x slower)
+- Added buffer drain in `createObject` helper before sending commands
+- Replaced `sendLine("look") + waitForPrompt` with `waitForLookMatch` pattern to handle stale output from `/inspect` polling
+
+**Note**: Running with `-race` requires disabling checkptr due to a bug in the tkrzw-go third-party library:
+```
+go test -race -gcflags=all=-d=checkptr=0 ./integration_test/...
+```
+
 ### Low Priority
 
 - Some tests could benefit from more descriptive error messages
@@ -162,3 +175,4 @@ The codebase contains:
 - **December 2025**: Initial review completed
 - **December 2025**: Fixed Test 12 - replaced Go API usage with SSH-based `createObject` helper
 - **December 2025**: Added game package unit tests - validation, password, switchboard, rate limiter (20 new tests, 49 total)
+- **December 2025**: Fixed race mode timing issues - increased timeout, added buffer drains, use waitForLookMatch pattern

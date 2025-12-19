@@ -35,6 +35,11 @@ var createdIDExtractor = regexp.MustCompile(`Created #([a-zA-Z0-9_-]+)`)
 // Waits for the object to be fully ready (inspectable by ID) before returning.
 // Returns the object ID and nil on success, or empty string and an error on failure.
 func (tc *terminalClient) createObject(sourcePath string) (string, error) {
+	// Drain any stale async notifications (e.g., movement events) from the buffer
+	// before sending the command. This prevents -race mode timing issues where
+	// accumulated notifications interfere with command response parsing.
+	tc.readUntil(10*time.Millisecond, nil)
+
 	output, ok := tc.sendCommand(fmt.Sprintf("/create %s", sourcePath), defaultWaitTimeout)
 	if !ok {
 		return "", fmt.Errorf("/create did not complete: %q", output)
