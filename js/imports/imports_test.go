@@ -3,6 +3,7 @@ package imports
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -257,6 +258,22 @@ func TestResolve_DiamondDependency(t *testing.T) {
 	if result.Source != expected {
 		t.Errorf("Resolve().Source = %q, want %q", result.Source, expected)
 	}
+
+	// Verify deps are deduplicated (D should appear only once)
+	depCounts := make(map[string]int)
+	for _, dep := range result.Deps {
+		depCounts[dep]++
+	}
+	for dep, count := range depCounts {
+		if count > 1 {
+			t.Errorf("Dep %q appears %d times, want 1", dep, count)
+		}
+	}
+
+	// Should have exactly 4 unique deps: a, b, c, d
+	if len(depCounts) != 4 {
+		t.Errorf("Got %d unique deps, want 4: %v", len(depCounts), result.Deps)
+	}
 }
 
 func TestResolve_CircularDependency(t *testing.T) {
@@ -270,7 +287,7 @@ func TestResolve_CircularDependency(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resolve() expected error for circular dependency, got nil")
 	}
-	if !contains(err.Error(), "circular") {
+	if !strings.Contains(err.Error(), "circular") {
 		t.Errorf("Resolve() error = %v, want error containing 'circular'", err)
 	}
 }
@@ -285,7 +302,7 @@ func TestResolve_MissingImport(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resolve() expected error for missing import, got nil")
 	}
-	if !contains(err.Error(), "not found") && !contains(err.Error(), "missing") {
+	if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "missing") {
 		t.Errorf("Resolve() error = %v, want error about missing file", err)
 	}
 }
@@ -475,7 +492,7 @@ func TestResolve_DepthLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resolve() expected error for depth limit exceeded, got nil")
 	}
-	if !contains(err.Error(), "depth") {
+	if !strings.Contains(err.Error(), "depth") {
 		t.Errorf("Resolve() error = %v, want error containing 'depth'", err)
 	}
 }
@@ -496,7 +513,7 @@ func TestResolve_FileCountLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resolve() expected error for file count limit exceeded, got nil")
 	}
-	if !contains(err.Error(), "file count") {
+	if !strings.Contains(err.Error(), "file count") {
 		t.Errorf("Resolve() error = %v, want error containing 'file count'", err)
 	}
 }
@@ -517,15 +534,3 @@ func TestResolve_CancelledContext(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
