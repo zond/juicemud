@@ -435,14 +435,9 @@ setExits([{
 	}
 
 	// Look to verify we're in lookroom
-	if err := tc.sendLine("look"); err != nil {
-		return fmt.Errorf("look in lookroom: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	// Use waitForLookMatch to handle any stale async notifications
+	output, ok = tc.waitForLookMatch("Cozy Library", defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("look in lookroom did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Cozy Library") {
 		return fmt.Errorf("not in Cozy Library after south: %q", output)
 	}
 
@@ -2478,6 +2473,108 @@ addCallback('disablelearn', ['action'], (msg) => {
 	}
 
 	fmt.Println("  getLearning() / setLearning(): OK")
+
+	// === Test 32: /exit at universe root (edge case) ===
+	fmt.Println("Testing /exit at universe root...")
+
+	// First, ensure we're in genesis (which has no parent location)
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for exit test: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter genesis for exit test did not complete")
+	}
+
+	// Verify we're in genesis
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		return fmt.Errorf("should be in genesis for exit test")
+	}
+
+	// Try to /exit from genesis - should fail with error message
+	// Note: The error is "destination ID cannot be empty" because genesis has no parent location.
+	// The code checks if the player has no location, but should ideally check if the location has no parent.
+	if err := tc.sendLine("/exit"); err != nil {
+		return fmt.Errorf("/exit at genesis: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/exit at genesis did not complete: %q", output)
+	}
+	if !strings.Contains(output, "destination ID cannot be empty") {
+		return fmt.Errorf("/exit at genesis should fail: %q", output)
+	}
+
+	// Verify we're still in genesis (didn't move)
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		return fmt.Errorf("should still be in genesis after failed /exit")
+	}
+
+	fmt.Println("  /exit at universe root: OK")
+
+	// === Test 33: /remove current location (edge case) ===
+	fmt.Println("Testing /remove current location...")
+
+	// Create a room to test with
+	removeTestRoomSource := `setDescriptions([{Short: 'remove test room', Long: 'A room for testing /remove edge case.'}]);
+setExits([{Name: 'out', Destination: 'genesis'}]);
+`
+	if err := ts.WriteSource("/removetestroom.js", removeTestRoomSource); err != nil {
+		return fmt.Errorf("failed to create /removetestroom.js: %w", err)
+	}
+
+	removeTestRoomID, err := tc.createObject("/removetestroom.js")
+	if err != nil {
+		return fmt.Errorf("create removetestroom: %w", err)
+	}
+
+	// Enter the test room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", removeTestRoomID)); err != nil {
+		return fmt.Errorf("/enter removetestroom: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter removetestroom did not complete")
+	}
+
+	// Verify we're in the test room
+	if !tc.waitForLocation("", removeTestRoomID, defaultWaitTimeout) {
+		return fmt.Errorf("should be in removetestroom")
+	}
+
+	// Try to /remove our current location - should fail
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", removeTestRoomID)); err != nil {
+		return fmt.Errorf("/remove current location: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/remove current location did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Can't remove current location") {
+		return fmt.Errorf("/remove current location should fail with 'Can't remove current location': %q", output)
+	}
+
+	// Verify the room still exists (wasn't removed)
+	_, err = tc.inspect(fmt.Sprintf("#%s", removeTestRoomID))
+	if err != nil {
+		return fmt.Errorf("room should still exist after failed /remove: %w", err)
+	}
+
+	// Return to genesis and clean up
+	if err := tc.sendLine("out"); err != nil {
+		return fmt.Errorf("out from removetestroom: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("out from removetestroom did not complete")
+	}
+
+	// Now we can remove the test room since we're no longer in it
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", removeTestRoomID)); err != nil {
+		return fmt.Errorf("/remove test room cleanup: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/remove test room cleanup did not complete")
+	}
+
+	fmt.Println("  /remove current location: OK")
 
 	return nil
 }
