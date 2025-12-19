@@ -61,10 +61,28 @@ The codebase contains:
 - No issues identified
 
 ### game/game_test.go
-**Quality**: Gap identified
-- Contains only benchmarks (`BenchmarkGameProcess`, `BenchmarkV8JSON`)
-- **No unit tests for game logic**
-- This is a significant gap given the complexity of the game package
+**Quality**: Good (previously a gap, now addressed)
+- Contains 2 benchmarks (`BenchmarkLoadNeighbourhood`, `BenchmarkCall`)
+- Helper functions for test object creation
+
+### game/validation_test.go (NEW)
+**Quality**: Good
+- 5 tests covering username validation and password hashing
+- Tests security-critical functions: `validateUsername`, `hashPassword`, `verifyPassword`
+- Includes edge cases for malformed hashes and PHC format verification
+- 2 benchmarks for password operations
+
+### game/switchboard_test.go (NEW)
+**Quality**: Good
+- 9 tests covering debug console broadcast functionality
+- Tests attach/detach, nil handling, concurrent access, auto-detach on failure
+- Race detector verified
+
+### game/ratelimiter_test.go (NEW)
+**Quality**: Good
+- 6 tests covering login rate limiting
+- Tests record/clear, multiple users, concurrent access, context cancellation
+- Race detector verified
 
 ### storage/queue/queue_test.go
 **Quality**: Good
@@ -74,7 +92,8 @@ The codebase contains:
 
 ### game/queuestats_test.go
 **Quality**: Excellent
-- 25+ tests with thorough coverage
+- 29 tests with thorough coverage
+- 5 benchmarks for performance monitoring
 - Covers edge cases, bounds, concurrent access
 - Uses property-based testing patterns
 - No issues identified
@@ -112,10 +131,9 @@ The codebase contains:
 
 ### Short-term Improvements (Medium Priority)
 
-3. **Add unit tests for game package**: The `game/game_test.go` file only has benchmarks. Add unit tests for:
-   - Command parsing and routing
-   - Event handling logic
-   - State transitions
+3. **Add unit tests for game package**: ~~The `game/game_test.go` file only has benchmarks.~~ - PARTIALLY ADDRESSED
+   - Added: Username validation, password hashing, switchboard, rate limiter tests
+   - Remaining: Command parsing/routing, event handling, state transitions (complex, depend on storage/JS)
 
 4. **Replace fixed sleeps**: Convert `time.Sleep` calls to polling patterns in Test 20 and any other tests using fixed delays
 
@@ -131,9 +149,9 @@ The codebase contains:
 
 | Package | Test Files | Tests | Benchmarks | Quality |
 |---------|------------|-------|------------|---------|
-| integration_test | 2 | 31 sections | 0 | Good (issues noted) |
+| integration_test | 2 | 31 sections | 0 | Good |
 | js | 1 | 3 | 2 | Good |
-| game | 2 | 0 | 2 | **Gap: no unit tests** |
+| game | 5 | 49 | 9 | Good (improved) |
 | storage | 3 | 12 | 3 | Good |
 | storage/queue | 1 | 4 | 0 | Good |
 | storage/dbm | 1 | 6 | 0 | Good |
@@ -143,3 +161,4 @@ The codebase contains:
 
 - **December 2025**: Initial review completed
 - **December 2025**: Fixed Test 12 - replaced Go API usage with SSH-based `createObject` helper
+- **December 2025**: Added game package unit tests - validation, password, switchboard, rate limiter (20 new tests, 49 total)
