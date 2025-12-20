@@ -624,7 +624,20 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		Callbacks: callbacks,
 		Console:   consoleSwitchboard.Writer(object.GetId()),
 	}
+
+	// Time JavaScript execution for stats tracking
+	startTime := time.Now()
 	res, err := target.Run(ctx, caller, jsExecutionTimeout)
+	duration := time.Since(startTime)
+
+	// For timed-out executions, use canonical timeout value for consistent stats
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, js.ErrTimeout) {
+		duration = jsExecutionTimeout
+	}
+
+	// Record execution stats (always, even on error)
+	g.jsStats.RecordExecution(object.GetSourcePath(), object.GetId(), duration)
+
 	if err != nil {
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {

@@ -496,7 +496,191 @@ func (c *Connection) wizCommands() commands {
 			},
 		},
 		{
-			names: m("/flushstatus"),
+			names: m("/jsstats"),
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				js := c.game.jsStats
+
+				// Subcommands: summary (default), scripts, script, objects, slow, reset
+				subcmd := "summary"
+				if len(parts) >= 2 {
+					subcmd = parts[1]
+				}
+
+				switch subcmd {
+				case "summary":
+					g := js.GlobalSnapshot()
+					fmt.Fprintf(c.term, "JS Execution Statistics (uptime: %s)\n\n", g.Uptime.Round(time.Second))
+					fmt.Fprintf(c.term, "Total executions: %d\n", g.TotalExecs)
+					fmt.Fprintf(c.term, "Total JS time: %.1fs\n", g.TotalTimeMs/1000)
+					fmt.Fprintf(c.term, "Average time: %.1fms\n", g.AvgTimeMs)
+					fmt.Fprintf(c.term, "Slow executions: %d (%.2f%%)\n", g.TotalSlow, g.SlowPercent)
+					fmt.Fprintf(c.term, "\nExecution rates:\n")
+					fmt.Fprintf(c.term, "  Per second: %.2f\n", g.ExecRates.PerSecond)
+					fmt.Fprintf(c.term, "  Per minute: %.1f\n", g.ExecRates.PerMinute)
+					fmt.Fprintf(c.term, "  Per hour:   %.0f\n", g.ExecRates.PerHour)
+					fmt.Fprintf(c.term, "\nTime rates (JS seconds per wall second):\n")
+					fmt.Fprintf(c.term, "  Current: %.3fs/s (%.1f%% CPU)\n", g.TimeRates.PerSecond, g.TimeRates.PerSecond*100)
+					fmt.Fprintf(c.term, "  Per minute: %.1fs/m\n", g.TimeRates.PerMinute)
+					fmt.Fprintf(c.term, "  Per hour:   %.0fs/h\n", g.TimeRates.PerHour)
+
+				case "scripts":
+					sortBy := SortScriptByTime
+					if len(parts) >= 3 {
+						switch parts[2] {
+						case "time":
+							sortBy = SortScriptByTime
+						case "execs":
+							sortBy = SortScriptByExecs
+						case "slow":
+							sortBy = SortScriptBySlow
+						}
+					}
+					n := 20
+					if len(parts) >= 4 {
+						if parsed, err := strconv.Atoi(parts[3]); err == nil && parsed > 0 {
+							n = parsed
+						}
+					}
+					scripts := js.TopScripts(sortBy, n)
+					if len(scripts) == 0 {
+						fmt.Fprintln(c.term, "No scripts recorded.")
+						return nil
+					}
+					t := table.New("Source Path", "Execs", "Avg(ms)", "Max(ms)", "Slow%").WithWriter(c.term)
+					for _, script := range scripts {
+						t.AddRow(
+							script.SourcePath,
+							script.Executions,
+							fmt.Sprintf("%.1f", script.AvgTimeMs),
+							fmt.Sprintf("%.1f", script.MaxTimeMs),
+							fmt.Sprintf("%.1f", script.SlowPercent),
+						)
+					}
+					t.Print()
+
+				case "script":
+					if len(parts) < 3 {
+						fmt.Fprintln(c.term, "usage: /jsstats script <path>")
+						return nil
+					}
+					sourcePath := parts[2]
+					script := js.ScriptSnapshot(sourcePath)
+					if script == nil {
+						fmt.Fprintf(c.term, "No stats for script %q\n", sourcePath)
+						return nil
+					}
+					fmt.Fprintf(c.term, "Script: %s\n", script.SourcePath)
+					fmt.Fprintf(c.term, "Executions: %d\n", script.Executions)
+					fmt.Fprintf(c.term, "Time: avg=%.1fms, min=%.1fms, max=%.1fms\n",
+						script.AvgTimeMs, script.MinTimeMs, script.MaxTimeMs)
+					fmt.Fprintf(c.term, "Slow: %d (%.2f%%)\n", script.SlowCount, script.SlowPercent)
+					if !script.LastExecution.IsZero() {
+						fmt.Fprintf(c.term, "Last execution: %s\n", script.LastExecution.Format(time.RFC3339))
+					}
+					fmt.Fprintf(c.term, "\nExecution rates: %.2f/s, %.1f/m, %.0f/h\n",
+						script.ExecRates.PerSecond, script.ExecRates.PerMinute, script.ExecRates.PerHour)
+					fmt.Fprintf(c.term, "Time rates: %.3fs/s, %.1fs/m, %.0fs/h\n",
+						script.TimeRates.PerSecond, script.TimeRates.PerMinute, script.TimeRates.PerHour)
+					if len(script.ImportChain) > 1 {
+						fmt.Fprintln(c.term, "\nImport chain:")
+						for _, dep := range script.ImportChain {
+							fmt.Fprintf(c.term, "  %s\n", dep)
+						}
+					}
+
+				case "objects":
+					sortBy := SortObjectByTime
+					if len(parts) >= 3 {
+						switch parts[2] {
+						case "time":
+							sortBy = SortObjectByTime
+						case "execs":
+							sortBy = SortObjectByExecs
+						case "slow":
+							sortBy = SortObjectBySlow
+						}
+					}
+					n := 20
+					if len(parts) >= 4 {
+						if parsed, err := strconv.Atoi(parts[3]); err == nil && parsed > 0 {
+							n = parsed
+						}
+					}
+					objs := js.TopObjects(sortBy, n)
+					if len(objs) == 0 {
+						fmt.Fprintln(c.term, "No objects recorded.")
+						return nil
+					}
+					t := table.New("Object ID", "Source", "Execs", "Avg(ms)", "Max(ms)", "Slow%").WithWriter(c.term)
+					for _, obj := range objs {
+						// Truncate source path for display
+						src := obj.SourcePath
+						if len(src) > 20 {
+							src = "..." + src[len(src)-17:]
+						}
+						t.AddRow(
+							obj.ObjectID,
+							src,
+							obj.Executions,
+							fmt.Sprintf("%.1f", obj.AvgTimeMs),
+							fmt.Sprintf("%.1f", obj.MaxTimeMs),
+							fmt.Sprintf("%.1f", obj.SlowPercent),
+						)
+					}
+					t.Print()
+
+				case "slow":
+					n := 10
+					if len(parts) >= 3 {
+						if parsed, err := strconv.Atoi(parts[2]); err == nil && parsed > 0 {
+							n = parsed
+						}
+					}
+					recent := js.RecentSlowExecutions(n)
+					if len(recent) == 0 {
+						fmt.Fprintln(c.term, "No slow executions recorded.")
+						return nil
+					}
+					for _, rec := range recent {
+						fmt.Fprintf(c.term, "[%s] #%s %s %.1fms\n",
+							rec.Timestamp.Format("15:04:05"),
+							rec.ObjectID,
+							rec.SourcePath,
+							float64(rec.Duration.Milliseconds()))
+						if len(rec.ImportChain) > 1 {
+							fmt.Fprintf(c.term, "  Imports: ")
+							for i, dep := range rec.ImportChain[1:] { // Skip first (the source itself)
+								if i > 0 {
+									fmt.Fprint(c.term, ", ")
+								}
+								fmt.Fprint(c.term, dep)
+							}
+							fmt.Fprintln(c.term)
+						}
+					}
+
+				case "reset":
+					js.Reset()
+					fmt.Fprintln(c.term, "JS statistics reset.")
+
+				default:
+					fmt.Fprintln(c.term, "usage: /jsstats [subcommand]")
+					fmt.Fprintln(c.term, "  summary                  Show global statistics (default)")
+					fmt.Fprintln(c.term, "  scripts [sort] [n]       Show top n scripts (sort: time|execs|slow)")
+					fmt.Fprintln(c.term, "  script <path>            Show stats for specific script")
+					fmt.Fprintln(c.term, "  objects [sort] [n]       Show top n objects (sort: time|execs|slow)")
+					fmt.Fprintln(c.term, "  slow [n]                 Show n most recent slow executions (default 10)")
+					fmt.Fprintln(c.term, "  reset                    Clear all statistics")
+				}
+				return nil
+			},
+		},
+		{
+			names: m("/flushstats"),
 			f: func(c *Connection, s string) error {
 				health := c.game.storage.FlushHealth()
 				if health.Healthy() {

@@ -1244,6 +1244,120 @@ addCallback('created', ['emit'], (msg) => {
 
 	fmt.Println("  /queuestats wizard command: OK")
 
+	// === Test 17b: /jsstats wizard command ===
+	fmt.Println("Testing /jsstats wizard command...")
+
+	// Test /jsstats summary (default)
+	if err := tc.sendLine("/jsstats"); err != nil {
+		return fmt.Errorf("/jsstats command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/jsstats command did not complete: %q", output)
+	}
+	// Verify output shows expected fields
+	if !strings.Contains(output, "JS Execution Statistics") {
+		return fmt.Errorf("/jsstats should show 'JS Execution Statistics': %q", output)
+	}
+	if !strings.Contains(output, "Total executions:") {
+		return fmt.Errorf("/jsstats should show 'Total executions:': %q", output)
+	}
+	if !strings.Contains(output, "Execution rates:") {
+		return fmt.Errorf("/jsstats should show 'Execution rates:': %q", output)
+	}
+	if !strings.Contains(output, "Time rates") {
+		return fmt.Errorf("/jsstats should show 'Time rates': %q", output)
+	}
+
+	// Test /jsstats summary explicitly
+	if err := tc.sendLine("/jsstats summary"); err != nil {
+		return fmt.Errorf("/jsstats summary command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/jsstats summary did not complete: %q", output)
+	}
+	if !strings.Contains(output, "JS Execution Statistics") {
+		return fmt.Errorf("/jsstats summary should show 'JS Execution Statistics': %q", output)
+	}
+
+	// Test /jsstats scripts
+	if err := tc.sendLine("/jsstats scripts"); err != nil {
+		return fmt.Errorf("/jsstats scripts command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/jsstats scripts did not complete: %q", output)
+	}
+	// Either shows "No scripts recorded." or a table with Source Path header
+	if !strings.Contains(output, "No scripts") && !strings.Contains(output, "Source Path") {
+		return fmt.Errorf("/jsstats scripts should show scripts or 'No scripts': %q", output)
+	}
+
+	// Test /jsstats objects
+	if err := tc.sendLine("/jsstats objects"); err != nil {
+		return fmt.Errorf("/jsstats objects command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/jsstats objects did not complete: %q", output)
+	}
+	// Either shows "No objects recorded." or a table with Object ID header
+	if !strings.Contains(output, "No objects") && !strings.Contains(output, "Object ID") {
+		return fmt.Errorf("/jsstats objects should show objects or 'No objects': %q", output)
+	}
+
+	// Test /jsstats slow
+	if err := tc.sendLine("/jsstats slow"); err != nil {
+		return fmt.Errorf("/jsstats slow command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/jsstats slow did not complete: %q", output)
+	}
+	// Either shows "No slow executions recorded." or slow execution records
+	if !strings.Contains(output, "No slow executions") && !strings.Contains(output, "]") {
+		return fmt.Errorf("/jsstats slow should show slow execs or 'No slow executions': %q", output)
+	}
+
+	// Test /jsstats reset
+	if err := tc.sendLine("/jsstats reset"); err != nil {
+		return fmt.Errorf("/jsstats reset command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/jsstats reset did not complete: %q", output)
+	}
+	if !strings.Contains(output, "JS statistics reset") {
+		return fmt.Errorf("/jsstats reset should confirm reset: %q", output)
+	}
+
+	// Verify reset worked by checking summary shows zero executions
+	if err := tc.sendLine("/jsstats summary"); err != nil {
+		return fmt.Errorf("/jsstats summary after reset: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/jsstats summary after reset did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Total executions: 0") {
+		return fmt.Errorf("/jsstats summary after reset should show 'Total executions: 0': %q", output)
+	}
+
+	// Test /jsstats help (unknown subcommand)
+	if err := tc.sendLine("/jsstats help"); err != nil {
+		return fmt.Errorf("/jsstats help command: %w", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/jsstats help did not complete: %q", output)
+	}
+	if !strings.Contains(output, "usage:") {
+		return fmt.Errorf("/jsstats help should show usage: %q", output)
+	}
+
+	fmt.Println("  /jsstats wizard command: OK")
+
 	// === Test 18: Room and sibling action handlers ===
 	fmt.Println("Testing room and sibling action handlers...")
 

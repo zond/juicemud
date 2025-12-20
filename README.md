@@ -248,7 +248,7 @@ Objects only receive events they've registered callbacks for with the matching t
 - Object management: `/create`, `/inspect`, `/move`, `/remove`, `/enter`, `/exit`
 - Debugging: `/debug`, `/undebug`
 - Source files: `/ls`
-- Monitoring: `/queuestats`, `/flushstatus`
+- Monitoring: `/queuestats`, `/jsstats`, `/flushstats`
 - Admin: `/addwiz`, `/delwiz`
 
 ## Dependencies

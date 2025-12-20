@@ -118,6 +118,7 @@ func initialObjects() map[string]*structs.ObjectDO {
 type Game struct {
 	storage          *storage.Storage
 	queueStats       *QueueStats
+	jsStats          *JSStats
 	loginRateLimiter *loginRateLimiter
 	workChan         chan *structs.Event // Unbuffered channel for event handoff to workers
 	workerWG         sync.WaitGroup      // Tracks in-flight event workers
@@ -176,6 +177,7 @@ func New(ctx context.Context, s *storage.Storage) (*Game, error) {
 	g := &Game{
 		storage:          s,
 		queueStats:       NewQueueStats(ctx),
+		jsStats:          NewJSStats(ctx, s.ImportResolver()),
 		loginRateLimiter: newLoginRateLimiter(ctx),
 		workChan:         make(chan *structs.Event), // Unbuffered for synchronous handoff
 	}

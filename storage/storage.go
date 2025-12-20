@@ -105,6 +105,11 @@ func (s *Storage) Queue() *queue.Queue {
 	return s.queue
 }
 
+// ImportResolver returns the import resolver for JavaScript source imports.
+func (s *Storage) ImportResolver() *imports.Resolver {
+	return s.resolver
+}
+
 // FlushHealth returns the current health state of the object flush loop.
 func (s *Storage) FlushHealth() dbm.FlushHealth {
 	return s.objects.FlushHealth()
