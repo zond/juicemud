@@ -60,6 +60,12 @@ func (r *TimeRateStats) update(currentTotalNs uint64) {
 		return
 	}
 
+	// Guard against underflow (shouldn't happen but protects against bugs)
+	if currentTotalNs < r.prevTotalNs {
+		r.prevTotalNs = currentTotalNs
+		return
+	}
+
 	// Calculate delta time in seconds
 	deltaNs := currentTotalNs - r.prevTotalNs
 	deltaSec := float64(deltaNs) / 1e9
@@ -280,7 +286,10 @@ func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Dur
 		// Default to just the source path if resolver is nil or not cached
 		importChain := []string{sourcePath}
 		if s.resolver != nil {
-			importChain = s.resolver.GetCachedDeps(sourcePath)
+			// Copy the slice to avoid referencing cache internals
+			cached := s.resolver.GetCachedDeps(sourcePath)
+			importChain = make([]string, len(cached))
+			copy(importChain, cached)
 		}
 		s.recentSlow[s.slowIndex] = SlowExecutionRecord{
 			Timestamp:   now,
@@ -598,7 +607,10 @@ func (s *JSStats) scriptSnapshotLocked(path string, script *ScriptStats) ScriptS
 
 	var importChain []string
 	if s.resolver != nil {
-		importChain = s.resolver.GetCachedDeps(path)
+		// Copy the slice to avoid referencing cache internals
+		cached := s.resolver.GetCachedDeps(path)
+		importChain = make([]string, len(cached))
+		copy(importChain, cached)
 	}
 
 	return ScriptSnapshot{

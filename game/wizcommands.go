@@ -502,7 +502,7 @@ func (c *Connection) wizCommands() commands {
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				js := c.game.jsStats
+				jsStats := c.game.jsStats
 
 				// Subcommands: summary (default), scripts, script, objects, slow, reset
 				subcmd := "summary"
@@ -512,7 +512,7 @@ func (c *Connection) wizCommands() commands {
 
 				switch subcmd {
 				case "summary":
-					g := js.GlobalSnapshot()
+					g := jsStats.GlobalSnapshot()
 					fmt.Fprintf(c.term, "JS Execution Statistics (uptime: %s)\n\n", g.Uptime.Round(time.Second))
 					fmt.Fprintf(c.term, "Total executions: %d\n", g.TotalExecs)
 					fmt.Fprintf(c.term, "Total JS time: %.1fs\n", g.TotalTimeMs/1000)
@@ -545,7 +545,7 @@ func (c *Connection) wizCommands() commands {
 							n = parsed
 						}
 					}
-					scripts := js.TopScripts(sortBy, n)
+					scripts := jsStats.TopScripts(sortBy, n)
 					if len(scripts) == 0 {
 						fmt.Fprintln(c.term, "No scripts recorded.")
 						return nil
@@ -568,7 +568,7 @@ func (c *Connection) wizCommands() commands {
 						return nil
 					}
 					sourcePath := parts[2]
-					script := js.ScriptSnapshot(sourcePath)
+					script := jsStats.ScriptSnapshot(sourcePath)
 					if script == nil {
 						fmt.Fprintf(c.term, "No stats for script %q\n", sourcePath)
 						return nil
@@ -610,7 +610,7 @@ func (c *Connection) wizCommands() commands {
 							n = parsed
 						}
 					}
-					objs := js.TopObjects(sortBy, n)
+					objs := jsStats.TopObjects(sortBy, n)
 					if len(objs) == 0 {
 						fmt.Fprintln(c.term, "No objects recorded.")
 						return nil
@@ -640,7 +640,7 @@ func (c *Connection) wizCommands() commands {
 							n = parsed
 						}
 					}
-					recent := js.RecentSlowExecutions(n)
+					recent := jsStats.RecentSlowExecutions(n)
 					if len(recent) == 0 {
 						fmt.Fprintln(c.term, "No slow executions recorded.")
 						return nil
@@ -664,7 +664,7 @@ func (c *Connection) wizCommands() commands {
 					}
 
 				case "reset":
-					js.Reset()
+					jsStats.Reset()
 					fmt.Fprintln(c.term, "JS statistics reset.")
 
 				default:
