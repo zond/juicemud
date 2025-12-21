@@ -248,10 +248,9 @@ func (s *Server) Game() *game.Game {
 // It runs until the context is cancelled.
 //
 // SECURITY NOTE: This socket is intentionally unauthenticated. Access control is
-// delegated to the filesystem - the socket is created with default permissions,
-// and system administrators are responsible for securing it appropriately (e.g.,
-// restrictive directory permissions, running as a dedicated user). This is a
-// standard pattern for local admin sockets (similar to Docker, MySQL, PostgreSQL).
+// enforced via filesystem permissions - the socket is created with 0600 permissions
+// (owner read/write only). This is a standard pattern for local admin sockets
+// (similar to Docker, MySQL, PostgreSQL).
 func (s *Server) startControlSocket(ctx context.Context) error {
 	socketPath := s.config.ControlSocketPath()
 
@@ -266,6 +265,11 @@ func (s *Server) startControlSocket(ctx context.Context) error {
 	}
 	defer listener.Close()
 	defer os.Remove(socketPath)
+
+	// Restrict socket permissions to owner only (0600)
+	if err := os.Chmod(socketPath, 0600); err != nil {
+		return juicemud.WithStack(err)
+	}
 
 	log.Printf("Control socket listening on %s", socketPath)
 
