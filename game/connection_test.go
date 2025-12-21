@@ -319,6 +319,75 @@ func TestSetPath(t *testing.T) {
 			value:   "new",
 			wantErr: true,
 		},
+		{
+			name:    "error on empty path",
+			initial: map[string]any{},
+			path:    "",
+			value:   "value",
+			wantErr: true,
+		},
+		{
+			name:    "error on dot path",
+			initial: map[string]any{},
+			path:    ".",
+			value:   "value",
+			wantErr: true,
+		},
+		{
+			name:    "error on path too deep",
+			initial: map[string]any{},
+			path:    "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r.s.t.u", // 21 levels > maxPathDepth
+			value:   "deep",
+			wantErr: true,
+		},
+		{
+			name:    "max depth allowed",
+			initial: map[string]any{},
+			path:    "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r.s.t", // 20 levels = maxPathDepth
+			value:   "deep",
+			wantErr: false,
+			wantMap: map[string]any{
+				"a": map[string]any{
+					"b": map[string]any{
+						"c": map[string]any{
+							"d": map[string]any{
+								"e": map[string]any{
+									"f": map[string]any{
+										"g": map[string]any{
+											"h": map[string]any{
+												"i": map[string]any{
+													"j": map[string]any{
+														"k": map[string]any{
+															"l": map[string]any{
+																"m": map[string]any{
+																	"n": map[string]any{
+																		"o": map[string]any{
+																			"p": map[string]any{
+																				"q": map[string]any{
+																					"r": map[string]any{
+																						"s": map[string]any{
+																							"t": "deep",
+																						},
+																					},
+																				},
+																			},
+																		},
+																	},
+																},
+															},
+														},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -97,6 +97,16 @@ type AuditWizardRevoke struct {
 
 func (AuditWizardRevoke) auditData() {}
 
+// AuditServerConfigChange is logged when the server configuration is modified.
+type AuditServerConfigChange struct {
+	ChangedBy AuditRef `json:"changed_by"` // wizard who made the change
+	Path      string   `json:"path"`       // dot-separated path that was changed
+	OldValue  string   `json:"old_value"`  // JSON representation of old value
+	NewValue  string   `json:"new_value"`  // JSON representation of new value
+}
+
+func (AuditServerConfigChange) auditData() {}
+
 // NewAuditLogger creates a new audit logger writing to the specified file
 // with automatic log rotation.
 func NewAuditLogger(path string) *AuditLogger {

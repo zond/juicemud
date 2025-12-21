@@ -12,6 +12,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rodaine/table"
 	"github.com/zond/juicemud"
+	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 
 	goccy "github.com/goccy/go-json"
@@ -797,13 +798,33 @@ func (c *Connection) wizCommands() commands {
 					return nil
 				}
 
-				// Special validation for root object (server config)
+				// Special validation and audit logging for root object (server config)
 				if target.GetId() == "" {
 					var config ServerConfig
 					if err := goccy.Unmarshal(newState, &config); err != nil {
 						fmt.Fprintf(c.term, "Error: invalid server config: %v\n", err)
 						return nil
 					}
+					// Validate spawn location if set
+					if config.Spawn.Container != "" {
+						if _, err := c.game.storage.AccessObject(c.ctx, config.Spawn.Container, nil); err != nil {
+							fmt.Fprintf(c.term, "Warning: spawn location %q does not exist\n", config.Spawn.Container)
+						}
+					}
+					// Audit log the config change
+					oldValue := navigatePath(func() map[string]any {
+						var old map[string]any
+						goccy.Unmarshal([]byte(state), &old)
+						return old
+					}(), path)
+					oldJSON, _ := goccy.Marshal(oldValue)
+					newJSON, _ := goccy.Marshal(value)
+					c.game.storage.AuditLog(c.ctx, "SERVER_CONFIG_CHANGE", storage.AuditServerConfigChange{
+						ChangedBy: storage.Ref(c.user.Id, c.user.Name),
+						Path:      path,
+						OldValue:  string(oldJSON),
+						NewValue:  string(newJSON),
+					})
 				}
 
 				// Update the object
@@ -837,10 +858,19 @@ func navigatePath(data map[string]any, path string) any {
 	return current
 }
 
+// maxPathDepth limits how deeply nested paths can be to prevent DoS.
+const maxPathDepth = 20
+
 // setPath sets a value at a dot-separated path in a map.
 // Creates intermediate maps as needed.
 func setPath(data map[string]any, path string, value any) error {
+	if path == "" || path == "." {
+		return errors.New("path cannot be empty (use root replacement for entire state)")
+	}
 	parts := strings.Split(path, ".")
+	if len(parts) > maxPathDepth {
+		return fmt.Errorf("path too deep (max %d levels)", maxPathDepth)
+	}
 	current := data
 	for i, part := range parts[:len(parts)-1] {
 		next, exists := current[part]
