@@ -125,16 +125,19 @@ func (s *Server) StartWithListener(ctx context.Context, sshLn net.Listener) erro
 }
 
 func (s *Server) startWithListener(ctx context.Context, sshLn net.Listener) error {
-	// Create cancellable context - defer cancel ensures cleanup on any exit
+	// Create cancellable context for coordinating shutdown
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	// Initialize storage
 	store, err := storage.New(ctx, s.config.Dir)
 	if err != nil {
+		cancel()
 		return juicemud.WithStack(err)
 	}
+	// IMPORTANT: defer cancel() AFTER defer store.Close() so cancel runs FIRST.
+	// Close() waits for flush goroutines to exit, which requires ctx cancellation.
 	defer store.Close()
+	defer cancel()
 
 	// Resolve sources path (follows symlinks)
 	sourcesPath := s.config.SourcesPath
