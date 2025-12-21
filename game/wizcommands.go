@@ -798,8 +798,9 @@ func (c *Connection) wizCommands() commands {
 					return nil
 				}
 
-				// Special validation and audit logging for root object (server config)
-				if target.GetId() == "" {
+				// Special validation for root object (server config)
+				isServerConfig := target.GetId() == ""
+				if isServerConfig {
 					var config ServerConfig
 					if err := goccy.Unmarshal(newState, &config); err != nil {
 						fmt.Fprintf(c.term, "Error: invalid server config: %v\n", err)
@@ -811,14 +812,26 @@ func (c *Connection) wizCommands() commands {
 							fmt.Fprintf(c.term, "Warning: spawn location %q does not exist\n", config.Spawn.Container)
 						}
 					}
-					// Audit log the config change
+				}
+
+				// Update the object
+				target.SetState(string(newState))
+
+				// Audit log server config changes after successful update
+				if isServerConfig {
 					oldValue := navigatePath(func() map[string]any {
 						var old map[string]any
 						goccy.Unmarshal([]byte(state), &old)
 						return old
 					}(), path)
-					oldJSON, _ := goccy.Marshal(oldValue)
-					newJSON, _ := goccy.Marshal(value)
+					oldJSON, err := goccy.Marshal(oldValue)
+					if err != nil {
+						panic(fmt.Sprintf("audit log marshal oldValue failed: %v", err))
+					}
+					newJSON, err := goccy.Marshal(value)
+					if err != nil {
+						panic(fmt.Sprintf("audit log marshal newValue failed: %v", err))
+					}
 					c.game.storage.AuditLog(c.ctx, "SERVER_CONFIG_CHANGE", storage.AuditServerConfigChange{
 						ChangedBy: storage.Ref(c.user.Id, c.user.Name),
 						Path:      path,
@@ -827,8 +840,6 @@ func (c *Connection) wizCommands() commands {
 					})
 				}
 
-				// Update the object
-				target.SetState(string(newState))
 				fmt.Fprintln(c.term, "OK")
 				return nil
 			}),
