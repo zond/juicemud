@@ -556,7 +556,11 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 	for _, exit := range loc.GetExits() {
 		if exit.Name() == name {
 			if structs.Challenges(exit.UseChallenges).Check(obj, loc.GetId()) > 0 {
-				return true, juicemud.WithStack(c.game.moveObject(c.ctx, obj, exit.Destination))
+				if err := c.game.moveObject(c.ctx, obj, exit.Destination); err != nil {
+					return true, juicemud.WithStack(err)
+				}
+				// Auto-look after moving through exit
+				return true, c.look()
 			}
 		}
 	}
