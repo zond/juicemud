@@ -605,15 +605,22 @@ func (c *Connection) Process() error {
 			return juicemud.WithStack(err)
 		}
 		words := whitespacePattern.Split(line, -1)
-		if len(words) == 0 {
+		if len(words) == 0 || words[0] == "" {
 			continue
 		}
+		handled := false
 		for _, commands := range commandSets {
 			if found, err := commands.attempt(c, words[0], line); err != nil {
 				fmt.Fprintln(c.term, err)
+				handled = true
+				break
 			} else if found {
+				handled = true
 				break
 			}
+		}
+		if !handled {
+			fmt.Fprintf(c.term, "Unknown command: %s\n", words[0])
 		}
 	}
 }
