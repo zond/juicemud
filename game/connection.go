@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gliderlabs/ssh"
+	"github.com/goccy/go-json"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/lang"
@@ -567,7 +568,11 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		return false, juicemud.WithStack(err)
 	}
 
-	// Check for direction alias (e.g., "n" -> "north")
+	// Check for direction alias (e.g., "n" -> "north").
+	// We match both the original name AND the expanded alias, so:
+	// - "n" matches exits named "n" or "north"
+	// - "north" matches exits named "north"
+	// This allows short aliases while still supporting custom exit names.
 	expandedName := name
 	if alias, ok := directionAliases[name]; ok {
 		expandedName = alias
@@ -575,13 +580,34 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 
 	for _, exit := range loc.GetExits() {
 		if exit.Name() == name || exit.Name() == expandedName {
-			if structs.Challenges(exit.UseChallenges).Check(obj, loc.GetId()) > 0 {
+			score, primaryFailure := structs.Challenges(exit.UseChallenges).CheckWithDetails(obj, loc.GetId())
+			if score > 0 {
 				if err := c.game.moveObject(c.ctx, obj, exit.Destination); err != nil {
 					return true, juicemud.WithStack(err)
 				}
 				// Auto-look after moving through exit
 				return true, c.look()
 			}
+			// Challenge failed - print message if available
+			if primaryFailure != nil && primaryFailure.Message != "" {
+				fmt.Fprintln(c.term, primaryFailure.Message)
+			}
+			// Emit exitFailed to container so room JS can handle advanced scenarios.
+			// Use the queue to ensure the canonical object is used and to avoid blocking.
+			exitFailedContent := map[string]any{
+				"subject":        obj,
+				"exit":           exit,
+				"score":          score,
+				"primaryFailure": primaryFailure,
+			}
+			exitFailedJSON, err := json.Marshal(exitFailedContent)
+			if err != nil {
+				return true, juicemud.WithStack(err)
+			}
+			if err := c.game.emitJSON(c.ctx, c.game.storage.Queue().After(0), loc.GetId(), "exitFailed", string(exitFailedJSON)); err != nil {
+				return true, juicemud.WithStack(err)
+			}
+			return true, nil
 		}
 	}
 
@@ -640,7 +666,7 @@ func (c *Connection) Process() error {
 			}
 		}
 		if !handled {
-			fmt.Fprintf(c.term, "Unknown command: %s\n", words[0])
+			fmt.Fprintf(c.term, "Unknown command: %q\n", words[0])
 		}
 	}
 }

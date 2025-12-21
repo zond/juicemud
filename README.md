@@ -206,6 +206,21 @@ addCallback('transmitted', ['emit'], (msg) => {
 });
 ```
 
+3. **`exitFailed`** events are sent to the room (container) when someone fails a skill challenge on an exit. The challenge's `Message` field (if set) is automatically printed to the user who failed. Use the event to announce the failure to others in the room:
+```javascript
+addCallback('exitFailed', ['emit'], (msg) => {
+    // msg.subject: the object that failed the exit challenge
+    // msg.exit: the exit that was attempted
+    // msg.score: the total challenge score (negative = failed)
+    // msg.primaryFailure: the challenge that failed worst (has Skill, Level, Message)
+    var name = msg.subject.Descriptions[0].Short;
+    var exitName = msg.exit.Descriptions[0].Short;
+    emitToLocation(getLocation(), 'announce', {
+        message: name + ' tries to go ' + exitName + ', but fails miserably.'
+    });
+});
+```
+
 **Object Identification**: Commands that target objects (like `look`, action commands) use pattern matching against Short descriptions:
 - **Word matching**: `tome` matches "dusty tome", `torch` matches "burning torch"
 - **Glob patterns**: `dust*` matches "dusty", `*orch` matches "torch"
@@ -235,6 +250,7 @@ addCallback('tick', ['emit'], (msg) => {
 **Player Commands**: All users have access to:
 - `look` or `l`: View current room, or `look <target>` to examine a specific object
 - `scan`: View current room and neighboring rooms via exits
+- Direction shortcuts: `n`, `s`, `e`, `w`, `ne`, `nw`, `se`, `sw`, `u`, `d` expand to `north`, `south`, etc. when matching exits
 
 **Command Resolution**: When a player types a command, it's processed in this order (stopping at the first handler that returns a truthy value):
 1. **Player's object** receives it as a `command` event (if registered via `addCallback('name', ['command'], ...)`)

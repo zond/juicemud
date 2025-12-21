@@ -379,6 +379,81 @@ func TestMulti(t *testing.T) {
 	}), 0.09, 0.02)
 }
 
+func TestCheckWithDetails(t *testing.T) {
+	// Create a test object with some skills
+	obj := &Object{
+		Unsafe: &ObjectDO{
+			Id: "tester",
+			Skills: map[string]Skill{
+				"climbing": {Name: "climbing", Practical: 50, Theoretical: 50},
+				"jumping":  {Name: "jumping", Practical: 10, Theoretical: 10},
+			},
+		},
+	}
+
+	t.Run("empty challenges returns success", func(t *testing.T) {
+		challenges := Challenges{}
+		score, failure := challenges.CheckWithDetails(obj, "target")
+		if score != 1.0 {
+			t.Errorf("expected score 1.0, got %v", score)
+		}
+		if failure != nil {
+			t.Errorf("expected nil failure, got %v", failure)
+		}
+	})
+
+	t.Run("easy challenge returns success with nil failure", func(t *testing.T) {
+		// Reset skills
+		obj.Unsafe.Skills["climbing"] = Skill{Name: "climbing", Practical: 50, Theoretical: 50}
+
+		// Very easy challenge (level 0 vs skill 50) - should almost always pass
+		challenges := Challenges{{Skill: "climbing", Level: 0, Message: "Too slippery"}}
+		score, failure := challenges.CheckWithDetails(obj, "target")
+		if score <= 0 {
+			t.Errorf("expected positive score for easy challenge, got %v", score)
+		}
+		if failure != nil {
+			t.Errorf("expected nil failure on success, got %v", failure)
+		}
+	})
+
+	t.Run("hard challenge returns failure with primary failure", func(t *testing.T) {
+		// Reset skills
+		obj.Unsafe.Skills["climbing"] = Skill{Name: "climbing", Practical: 10, Theoretical: 10}
+
+		// Very hard challenge (level 100 vs skill 10) - should almost always fail
+		challenges := Challenges{{Skill: "climbing", Level: 100, Message: "Too slippery"}}
+		score, failure := challenges.CheckWithDetails(obj, "target")
+		if score > 0 {
+			t.Errorf("expected negative score for hard challenge, got %v", score)
+		}
+		if failure == nil {
+			t.Errorf("expected non-nil failure on failure")
+		} else if failure.Message != "Too slippery" {
+			t.Errorf("expected failure message 'Too slippery', got %q", failure.Message)
+		}
+	})
+
+	t.Run("primary failure is the worst scoring challenge", func(t *testing.T) {
+		// Reset skills - climbing is good, jumping is bad
+		obj.Unsafe.Skills["climbing"] = Skill{Name: "climbing", Practical: 50, Theoretical: 50}
+		obj.Unsafe.Skills["jumping"] = Skill{Name: "jumping", Practical: 5, Theoretical: 5}
+
+		// Two challenges: easy climbing (will pass), hard jumping (will fail badly)
+		challenges := Challenges{
+			{Skill: "climbing", Level: 10, Message: "Slippery"},
+			{Skill: "jumping", Level: 100, Message: "Too high"},
+		}
+		_, failure := challenges.CheckWithDetails(obj, "target")
+		// The jumping challenge should be the primary failure (worst score)
+		if failure == nil {
+			t.Errorf("expected non-nil failure")
+		} else if failure.Skill != "jumping" {
+			t.Errorf("expected primary failure to be 'jumping', got %q", failure.Skill)
+		}
+	})
+}
+
 func TestLevel(t *testing.T) {
 	u := skillUse{
 		user: "a",

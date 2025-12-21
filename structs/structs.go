@@ -202,14 +202,32 @@ func (c Challenges) Map() map[string]Challenge {
 // Check sums results of all challenges. Positive = success, negative = failure.
 // Empty challenges return 1.0 (auto-success).
 func (c Challenges) Check(challenger *Object, targetID string) float64 {
+	score, _ := c.CheckWithDetails(challenger, targetID)
+	return score
+}
+
+// CheckWithDetails is like Check but also returns the primary failure on failure.
+// Returns (score, nil) on success, or (score, primaryFailure) on failure.
+// The primary failure is the challenge with the most negative individual result.
+func (c Challenges) CheckWithDetails(challenger *Object, targetID string) (float64, *Challenge) {
 	if len(c) == 0 {
-		return 1.0
+		return 1.0, nil
 	}
 	result := 0.0
-	for _, challenge := range c {
-		result += challenge.Check(challenger, targetID)
+	var primaryFailure *Challenge
+	worstScore := 0.0
+	for i := range c {
+		score := c[i].Check(challenger, targetID)
+		result += score
+		if score < worstScore {
+			worstScore = score
+			primaryFailure = &c[i]
+		}
 	}
-	return result
+	if result > 0 {
+		return result, nil
+	}
+	return result, primaryFailure
 }
 
 type Descriptions []Description

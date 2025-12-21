@@ -2818,5 +2818,124 @@ setDescriptions([{Short: 'dog (sleeping)'}]);
 
 	fmt.Println("  JavaScript imports: OK")
 
+	// === Test 35: exitFailed event ===
+	fmt.Println("Testing exitFailed event...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for exitFailed: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter genesis for exitFailed did not complete")
+	}
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		return fmt.Errorf("should be in genesis for exitFailed test")
+	}
+
+	// Create a room that:
+	// 1. Has an exit with UseChallenges and a Message
+	// 2. Registers callback for 'exitFailed' to update description
+	exitFailedRoomSource := `// Room for testing exitFailed event
+setDescriptions([{
+	Short: 'Exit Failed Test Room (idle)',
+	Unique: true,
+	Long: 'A room for testing the exitFailed event.',
+}]);
+setExits([
+	{
+		Descriptions: [{Short: 'out'}],
+		Destination: 'genesis',
+	},
+	{
+		Descriptions: [{Short: 'blocked'}],
+		Destination: 'genesis',
+		UseChallenges: [{Skill: 'telekinesis', Level: 100, Message: 'The door remains firmly shut.'}],
+	},
+]);
+addCallback('exitFailed', ['emit'], (msg) => {
+	// Update room description to confirm we received the event
+	var exitName = msg.exit && msg.exit.Descriptions && msg.exit.Descriptions[0] ? msg.exit.Descriptions[0].Short : 'unknown';
+	var subjectId = msg.subject && msg.subject.Id ? msg.subject.Id : 'unknown';
+	setDescriptions([{
+		Short: 'Exit Failed Test Room (saw: ' + exitName + ', by: ' + subjectId.substring(0, 8) + ')',
+		Unique: true,
+		Long: 'A room for testing the exitFailed event.',
+	}]);
+});
+`
+	if err := ts.WriteSource("/exitfailed_room.js", exitFailedRoomSource); err != nil {
+		return fmt.Errorf("failed to create /exitfailed_room.js: %w", err)
+	}
+
+	// Create the room
+	exitFailedRoomID, err := tc.createObject("/exitfailed_room.js")
+	if err != nil {
+		return fmt.Errorf("create exitfailed_room: %w", err)
+	}
+
+	// Enter the room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", exitFailedRoomID)); err != nil {
+		return fmt.Errorf("/enter exitfailed_room: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter exitfailed_room did not complete")
+	}
+	if !tc.waitForLocation("", exitFailedRoomID, defaultWaitTimeout) {
+		return fmt.Errorf("user did not move to exitfailed_room")
+	}
+
+	// Verify initial room description
+	output, ok = tc.waitForLookMatch("Exit Failed Test Room (idle)", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("look did not show initial exitfailed room description: %q", output)
+	}
+
+	// Try to use the blocked exit (should fail - no telekinesis skill)
+	output, ok = tc.sendCommand("blocked", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("blocked exit command did not complete")
+	}
+
+	// Verify the challenge message was printed
+	if !strings.Contains(output, "The door remains firmly shut.") {
+		return fmt.Errorf("blocked exit should print challenge message: %q", output)
+	}
+
+	// Verify user is still in the room
+	selfInspect, err = tc.inspect("")
+	if err != nil {
+		return fmt.Errorf("failed to inspect self after exitFailed: %w", err)
+	}
+	if selfInspect.GetLocation() != exitFailedRoomID {
+		return fmt.Errorf("user should still be in exitfailed_room after failed exit, but is in %q", selfInspect.GetLocation())
+	}
+
+	// Wait for the room's description to change (confirms exitFailed event was received)
+	output, ok = tc.waitForLookMatch("Exit Failed Test Room (saw: blocked", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("room should have received exitFailed event and updated description: %q", output)
+	}
+
+	// Cleanup: exit back to genesis
+	if err := tc.sendLine("out"); err != nil {
+		return fmt.Errorf("out exit command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("out exit command did not complete")
+	}
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		return fmt.Errorf("user did not move to genesis via 'out' exit")
+	}
+
+	// Remove the test room
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", exitFailedRoomID)); err != nil {
+		return fmt.Errorf("/remove exitfailed_room: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/remove exitfailed_room did not complete")
+	}
+
+	fmt.Println("  exitFailed event: OK")
+
 	return nil
 }
