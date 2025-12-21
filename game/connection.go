@@ -510,6 +510,20 @@ func (c *Connection) basicCommands() commands {
 
 var (
 	whitespacePattern = regexp.MustCompile(`\s+`)
+
+	// directionAliases maps short direction commands to their full exit names
+	directionAliases = map[string]string{
+		"n":  "north",
+		"s":  "south",
+		"e":  "east",
+		"w":  "west",
+		"ne": "northeast",
+		"nw": "northwest",
+		"se": "southeast",
+		"sw": "southwest",
+		"u":  "up",
+		"d":  "down",
+	}
 )
 
 type objectAttempter struct {
@@ -553,8 +567,14 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		return false, juicemud.WithStack(err)
 	}
 
+	// Check for direction alias (e.g., "n" -> "north")
+	expandedName := name
+	if alias, ok := directionAliases[name]; ok {
+		expandedName = alias
+	}
+
 	for _, exit := range loc.GetExits() {
-		if exit.Name() == name {
+		if exit.Name() == name || exit.Name() == expandedName {
 			if structs.Challenges(exit.UseChallenges).Check(obj, loc.GetId()) > 0 {
 				if err := c.game.moveObject(c.ctx, obj, exit.Destination); err != nil {
 					return true, juicemud.WithStack(err)
