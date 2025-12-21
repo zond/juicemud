@@ -133,10 +133,24 @@ func (s *Server) startWithListener(ctx context.Context, sshLn net.Listener) erro
 	}
 	resolvedSourcesDir, err := storage.ResolveSourcePath(s.config.Dir, sourcesPath)
 	if err != nil {
-		// If symlink doesn't exist yet, fall back to default src/ directory
-		// This handles first-time startup before any versions are created
-		log.Printf("Could not resolve sources path %q, using default: %v", sourcesPath, err)
-		resolvedSourcesDir = store.SourcesDir()
+		// Symlink doesn't exist yet - set up versioned directory structure on first startup
+		srcDir := filepath.Join(s.config.Dir, "src")
+		versionDir := filepath.Join(srcDir, "v0.1.0")
+		symlinkPath := filepath.Join(srcDir, "current")
+
+		// Create the versioned directory
+		if err := os.MkdirAll(versionDir, 0755); err != nil {
+			return juicemud.WithStack(err)
+		}
+
+		// Create the symlink: src/current -> v0.1.0
+		if err := os.Symlink("v0.1.0", symlinkPath); err != nil {
+			return juicemud.WithStack(err)
+		}
+
+		resolvedSourcesDir = versionDir
+		store.SetSourcesDir(resolvedSourcesDir)
+		log.Printf("Created sources directory structure: %s -> %s", symlinkPath, versionDir)
 	} else {
 		store.SetSourcesDir(resolvedSourcesDir)
 		log.Printf("Using sources directory: %s", resolvedSourcesDir)

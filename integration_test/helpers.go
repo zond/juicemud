@@ -35,11 +35,6 @@ var createdIDExtractor = regexp.MustCompile(`Created #([a-zA-Z0-9_-]+)`)
 // Waits for the object to be fully ready (inspectable by ID) before returning.
 // Returns the object ID and nil on success, or empty string and an error on failure.
 func (tc *terminalClient) createObject(sourcePath string) (string, error) {
-	// Drain any stale async notifications (e.g., movement events) from the buffer
-	// before sending the command. This prevents -race mode timing issues where
-	// accumulated notifications interfere with command response parsing.
-	tc.readUntil(10*time.Millisecond, nil)
-
 	output, ok := tc.sendCommand(fmt.Sprintf("/create %s", sourcePath), defaultWaitTimeout)
 	if !ok {
 		return "", fmt.Errorf("/create did not complete: %q", output)
@@ -165,6 +160,26 @@ func (tc *terminalClient) waitForLookMatchFunc(match func(string) bool, timeout 
 		}
 		lastOutput = output
 		return match(output)
+	})
+	if found {
+		// Non-blocking drain of any buffered data that arrived during polling
+		tc.readUntil(10*time.Millisecond, nil)
+	}
+	return lastOutput, found
+}
+
+// waitForScanMatch polls with scan commands until the output contains the expected string.
+// Drains any buffered data after success to prevent interference with subsequent commands.
+// This handles stale movement notifications that may arrive asynchronously.
+func (tc *terminalClient) waitForScanMatch(expected string, timeout time.Duration) (string, bool) {
+	var lastOutput string
+	found := waitForCondition(timeout, 100*time.Millisecond, func() bool {
+		output, ok := tc.sendCommand("scan", defaultWaitTimeout)
+		if !ok {
+			return false
+		}
+		lastOutput = output
+		return strings.Contains(output, expected)
 	})
 	if found {
 		// Non-blocking drain of any buffered data that arrived during polling

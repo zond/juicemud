@@ -460,17 +460,9 @@ setExits([{
 	fmt.Println("Testing scan command...")
 
 	// From genesis, scan should show genesis and the lookroom (via south exit)
-	if err := tc.sendLine("scan"); err != nil {
-		return fmt.Errorf("scan command: %w", err)
-	}
-
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	// Use waitForScanMatch to handle any stale movement notifications
+	output, ok = tc.waitForScanMatch("Black cosmos", defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("scan command did not complete: %q", output)
-	}
-
-	// Verify scan shows current location (genesis)
-	if !strings.Contains(output, "Black cosmos") {
 		return fmt.Errorf("scan did not show current location: %q", output)
 	}
 

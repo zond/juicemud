@@ -93,8 +93,9 @@ func (ts *TestServer) SSHAddr() string {
 }
 
 // SourcesDir returns the path to the sources directory.
+// This returns the actual resolved sources directory (e.g., src/v0.1.0/).
 func (ts *TestServer) SourcesDir() string {
-	return filepath.Join(ts.tmpDir, "src")
+	return ts.Storage().SourcesDir()
 }
 
 // WriteSource writes a source file to the sources directory.

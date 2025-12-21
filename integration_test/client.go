@@ -176,19 +176,34 @@ func (tc *terminalClient) waitForPrompt(timeout time.Duration) (string, bool) {
 
 // sendCommand sends a command and waits for the response.
 // Returns the server's response (everything between the echoed command and the next prompt).
+// This function is robust against stale async notifications that may be buffered.
 func (tc *terminalClient) sendCommand(cmd string, timeout time.Duration) (string, bool) {
 	if err := tc.sendLine(cmd); err != nil {
 		return "", false
 	}
-	output, ok := tc.waitForPrompt(timeout)
-	if !ok {
+
+	// Wait for the echoed command AND the trailing prompt.
+	// This ensures we don't match stale notifications that happen to end with "> ".
+	output := tc.readUntil(timeout, func(s string) bool {
+		hasPrompt := strings.HasSuffix(s, "\n> ") || strings.HasSuffix(s, "\r\n> ")
+		hasEcho := strings.Contains(s, cmd+"\r\n")
+		return hasPrompt && hasEcho
+	})
+
+	// Check if we got a valid response
+	if !strings.Contains(output, cmd+"\r\n") {
 		return output, false
 	}
-	// The output contains: [echoed command]\r\n[response]\n>
-	// Strip the echoed command from the beginning if present
-	if idx := strings.Index(output, "\r\n"); idx >= 0 {
-		output = output[idx+2:]
+	if !strings.HasSuffix(output, "\n> ") && !strings.HasSuffix(output, "\r\n> ") {
+		return output, false
 	}
+
+	// Find the echoed command and extract everything after it
+	echoIdx := strings.Index(output, cmd+"\r\n")
+	if echoIdx >= 0 {
+		output = output[echoIdx+len(cmd)+2:]
+	}
+
 	// Strip the trailing prompt
 	if strings.HasSuffix(output, "\n> ") {
 		output = output[:len(output)-3]
