@@ -5,7 +5,6 @@ Instructions for Claude Code when working with this repository.
 ## TODO
 
 - Benchmark JS engines with Go bindings to find the one that fits our usecase the best.
-- Add tests for functions or flows that are important and difficult to reason about.
 
 ## Rules
 
