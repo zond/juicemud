@@ -75,7 +75,11 @@ func (e Enumerator) Do(elements ...string) string {
 		if idx+2 < len(elements) {
 			fmt.Fprintf(res, fmt.Sprintf("%s%%s ", pattern), element, separator)
 		} else if idx+1 < len(elements) {
-			fmt.Fprintf(res, fmt.Sprintf("%s%%s %%s ", pattern), element, separator, operator)
+			if len(elements) > 2 {
+				fmt.Fprintf(res, fmt.Sprintf("%s%%s %%s ", pattern), element, separator, operator)
+			} else {
+				fmt.Fprintf(res, fmt.Sprintf("%s %%s ", pattern), element, operator)
+			}
 		} else {
 			fmt.Fprintf(res, pattern, element)
 		}
