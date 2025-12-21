@@ -40,7 +40,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if _, err := game.New(ctx, store); err != nil {
+	// Pass false for firstStartup - loader operates on existing data
+	if _, err := game.New(ctx, store, false); err != nil {
 		log.Fatal(err)
 	}
 

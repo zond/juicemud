@@ -124,34 +124,40 @@ type Game struct {
 	workerWG         sync.WaitGroup      // Tracks in-flight event workers
 }
 
-func New(ctx context.Context, s *storage.Storage) (*Game, error) {
+// New creates a new Game instance.
+// If firstStartup is true (server directory was just created), it creates all
+// initial source files. On all startups, it ensures fundamental objects exist
+// (genesis, empty) so the server can function, but uses SetIfMissing to preserve
+// any admin customizations to existing objects.
+func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, error) {
 	ctx = juicemud.MakeMainContext(ctx)
 
-	// Create sources directory if it doesn't exist
 	sourcesDir := s.SourcesDir()
-	if err := os.MkdirAll(sourcesDir, 0755); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
 
-	// Write initial source files if they don't exist
-	for sourcePath, source := range initialSources {
-		fullPath := filepath.Join(sourcesDir, sourcePath)
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+	if firstStartup {
+		// First startup: create sources directory and all initial source files
+		if err := os.MkdirAll(sourcesDir, 0700); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+		for sourcePath, source := range initialSources {
+			fullPath := filepath.Join(sourcesDir, sourcePath)
 			// Create parent directory if needed
 			if dir := filepath.Dir(fullPath); dir != sourcesDir {
-				if err := os.MkdirAll(dir, 0755); err != nil {
+				if err := os.MkdirAll(dir, 0700); err != nil {
 					return nil, juicemud.WithStack(err)
 				}
 			}
 			if err := os.WriteFile(fullPath, []byte(source), 0644); err != nil {
 				return nil, juicemud.WithStack(err)
 			}
-		} else if err != nil {
-			return nil, juicemud.WithStack(err)
 		}
+		log.Println("First startup: created initial source files")
 	}
 
-	// Ensure initial objects exist
+	// Always ensure fundamental objects exist (failsafe).
+	// Uses SetIfMissing: won't overwrite existing objects, preserving admin customizations.
+	// If an object is missing, it's recreated with the default source path.
+	// ValidateSources below will catch if the source file doesn't exist.
 	for _, obj := range initialObjects() {
 		o := &structs.Object{Unsafe: obj}
 		o.Unsafe.PostUnmarshal()

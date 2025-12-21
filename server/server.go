@@ -45,9 +45,10 @@ func (c Config) ControlSocketPath() string {
 
 // Server represents a running JuiceMUD server instance.
 type Server struct {
-	config Config
-	crypto crypto.Crypto
-	signer gossh.Signer
+	config       Config
+	crypto       crypto.Crypto
+	signer       gossh.Signer
+	firstStartup bool // True if we created the server directory (first startup)
 
 	mu      sync.RWMutex
 	storage *storage.Storage // Set during Start, nil before/after
@@ -70,7 +71,13 @@ func New(config Config) (*Server, error) {
 		PrivKeyPath:   filepath.Join(config.Dir, "privKey"),
 		SSHPubKeyPath: filepath.Join(config.Dir, "sshPubKey"),
 	}
+
+	// Detect first startup: no crypto keys yet.
+	// This is more reliable than checking if the directory exists, since
+	// the directory might be pre-created (e.g., by tests or external tools).
+	firstStartup := false
 	if _, err := os.Stat(cr.PrivKeyPath); os.IsNotExist(err) {
+		firstStartup = true
 		if err := cr.Generate(); err != nil {
 			return nil, err
 		}
@@ -88,9 +95,10 @@ func New(config Config) (*Server, error) {
 	}
 
 	return &Server{
-		config: config,
-		crypto: cr,
-		signer: signer,
+		config:       config,
+		crypto:       cr,
+		signer:       signer,
+		firstStartup: firstStartup,
 	}, nil
 }
 
@@ -170,7 +178,7 @@ func (s *Server) startWithListener(ctx context.Context, sshLn net.Listener) erro
 	}
 
 	// Initialize game (this validates sources exist)
-	g, err := game.New(ctx, store)
+	g, err := game.New(ctx, store, s.firstStartup)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}

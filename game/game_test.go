@@ -77,7 +77,7 @@ func withGame(b *testing.B, f func(*Game)) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	g, err := New(ctx, s)
+	g, err := New(ctx, s, true) // true = first startup for test
 	if err != nil {
 		b.Fatal(err)
 	}
