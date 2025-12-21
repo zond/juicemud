@@ -76,7 +76,7 @@ func (h *Hash) Get(k string) ([]byte, error) {
 	defer h.mutex.RUnlock()
 	b, stat := h.dbm.Get(k)
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(os.ErrNotExist)
+		return nil, juicemud.WithStack(fmt.Errorf("key %q: %w", k, os.ErrNotExist))
 	} else if !stat.IsOK() {
 		return nil, juicemud.WithStack(stat)
 	}
@@ -96,7 +96,7 @@ func (h *Hash) Del(k string) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	if stat := h.dbm.Remove(k); stat.GetCode() == tkrzw.StatusNotFoundError {
-		return juicemud.WithStack(os.ErrNotExist)
+		return juicemud.WithStack(fmt.Errorf("key %q: %w", k, os.ErrNotExist))
 	} else if !stat.IsOK() {
 		return juicemud.WithStack(stat)
 	}
@@ -406,7 +406,7 @@ func (h *TypeHash[T, S]) Get(k string) (*T, error) {
 	defer h.mutex.RUnlock()
 	b, stat := h.dbm.Get(k)
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(os.ErrNotExist)
+		return nil, juicemud.WithStack(fmt.Errorf("key %q: %w", k, os.ErrNotExist))
 	} else if !stat.IsOK() {
 		return nil, juicemud.WithStack(stat)
 	}
@@ -622,7 +622,7 @@ func (t *Tree) SubDel(set string, key string) error {
 	defer t.mutex.Unlock()
 	completeKey := appendKey(nil, set, key)
 	if stat := t.Hash.dbm.Remove(completeKey); stat.GetCode() == tkrzw.StatusNotFoundError {
-		return juicemud.WithStack(os.ErrNotExist)
+		return juicemud.WithStack(fmt.Errorf("set %q key %q: %w", set, key, os.ErrNotExist))
 	} else if !stat.IsOK() {
 		return juicemud.WithStack(stat)
 	}
@@ -635,7 +635,7 @@ func (t *Tree) SubGet(set string, key string) ([]byte, error) {
 	completeKey := appendKey(nil, set, key)
 	b, stat := t.Hash.dbm.Get(completeKey)
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(os.ErrNotExist)
+		return nil, juicemud.WithStack(fmt.Errorf("set %q key %q: %w", set, key, os.ErrNotExist))
 	} else if !stat.IsOK() {
 		return nil, juicemud.WithStack(stat)
 	}
@@ -777,7 +777,7 @@ func (t *TypeTree[T, S]) First() (*T, error) {
 	}
 	_, b, stat := iter.Get()
 	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(os.ErrNotExist)
+		return nil, juicemud.WithStack(fmt.Errorf("tree is empty: %w", os.ErrNotExist))
 	} else if !stat.IsOK() {
 		return nil, juicemud.WithStack(stat)
 	}
