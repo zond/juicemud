@@ -511,9 +511,7 @@ func (s *Storage) MoveObject(ctx context.Context, obj *structs.Object, destID st
 	if obj.PostUnlock == nil {
 		return errors.Errorf("can't move object unknown to storage: %+v", obj)
 	}
-	if destID == "" {
-		return errors.New("destination ID cannot be empty")
-	}
+	// Note: destID="" is valid - it's the root container
 
 	id := obj.GetId()
 	sourceID := obj.GetLocation()

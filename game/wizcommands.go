@@ -244,6 +244,10 @@ func (c *Connection) wizCommands() commands {
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
+				if loc.GetLocation() == "" {
+					fmt.Fprintln(c.term, "Unable to leave the universe.")
+					return nil
+				}
 				if err := c.game.moveObject(c.ctx, obj, loc.GetLocation()); err != nil {
 					return juicemud.WithStack(err)
 				}

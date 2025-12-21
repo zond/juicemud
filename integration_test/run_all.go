@@ -2599,9 +2599,8 @@ addCallback('disablelearn', ['action'], (msg) => {
 	// Drain any stale notifications before the command
 	tc.readUntil(50*time.Millisecond, nil)
 
-	// Try to /exit from genesis - should fail with error message
-	// Note: The error is "destination ID cannot be empty" because genesis has no parent location.
-	// The code checks if the player has no location, but should ideally check if the location has no parent.
+	// Try to /exit from genesis - should fail with friendly message
+	// Genesis is in the root container, so you can't exit further.
 	if err := tc.sendLine("/exit"); err != nil {
 		return fmt.Errorf("/exit at genesis: %w", err)
 	}
@@ -2609,7 +2608,7 @@ addCallback('disablelearn', ['action'], (msg) => {
 	if !ok {
 		return fmt.Errorf("/exit at genesis did not complete: %q", output)
 	}
-	if !strings.Contains(output, "destination ID cannot be empty") {
+	if !strings.Contains(output, "Unable to leave the universe") {
 		return fmt.Errorf("/exit at genesis should fail: %q", output)
 	}
 
