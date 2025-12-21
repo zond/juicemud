@@ -198,8 +198,9 @@ func (tc *terminalClient) sendCommand(cmd string, timeout time.Duration) (string
 		return output, false
 	}
 
-	// Find the echoed command and extract everything after it
-	echoIdx := strings.Index(output, cmd+"\r\n")
+	// Find the echoed command and extract everything after it.
+	// Use LastIndex to handle any stale echoes that might be in the buffer.
+	echoIdx := strings.LastIndex(output, cmd+"\r\n")
 	if echoIdx >= 0 {
 		output = output[echoIdx+len(cmd)+2:]
 	}

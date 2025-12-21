@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -133,19 +134,31 @@ func (s *Server) startWithListener(ctx context.Context, sshLn net.Listener) erro
 	}
 	resolvedSourcesDir, err := storage.ResolveSourcePath(s.config.Dir, sourcesPath)
 	if err != nil {
-		// Symlink doesn't exist yet - set up versioned directory structure on first startup
+		// Check if it's specifically a "not exist" error vs other errors (permissions, etc.)
+		if !errors.Is(err, os.ErrNotExist) {
+			return juicemud.WithStack(fmt.Errorf("resolving sources path %q: %w", sourcesPath, err))
+		}
+
+		// Path doesn't exist - set up versioned directory structure on first startup
 		srcDir := filepath.Join(s.config.Dir, "src")
 		versionDir := filepath.Join(srcDir, "v0.1.0")
 		symlinkPath := filepath.Join(srcDir, "current")
 
-		// Create the versioned directory
-		if err := os.MkdirAll(versionDir, 0755); err != nil {
+		// Create the versioned directory with restricted permissions (consistent with config dir)
+		if err := os.MkdirAll(versionDir, 0700); err != nil {
 			return juicemud.WithStack(err)
 		}
 
 		// Create the symlink: src/current -> v0.1.0
-		if err := os.Symlink("v0.1.0", symlinkPath); err != nil {
-			return juicemud.WithStack(err)
+		// Handle idempotently: if symlink already points to correct target, proceed
+		if target, err := os.Readlink(symlinkPath); err == nil && target == "v0.1.0" {
+			// Symlink already correct, proceed
+		} else {
+			// Remove any stale symlink/file and create new one
+			os.Remove(symlinkPath) // ignore error if doesn't exist
+			if err := os.Symlink("v0.1.0", symlinkPath); err != nil {
+				return juicemud.WithStack(err)
+			}
 		}
 
 		resolvedSourcesDir = versionDir
