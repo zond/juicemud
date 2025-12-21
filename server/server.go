@@ -72,15 +72,15 @@ func New(config Config) (*Server, error) {
 		SSHPubKeyPath: filepath.Join(config.Dir, "sshPubKey"),
 	}
 
-	// Detect first startup: no crypto keys yet.
-	// This is more reliable than checking if the directory exists, since
-	// the directory might be pre-created (e.g., by tests or external tools).
-	firstStartup := false
-	if _, err := os.Stat(cr.PrivKeyPath); os.IsNotExist(err) {
-		firstStartup = true
-		if err := cr.Generate(); err != nil {
-			return nil, err
-		}
+	// Atomically generate crypto keys if they don't exist.
+	// Uses O_EXCL to prevent race conditions when multiple processes start simultaneously.
+	// This also detects first startup (no crypto keys yet), which is more reliable than
+	// checking if the directory exists since it might be pre-created (e.g., by tests).
+	firstStartup, err := cr.GenerateIfMissing()
+	if err != nil {
+		return nil, err
+	}
+	if firstStartup {
 		log.Printf("Generated crypto keys in %+v", cr)
 	}
 
@@ -91,7 +91,8 @@ func New(config Config) (*Server, error) {
 
 	signer, err := gossh.ParsePrivateKey(pemBytes)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parsing private key (file may be corrupted; delete %s to regenerate): %w",
+			cr.PrivKeyPath, err)
 	}
 
 	return &Server{
