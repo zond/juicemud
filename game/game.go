@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gliderlabs/ssh"
+	goccy "github.com/goccy/go-json"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/storage"
@@ -122,6 +123,50 @@ type Game struct {
 	loginRateLimiter *loginRateLimiter
 	workChan         chan *structs.Event // Unbuffered channel for event handoff to workers
 	workerWG         sync.WaitGroup      // Tracks in-flight event workers
+}
+
+// ServerConfig holds server-wide configuration stored in the root object's state.
+// The root object (empty ID "") contains this config to define server behavior.
+type ServerConfig struct {
+	Spawn struct {
+		Container string
+	}
+}
+
+// getServerConfig loads the server config from the root object's state.
+func (g *Game) getServerConfig(ctx context.Context) (*ServerConfig, error) {
+	root, err := g.storage.AccessObject(ctx, emptyID, nil)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	config := &ServerConfig{}
+	state := root.GetState()
+	if state != "" && state != "{}" {
+		if err := goccy.Unmarshal([]byte(state), config); err != nil {
+			// Log but don't fail - use defaults
+			log.Printf("Warning: failed to parse root object state as ServerConfig: %v", err)
+		}
+	}
+	return config, nil
+}
+
+// getSpawnLocation returns the configured spawn location for new users.
+// Falls back to genesis if not configured or if configured location doesn't exist.
+func (g *Game) getSpawnLocation(ctx context.Context) string {
+	config, err := g.getServerConfig(ctx)
+	if err != nil {
+		log.Printf("Warning: failed to load server config, using default spawn: %v", err)
+		return genesisID
+	}
+	if config.Spawn.Container == "" {
+		return genesisID
+	}
+	// Verify the spawn location exists
+	if _, err := g.storage.AccessObject(ctx, config.Spawn.Container, nil); err != nil {
+		log.Printf("Warning: configured spawn location %q not found, using genesis: %v", config.Spawn.Container, err)
+		return genesisID
+	}
+	return config.Spawn.Container
 }
 
 // New creates a new Game instance.

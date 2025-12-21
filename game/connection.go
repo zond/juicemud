@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/buildkite/shellwords"
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
@@ -343,11 +342,85 @@ const (
 	defaultLoc
 )
 
-func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection, self *structs.Object, targets ...*structs.Object) error) func(*Connection, string) error {
+// parseShellTokens parses up to n shell-style tokens from s and returns them plus the remaining string.
+// If n <= 0, parses all tokens.
+// Handles single quotes, double quotes, and backslash escapes.
+func parseShellTokens(s string, n int) (tokens []string, rest string) {
+	i := 0
+	for (n <= 0 || len(tokens) < n) && i < len(s) {
+		// Skip leading whitespace
+		for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+			i++
+		}
+		if i >= len(s) {
+			break
+		}
+		// Parse one token
+		var token strings.Builder
+		for i < len(s) && s[i] != ' ' && s[i] != '\t' {
+			switch s[i] {
+			case '\'':
+				i++
+				for i < len(s) && s[i] != '\'' {
+					token.WriteByte(s[i])
+					i++
+				}
+				if i < len(s) {
+					i++ // skip closing quote
+				}
+			case '"':
+				i++
+				for i < len(s) && s[i] != '"' {
+					if s[i] == '\\' && i+1 < len(s) {
+						i++
+						token.WriteByte(s[i])
+						i++
+					} else {
+						token.WriteByte(s[i])
+						i++
+					}
+				}
+				if i < len(s) {
+					i++ // skip closing quote
+				}
+			case '\\':
+				if i+1 < len(s) {
+					i++
+					token.WriteByte(s[i])
+					i++
+				} else {
+					i++
+				}
+			default:
+				token.WriteByte(s[i])
+				i++
+			}
+		}
+		tokens = append(tokens, token.String())
+	}
+	// Skip whitespace after last token
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	return tokens, s[i:]
+}
+
+// identifyingCommand wraps a command handler to parse object references from the input.
+// maxTargets limits how many object references to parse (0 = parse all remaining parts as targets).
+// The callback receives:
+//   - self: the player's object
+//   - rest: raw remaining string after targets (empty if maxTargets=0)
+//   - targets: parsed object references
+func (c *Connection) identifyingCommand(def defaultObject, maxTargets int, f func(c *Connection, self *structs.Object, rest string, targets ...*structs.Object) error) func(*Connection, string) error {
 	return func(c *Connection, s string) error {
-		parts, err := shellwords.SplitPosix(s)
-		if err != nil {
-			return juicemud.WithStack(err)
+		// Parse command name + up to maxTargets target patterns
+		numToParse := 1 + maxTargets // command + targets
+		if maxTargets <= 0 {
+			numToParse = 0 // parse all
+		}
+		parts, rest := parseShellTokens(s, numToParse)
+		if len(parts) == 0 {
+			return nil
 		}
 		if len(parts) == 1 {
 			obj, err := c.game.accessObject(c.ctx, c.user.Object)
@@ -359,7 +432,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 				fmt.Fprintf(c.term, "usage: %s [target]\n", parts[0])
 				return nil
 			case defaultSelf:
-				return f(c, obj, obj)
+				return f(c, obj, rest, obj)
 			case defaultLoc:
 				loc, err := c.game.accessObject(c.ctx, obj.GetLocation())
 				if err != nil {
@@ -368,7 +441,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 				if loc, err = loc.Filter(obj); err != nil {
 					return juicemud.WithStack(err)
 				}
-				return f(c, obj, loc)
+				return f(c, obj, rest, loc)
 			default:
 				return nil
 			}
@@ -398,7 +471,7 @@ func (c *Connection) identifyingCommand(def defaultObject, f func(c *Connection,
 				targets = append(targets, target)
 			}
 		}
-		return f(c, obj, targets...)
+		return f(c, obj, rest, targets...)
 	}
 }
 
@@ -406,7 +479,7 @@ func (c *Connection) basicCommands() commands {
 	return []command{
 		{
 			names: m("l", "look"),
-			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, targets ...*structs.Object) error {
+			f: c.identifyingCommand(defaultLoc, 0, func(c *Connection, obj *structs.Object, _ string, targets ...*structs.Object) error {
 				for _, target := range targets {
 					if obj.GetLocation() == target.GetId() {
 						if err := c.look(); err != nil {
@@ -713,7 +786,7 @@ func (c *Connection) createUser() error {
 		return juicemud.WithStack(err)
 	}
 	obj.Unsafe.SourcePath = userSource
-	obj.Unsafe.Location = genesisID
+	obj.Unsafe.Location = c.game.getSpawnLocation(c.ctx)
 	user.Object = obj.Unsafe.Id
 	if err := c.game.storage.StoreUser(c.ctx, user, false, c.sess.RemoteAddr().String()); err != nil {
 		return juicemud.WithStack(err)

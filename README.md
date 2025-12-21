@@ -246,10 +246,33 @@ Objects only receive events they've registered callbacks for with the matching t
 
 **Wizard Commands**: Wizard users (User.Wizard = true) get additional `/`-prefixed commands:
 - Object management: `/create`, `/inspect`, `/move`, `/remove`, `/enter`, `/exit`
+- State management: `/getstate`, `/setstate` (view/modify object state JSON)
 - Debugging: `/debug`, `/undebug`
 - Source files: `/ls`
 - Monitoring: `/queuestats`, `/jsstats`, `/flushstats`
 - Admin: `/addwiz`, `/delwiz`
+
+**State Management Commands**:
+- `/getstate #objectID [PATH]` - View object state (or specific nested value)
+- `/setstate #objectID PATH VALUE` - Set a value at a dot-separated path
+
+Examples:
+```
+/getstate #abc123              # Show entire state
+/getstate #abc123 Spawn        # Show just the Spawn field
+/setstate #abc123 Foo.Bar 42   # Set nested value
+/setstate #abc123 Name "test"  # Set string value
+```
+
+**Server Configuration**: The root object (ID `""`) stores server-wide configuration in its state. To configure the spawn location for new users:
+
+```
+/getstate #                    # View current server config
+/setstate # Spawn.Container genesis  # Set spawn to genesis room
+/setstate # Spawn.Container <room-id>  # Set spawn to a specific room ID
+```
+
+If the configured spawn location doesn't exist, new users fall back to genesis.
 
 ## Dependencies
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/buildkite/shellwords"
@@ -68,7 +69,7 @@ func (c *Connection) wizCommands() commands {
 		},
 		{
 			names: m("/move"),
-			f: c.identifyingCommand(defaultNone, func(c *Connection, self *structs.Object, targets ...*structs.Object) error {
+			f: c.identifyingCommand(defaultNone, 0, func(c *Connection, self *structs.Object, _ string, targets ...*structs.Object) error {
 				if len(targets) == 1 {
 					obj, err := c.game.accessObject(c.ctx, targets[0].GetId())
 					if err != nil {
@@ -104,7 +105,7 @@ func (c *Connection) wizCommands() commands {
 		},
 		{
 			names: m("/remove"),
-			f: c.identifyingCommand(defaultNone, func(c *Connection, self *structs.Object, targets ...*structs.Object) error {
+			f: c.identifyingCommand(defaultNone, 0, func(c *Connection, self *structs.Object, _ string, targets ...*structs.Object) error {
 				for _, target := range targets {
 					if target.GetId() == self.GetLocation() {
 						return errors.New("Can't remove current location.")
@@ -177,7 +178,7 @@ func (c *Connection) wizCommands() commands {
 		},
 		{
 			names: m("/inspect"),
-			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
+			f: c.identifyingCommand(defaultSelf, 0, func(c *Connection, _ *structs.Object, _ string, targets ...*structs.Object) error {
 				for _, target := range targets {
 					js, err := goccy.MarshalIndent(target, "", "  ")
 					if err != nil {
@@ -190,7 +191,7 @@ func (c *Connection) wizCommands() commands {
 		},
 		{
 			names: m("/debug"),
-			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
+			f: c.identifyingCommand(defaultSelf, 0, func(c *Connection, _ *structs.Object, _ string, targets ...*structs.Object) error {
 				for _, target := range targets {
 					consoleSwitchboard.Attach(target.GetId(), c.term)
 					fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), target.GetId())
@@ -200,7 +201,7 @@ func (c *Connection) wizCommands() commands {
 		},
 		{
 			names: m("/undebug"),
-			f: c.identifyingCommand(defaultSelf, func(c *Connection, _ *structs.Object, targets ...*structs.Object) error {
+			f: c.identifyingCommand(defaultSelf, 0, func(c *Connection, _ *structs.Object, _ string, targets ...*structs.Object) error {
 				for _, target := range targets {
 					consoleSwitchboard.Detach(target.GetId(), c.term)
 					fmt.Fprintf(c.term, "#%s/%s disconnected from console\n", target.Name(), target.GetId())
@@ -210,7 +211,7 @@ func (c *Connection) wizCommands() commands {
 		},
 		{
 			names: m("/enter"),
-			f: c.identifyingCommand(defaultLoc, func(c *Connection, obj *structs.Object, targets ...*structs.Object) error {
+			f: c.identifyingCommand(defaultLoc, 0, func(c *Connection, obj *structs.Object, _ string, targets ...*structs.Object) error {
 				if len(targets) != 1 {
 					fmt.Fprintln(c.term, "usage: /enter [target]")
 					return nil
@@ -706,5 +707,154 @@ func (c *Connection) wizCommands() commands {
 				return nil
 			},
 		},
+		{
+			names: m("/getstate"),
+			f: c.identifyingCommand(defaultNone, 1, func(c *Connection, _ *structs.Object, rest string, targets ...*structs.Object) error {
+				if len(targets) != 1 {
+					fmt.Fprintln(c.term, "usage: /getstate #objectID [PATH]")
+					return nil
+				}
+				target := targets[0]
+				state := target.GetState()
+				if state == "" {
+					state = "{}"
+				}
+
+				var data map[string]any
+				if err := goccy.Unmarshal([]byte(state), &data); err != nil {
+					fmt.Fprintf(c.term, "Error parsing state: %v\n", err)
+					return nil
+				}
+
+				path := strings.TrimSpace(rest)
+				value := navigatePath(data, path)
+				pretty, err := goccy.MarshalIndent(value, "", "  ")
+				if err != nil {
+					fmt.Fprintf(c.term, "Error formatting value: %v\n", err)
+					return nil
+				}
+				fmt.Fprintln(c.term, string(pretty))
+				return nil
+			}),
+		},
+		{
+			names: m("/setstate"),
+			f: c.identifyingCommand(defaultNone, 1, func(c *Connection, _ *structs.Object, rest string, targets ...*structs.Object) error {
+				if len(targets) != 1 {
+					fmt.Fprintln(c.term, "usage: /setstate #objectID PATH VALUE")
+					fmt.Fprintln(c.term, "  PATH: dot-separated path (e.g., Spawn.Container), use . for root")
+					fmt.Fprintln(c.term, "  VALUE: JSON value, or unquoted string")
+					return nil
+				}
+
+				// Parse PATH and VALUE from rest
+				parts, valueStr := parseShellTokens(rest, 1)
+				if len(parts) == 0 || valueStr == "" {
+					fmt.Fprintln(c.term, "usage: /setstate #objectID PATH VALUE")
+					return nil
+				}
+				path := parts[0]
+
+				// Parse the value - try JSON first, fall back to string
+				var value any
+				if err := goccy.Unmarshal([]byte(valueStr), &value); err != nil {
+					// Not valid JSON, treat as string
+					value = valueStr
+				}
+
+				target := targets[0]
+				state := target.GetState()
+				if state == "" {
+					state = "{}"
+				}
+
+				var data map[string]any
+				if err := goccy.Unmarshal([]byte(state), &data); err != nil {
+					fmt.Fprintf(c.term, "Error parsing current state: %v\n", err)
+					return nil
+				}
+
+				// Set the value at path
+				if path == "" || path == "." {
+					// Replace entire state - value must be an object
+					newData, ok := value.(map[string]any)
+					if !ok {
+						fmt.Fprintln(c.term, "Error: root value must be a JSON object")
+						return nil
+					}
+					data = newData
+				} else {
+					if err := setPath(data, path, value); err != nil {
+						fmt.Fprintf(c.term, "Error: %v\n", err)
+						return nil
+					}
+				}
+
+				// Marshal back to JSON
+				newState, err := goccy.Marshal(data)
+				if err != nil {
+					fmt.Fprintf(c.term, "Error encoding state: %v\n", err)
+					return nil
+				}
+
+				// Special validation for root object (server config)
+				if target.GetId() == "" {
+					var config ServerConfig
+					if err := goccy.Unmarshal(newState, &config); err != nil {
+						fmt.Fprintf(c.term, "Error: invalid server config: %v\n", err)
+						return nil
+					}
+				}
+
+				// Update the object
+				target.SetState(string(newState))
+				fmt.Fprintln(c.term, "OK")
+				return nil
+			}),
+		},
 	}
+}
+
+// navigatePath navigates into a map using a dot-separated path.
+// Returns the value at the path, or nil if not found.
+// Empty path or "." returns the entire map.
+func navigatePath(data map[string]any, path string) any {
+	if path == "" || path == "." {
+		return data
+	}
+	parts := strings.Split(path, ".")
+	var current any = data
+	for _, part := range parts {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		current, ok = m[part]
+		if !ok {
+			return nil
+		}
+	}
+	return current
+}
+
+// setPath sets a value at a dot-separated path in a map.
+// Creates intermediate maps as needed.
+func setPath(data map[string]any, path string, value any) error {
+	parts := strings.Split(path, ".")
+	current := data
+	for i, part := range parts[:len(parts)-1] {
+		next, exists := current[part]
+		if !exists {
+			// Create intermediate map
+			newMap := make(map[string]any)
+			current[part] = newMap
+			current = newMap
+		} else if m, ok := next.(map[string]any); ok {
+			current = m
+		} else {
+			return fmt.Errorf("path %q is not an object", strings.Join(parts[:i+1], "."))
+		}
+	}
+	current[parts[len(parts)-1]] = value
+	return nil
 }
