@@ -244,6 +244,26 @@ func (c *Connection) scan() error {
 	return nil
 }
 
+// handleEmitEvent handles emit events that should be rendered to the connection.
+// This is a convenience for users - JS processing always continues regardless.
+func (c *Connection) handleEmitEvent(call *structs.Call) error {
+	switch call.Name {
+	case movementEventType:
+		m := &movement{}
+		if err := json.Unmarshal([]byte(call.Message), m); err != nil {
+			return juicemud.WithStack(err)
+		}
+		return c.renderMovement(m)
+	case movementRenderedEventType:
+		resp := &movementRenderedResponse{}
+		if err := json.Unmarshal([]byte(call.Message), resp); err != nil {
+			return juicemud.WithStack(err)
+		}
+		fmt.Fprintln(c.term, resp.Message)
+	}
+	return nil
+}
+
 // renderMovement handles movement rendering for a player connection.
 // If the moved object has Movement.Active, uses fast Go-based rendering with the verb.
 // Otherwise, emits a renderMovement event to the moved object for JS handling.

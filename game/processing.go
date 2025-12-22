@@ -12,8 +12,6 @@ import (
 	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/structs"
 	"rogchap.com/v8go"
-
-	goccy "github.com/goccy/go-json"
 )
 
 const (
@@ -610,21 +608,8 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 
 			if call.Tag == emitEventTag {
 				if c, found := connectionByObjectID.GetHas(id); found {
-					switch call.Name {
-					case movementEventType:
-						m := &movement{}
-						if err := goccy.Unmarshal([]byte(call.Message), m); err != nil {
-							return false, juicemud.WithStack(err)
-						}
-						if err := c.renderMovement(m); err != nil {
-							return false, juicemud.WithStack(err)
-						}
-					case movementRenderedEventType:
-						resp := &movementRenderedResponse{}
-						if err := goccy.Unmarshal([]byte(call.Message), resp); err != nil {
-							return false, juicemud.WithStack(err)
-						}
-						fmt.Fprintln(c.term, resp.Message)
+					if err := c.handleEmitEvent(call); err != nil {
+						return false, juicemud.WithStack(err)
 					}
 				}
 			}
