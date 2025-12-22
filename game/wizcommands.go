@@ -179,14 +179,40 @@ func (c *Connection) wizCommands() commands {
 		},
 		{
 			names: m("/inspect"),
-			f: c.identifyingCommand(defaultSelf, 0, func(c *Connection, _ *structs.Object, _ string, targets ...*structs.Object) error {
-				for _, target := range targets {
-					js, err := goccy.MarshalIndent(target, "", "  ")
+			f: c.identifyingCommand(defaultSelf, 1, func(c *Connection, _ *structs.Object, rest string, targets ...*structs.Object) error {
+				target := targets[0]
+				path := strings.TrimSpace(rest)
+
+				// If no path, show the entire object
+				if path == "" {
+					pretty, err := goccy.MarshalIndent(target, "", "  ")
 					if err != nil {
 						return juicemud.WithStack(err)
 					}
-					fmt.Fprintln(c.term, string(js))
+					fmt.Fprintln(c.term, string(pretty))
+					return nil
 				}
+
+				// Marshal and parse as map for path navigation
+				js, err := goccy.Marshal(target)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				var data map[string]any
+				if err := goccy.Unmarshal(js, &data); err != nil {
+					return juicemud.WithStack(err)
+				}
+
+				value := navigatePath(data, path)
+				if value == nil {
+					fmt.Fprintf(c.term, "Path %q not found\n", path)
+					return nil
+				}
+				pretty, err := goccy.MarshalIndent(value, "", "  ")
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				fmt.Fprintln(c.term, string(pretty))
 				return nil
 			}),
 		},
@@ -707,36 +733,6 @@ func (c *Connection) wizCommands() commands {
 				}
 				return nil
 			},
-		},
-		{
-			names: m("/getstate"),
-			f: c.identifyingCommand(defaultNone, 1, func(c *Connection, _ *structs.Object, rest string, targets ...*structs.Object) error {
-				if len(targets) != 1 {
-					fmt.Fprintln(c.term, "usage: /getstate #objectID [PATH]")
-					return nil
-				}
-				target := targets[0]
-				state := target.GetState()
-				if state == "" {
-					state = "{}"
-				}
-
-				var data map[string]any
-				if err := goccy.Unmarshal([]byte(state), &data); err != nil {
-					fmt.Fprintf(c.term, "Error parsing state: %v\n", err)
-					return nil
-				}
-
-				path := strings.TrimSpace(rest)
-				value := navigatePath(data, path)
-				pretty, err := goccy.MarshalIndent(value, "", "  ")
-				if err != nil {
-					fmt.Fprintf(c.term, "Error formatting value: %v\n", err)
-					return nil
-				}
-				fmt.Fprintln(c.term, string(pretty))
-				return nil
-			}),
 		},
 		{
 			names: m("/setstate"),
