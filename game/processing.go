@@ -184,6 +184,7 @@ func (g *Game) RecoverIntervals(ctx context.Context) error {
 			updated = i
 			return i, nil
 		}); err != nil {
+			g.jsStats.RecordRecoveryError(objectID, intervalID, err)
 			log.Printf("updating interval %s for recovery: %v", intervalID, err)
 			continue
 		}
@@ -193,6 +194,7 @@ func (g *Game) RecoverIntervals(ctx context.Context) error {
 		}
 
 		if err := g.enqueueIntervalEvent(ctx, updated, missedCount); err != nil {
+			g.jsStats.RecordRecoveryError(objectID, intervalID, err)
 			log.Printf("recovering interval %s: %v", intervalID, err)
 			continue
 		}
@@ -868,6 +870,9 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 	g.jsStats.RecordExecution(object.GetSourcePath(), object.GetId(), duration, intervalInfo)
 
 	if err != nil {
+		// Record error to unified stats
+		g.jsStats.RecordError(object.GetSourcePath(), object.GetId(), err, duration, intervalInfo)
+
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {
 			log.New(consoleSwitchboard.Writer(object.GetId()), "", 0).Printf("---- error in %s ----\n%s\n%s", jserr.Location, jserr.Message, jserr.StackTrace)
@@ -887,8 +892,11 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 func (g *Game) loadRun(ctx context.Context, id string, caller structs.Caller, intervalInfo *IntervalExecInfo) (*structs.Object, bool, error) {
 	object, err := g.storage.AccessObject(ctx, id, nil)
 	if err != nil {
+		// Record pre-run loading error (object not found, etc.)
+		g.jsStats.RecordLoadError(id, err)
 		return nil, false, juicemud.WithStack(err)
 	}
+	// run() handles its own error recording for JS execution errors
 	found, err := g.run(ctx, object, caller, intervalInfo)
 	return object, found, juicemud.WithStack(err)
 }

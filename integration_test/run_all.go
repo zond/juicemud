@@ -1190,243 +1190,142 @@ addCallback('created', ['emit'], (msg) => {
 
 	fmt.Println("  look [target]: OK")
 
-	// === Test 17: /queuestats wizard command ===
-	fmt.Println("Testing /queuestats wizard command...")
+	// === Test 17: /stats wizard command (unified stats) ===
+	fmt.Println("Testing /stats wizard command...")
 
-	// Test /queuestats summary (default)
-	if err := tc.sendLine("/queuestats"); err != nil {
-		return fmt.Errorf("/queuestats command: %w", err)
+	// Test /stats summary (default)
+	if err := tc.sendLine("/stats"); err != nil {
+		return fmt.Errorf("/stats command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/queuestats command did not complete: %q", output)
+		return fmt.Errorf("/stats command did not complete: %q", output)
 	}
 	// Verify output shows expected fields
-	if !strings.Contains(output, "Queue Statistics") {
-		return fmt.Errorf("/queuestats should show 'Queue Statistics': %q", output)
+	if !strings.Contains(output, "JS Statistics") {
+		return fmt.Errorf("/stats should show 'JS Statistics': %q", output)
 	}
-	if !strings.Contains(output, "Total events:") {
-		return fmt.Errorf("/queuestats should show 'Total events:': %q", output)
+	if !strings.Contains(output, "EXECUTIONS") {
+		return fmt.Errorf("/stats should show 'EXECUTIONS': %q", output)
 	}
-	if !strings.Contains(output, "Event rates:") {
-		return fmt.Errorf("/queuestats should show 'Event rates:': %q", output)
+	if !strings.Contains(output, "ERRORS") {
+		return fmt.Errorf("/stats should show 'ERRORS': %q", output)
 	}
 
-	// Test /queuestats summary explicitly
-	if err := tc.sendLine("/queuestats summary"); err != nil {
-		return fmt.Errorf("/queuestats summary command: %w", err)
+	// Test /stats summary explicitly
+	if err := tc.sendLine("/stats summary"); err != nil {
+		return fmt.Errorf("/stats summary command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/queuestats summary did not complete: %q", output)
+		return fmt.Errorf("/stats summary did not complete: %q", output)
 	}
-	if !strings.Contains(output, "Queue Statistics") {
-		return fmt.Errorf("/queuestats summary should show 'Queue Statistics': %q", output)
+	if !strings.Contains(output, "JS Statistics") {
+		return fmt.Errorf("/stats summary should show 'JS Statistics': %q", output)
 	}
 
-	// Test /queuestats categories
-	if err := tc.sendLine("/queuestats categories"); err != nil {
-		return fmt.Errorf("/queuestats categories command: %w", err)
+	// Test /stats errors
+	if err := tc.sendLine("/stats errors"); err != nil {
+		return fmt.Errorf("/stats errors command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/queuestats categories did not complete: %q", output)
+		return fmt.Errorf("/stats errors did not complete: %q", output)
 	}
-	// Either shows "No errors recorded." or a table with Category header
-	if !strings.Contains(output, "No errors") && !strings.Contains(output, "Category") {
-		return fmt.Errorf("/queuestats categories should show errors or 'No errors': %q", output)
+	// Should show "Error Summary" header
+	if !strings.Contains(output, "Error Summary") {
+		return fmt.Errorf("/stats errors should show 'Error Summary': %q", output)
 	}
 
-	// Test /queuestats locations
-	if err := tc.sendLine("/queuestats locations"); err != nil {
-		return fmt.Errorf("/queuestats locations command: %w", err)
+	// Test /stats errors locations
+	if err := tc.sendLine("/stats errors locations"); err != nil {
+		return fmt.Errorf("/stats errors locations command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/queuestats locations did not complete: %q", output)
+		return fmt.Errorf("/stats errors locations did not complete: %q", output)
 	}
-	// Either shows "No errors recorded." or a table with Location header
-	if !strings.Contains(output, "No errors") && !strings.Contains(output, "Location") {
-		return fmt.Errorf("/queuestats locations should show errors or 'No errors': %q", output)
+	// Either shows "No error locations" or a table with Location header
+	if !strings.Contains(output, "No error locations") && !strings.Contains(output, "Location") {
+		return fmt.Errorf("/stats errors locations should show locations or 'No error locations': %q", output)
 	}
 
-	// Test /queuestats objects
-	if err := tc.sendLine("/queuestats objects"); err != nil {
-		return fmt.Errorf("/queuestats objects command: %w", err)
+	// Test /stats scripts
+	if err := tc.sendLine("/stats scripts"); err != nil {
+		return fmt.Errorf("/stats scripts command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/queuestats objects did not complete: %q", output)
-	}
-	// Either shows "No objects recorded." or a table with Object header
-	if !strings.Contains(output, "No objects") && !strings.Contains(output, "Object") {
-		return fmt.Errorf("/queuestats objects should show objects or 'No objects': %q", output)
-	}
-
-	// Test /queuestats recent
-	if err := tc.sendLine("/queuestats recent"); err != nil {
-		return fmt.Errorf("/queuestats recent command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/queuestats recent did not complete: %q", output)
-	}
-	// Either shows "No recent errors." or error records
-	if !strings.Contains(output, "No recent errors") && !strings.Contains(output, "]") {
-		return fmt.Errorf("/queuestats recent should show errors or 'No recent errors': %q", output)
-	}
-
-	// Test /queuestats reset
-	if err := tc.sendLine("/queuestats reset"); err != nil {
-		return fmt.Errorf("/queuestats reset command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/queuestats reset did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Queue statistics reset") {
-		return fmt.Errorf("/queuestats reset should confirm reset: %q", output)
-	}
-
-	// Verify reset worked by checking summary shows zero errors
-	if err := tc.sendLine("/queuestats summary"); err != nil {
-		return fmt.Errorf("/queuestats summary after reset: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/queuestats summary after reset did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Total errors: 0") {
-		return fmt.Errorf("/queuestats summary after reset should show 'Total errors: 0': %q", output)
-	}
-
-	// Test /queuestats help (unknown subcommand)
-	if err := tc.sendLine("/queuestats help"); err != nil {
-		return fmt.Errorf("/queuestats help command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/queuestats help did not complete: %q", output)
-	}
-	if !strings.Contains(output, "usage:") {
-		return fmt.Errorf("/queuestats help should show usage: %q", output)
-	}
-
-	fmt.Println("  /queuestats wizard command: OK")
-
-	// === Test 17b: /jsstats wizard command ===
-	fmt.Println("Testing /jsstats wizard command...")
-
-	// Test /jsstats summary (default)
-	if err := tc.sendLine("/jsstats"); err != nil {
-		return fmt.Errorf("/jsstats command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/jsstats command did not complete: %q", output)
-	}
-	// Verify output shows expected fields
-	if !strings.Contains(output, "JS Execution Statistics") {
-		return fmt.Errorf("/jsstats should show 'JS Execution Statistics': %q", output)
-	}
-	if !strings.Contains(output, "Total executions:") {
-		return fmt.Errorf("/jsstats should show 'Total executions:': %q", output)
-	}
-	if !strings.Contains(output, "Execution rates:") {
-		return fmt.Errorf("/jsstats should show 'Execution rates:': %q", output)
-	}
-	if !strings.Contains(output, "Time rates") {
-		return fmt.Errorf("/jsstats should show 'Time rates': %q", output)
-	}
-
-	// Test /jsstats summary explicitly
-	if err := tc.sendLine("/jsstats summary"); err != nil {
-		return fmt.Errorf("/jsstats summary command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/jsstats summary did not complete: %q", output)
-	}
-	if !strings.Contains(output, "JS Execution Statistics") {
-		return fmt.Errorf("/jsstats summary should show 'JS Execution Statistics': %q", output)
-	}
-
-	// Test /jsstats scripts
-	if err := tc.sendLine("/jsstats scripts"); err != nil {
-		return fmt.Errorf("/jsstats scripts command: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/jsstats scripts did not complete: %q", output)
+		return fmt.Errorf("/stats scripts did not complete: %q", output)
 	}
 	// Either shows "No scripts recorded." or a table with Source Path header
 	if !strings.Contains(output, "No scripts") && !strings.Contains(output, "Source Path") {
-		return fmt.Errorf("/jsstats scripts should show scripts or 'No scripts': %q", output)
+		return fmt.Errorf("/stats scripts should show scripts or 'No scripts': %q", output)
 	}
 
-	// Test /jsstats objects
-	if err := tc.sendLine("/jsstats objects"); err != nil {
-		return fmt.Errorf("/jsstats objects command: %w", err)
+	// Test /stats objects
+	if err := tc.sendLine("/stats objects"); err != nil {
+		return fmt.Errorf("/stats objects command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/jsstats objects did not complete: %q", output)
+		return fmt.Errorf("/stats objects did not complete: %q", output)
 	}
 	// Either shows "No objects recorded." or a table with Object ID header
 	if !strings.Contains(output, "No objects") && !strings.Contains(output, "Object ID") {
-		return fmt.Errorf("/jsstats objects should show objects or 'No objects': %q", output)
+		return fmt.Errorf("/stats objects should show objects or 'No objects': %q", output)
 	}
 
-	// Test /jsstats slow
-	if err := tc.sendLine("/jsstats slow"); err != nil {
-		return fmt.Errorf("/jsstats slow command: %w", err)
+	// Test /stats perf slow
+	if err := tc.sendLine("/stats perf slow"); err != nil {
+		return fmt.Errorf("/stats perf slow command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/jsstats slow did not complete: %q", output)
+		return fmt.Errorf("/stats perf slow did not complete: %q", output)
 	}
 	// Either shows "No slow executions recorded." or slow execution records
 	if !strings.Contains(output, "No slow executions") && !strings.Contains(output, "]") {
-		return fmt.Errorf("/jsstats slow should show slow execs or 'No slow executions': %q", output)
+		return fmt.Errorf("/stats perf slow should show slow execs or 'No slow executions': %q", output)
 	}
 
-	// Test /jsstats reset
-	if err := tc.sendLine("/jsstats reset"); err != nil {
-		return fmt.Errorf("/jsstats reset command: %w", err)
+	// Test /stats reset
+	if err := tc.sendLine("/stats reset"); err != nil {
+		return fmt.Errorf("/stats reset command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/jsstats reset did not complete: %q", output)
+		return fmt.Errorf("/stats reset did not complete: %q", output)
 	}
-	if !strings.Contains(output, "JS statistics reset") {
-		return fmt.Errorf("/jsstats reset should confirm reset: %q", output)
+	if !strings.Contains(output, "Statistics reset") {
+		return fmt.Errorf("/stats reset should confirm reset: %q", output)
 	}
 
-	// Verify reset worked by checking summary shows zero executions
-	if err := tc.sendLine("/jsstats summary"); err != nil {
-		return fmt.Errorf("/jsstats summary after reset: %w", err)
+	// Verify reset worked by checking summary shows zero
+	if err := tc.sendLine("/stats summary"); err != nil {
+		return fmt.Errorf("/stats summary after reset: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/jsstats summary after reset did not complete: %q", output)
+		return fmt.Errorf("/stats summary after reset did not complete: %q", output)
 	}
-	if !strings.Contains(output, "Total executions: 0") {
-		return fmt.Errorf("/jsstats summary after reset should show 'Total executions: 0': %q", output)
+	if !strings.Contains(output, "Total: 0") {
+		return fmt.Errorf("/stats summary after reset should show 'Total: 0': %q", output)
 	}
 
-	// Test /jsstats help (unknown subcommand)
-	if err := tc.sendLine("/jsstats help"); err != nil {
-		return fmt.Errorf("/jsstats help command: %w", err)
+	// Test /stats help (unknown subcommand)
+	if err := tc.sendLine("/stats help"); err != nil {
+		return fmt.Errorf("/stats help command: %w", err)
 	}
 	output, ok = tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		return fmt.Errorf("/jsstats help did not complete: %q", output)
+		return fmt.Errorf("/stats help did not complete: %q", output)
 	}
 	if !strings.Contains(output, "usage:") {
-		return fmt.Errorf("/jsstats help should show usage: %q", output)
+		return fmt.Errorf("/stats help should show usage: %q", output)
 	}
 
-	fmt.Println("  /jsstats wizard command: OK")
+	fmt.Println("  /stats wizard command: OK")
 
 	// === Test 18: Room and sibling action handlers ===
 	fmt.Println("Testing room and sibling action handlers...")

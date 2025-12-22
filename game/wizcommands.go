@@ -18,6 +18,14 @@ import (
 	goccy "github.com/goccy/go-json"
 )
 
+// truncateForDisplay truncates a string to maxLen, prefixing with "..." if truncated.
+func truncateForDisplay(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return "..." + s[len(s)-(maxLen-3):]
+}
+
 func (c *Connection) wizCommands() commands {
 	return []command{
 		{
@@ -365,218 +373,254 @@ func (c *Connection) wizCommands() commands {
 			},
 		},
 		{
-			names: m("/queuestats"),
+			names: m("/stats"),
 			f: func(c *Connection, s string) error {
 				parts, err := shellwords.SplitPosix(s)
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				qs := c.game.queueStats
+				stats := c.game.jsStats
 
-				// Subcommands: summary (default), categories, locations, objects, recent, object <id>, reset
+				// Subcommands: summary (default), errors, perf, scripts, objects, intervals, reset
 				subcmd := "summary"
 				if len(parts) >= 2 {
 					subcmd = parts[1]
 				}
 
 				switch subcmd {
-				case "summary":
-					g := qs.GlobalSnapshot()
-					fmt.Fprintf(c.term, "Queue Statistics (uptime: %s)\n\n", g.Uptime.Round(time.Second))
-					fmt.Fprintf(c.term, "Total events: %d\n", g.TotalEvents)
-					fmt.Fprintf(c.term, "Total errors: %d (%.2f%%)\n", g.TotalErrors, g.ErrorRate*100)
-					fmt.Fprintf(c.term, "\nEvent rates:\n")
-					fmt.Fprintf(c.term, "  Per second: %.2f\n", g.EventRates.PerSecond)
-					fmt.Fprintf(c.term, "  Per minute: %.1f\n", g.EventRates.PerMinute)
-					fmt.Fprintf(c.term, "  Per hour:   %.0f\n", g.EventRates.PerHour)
-					fmt.Fprintf(c.term, "\nError rates:\n")
-					fmt.Fprintf(c.term, "  Per second: %.2f\n", g.ErrorRates.PerSecond)
-					fmt.Fprintf(c.term, "  Per minute: %.1f\n", g.ErrorRates.PerMinute)
-					fmt.Fprintf(c.term, "  Per hour:   %.0f\n", g.ErrorRates.PerHour)
+				case "summary", "dashboard":
+					g := stats.GlobalSnapshot()
+					fmt.Fprintf(c.term, "JS Statistics (uptime: %s)\n\n", g.Uptime.Round(time.Second))
 
-				case "categories":
-					cats := qs.TopCategories()
-					if len(cats) == 0 {
-						fmt.Fprintln(c.term, "No errors recorded.")
-						return nil
-					}
-					t := table.New("Category", "Count", "Last Seen").WithWriter(c.term)
-					for _, cat := range cats {
-						t.AddRow(cat.Category, cat.Count, cat.LastSeen.Format(time.RFC3339))
-					}
-					t.Print()
+					fmt.Fprintln(c.term, "EXECUTIONS")
+					fmt.Fprintf(c.term, "  Total: %d    Rate: %.2f/s (1m: %.1f/s, 1h: %.0f/s)\n",
+						g.TotalExecs, g.ExecRates.PerSecond, g.ExecRates.PerMinute, g.ExecRates.PerHour)
+					fmt.Fprintf(c.term, "  Avg: %.1fms    Slow: %d (%.1f%%)\n",
+						g.AvgTimeMs, g.TotalSlow, g.SlowPercent)
+					fmt.Fprintf(c.term, "  JS CPU: %.1f%%\n", g.TimeRates.PerSecond*100)
 
-				case "locations":
-					n := 20
+					fmt.Fprintln(c.term, "\nERRORS")
+					fmt.Fprintf(c.term, "  Total: %d (%.2f%%)    Rate: %.2f/s (1m: %.2f/s, 1h: %.1f/s)\n",
+						g.TotalErrors, g.ErrorPercent, g.ErrorRates.PerSecond, g.ErrorRates.PerMinute, g.ErrorRates.PerHour)
+					if len(g.ByCategory) > 0 {
+						fmt.Fprint(c.term, "  ")
+						first := true
+						for cat, count := range g.ByCategory {
+							if !first {
+								fmt.Fprint(c.term, ", ")
+							}
+							fmt.Fprintf(c.term, "%s: %d", cat, count)
+							first = false
+						}
+						fmt.Fprintln(c.term)
+					}
+
+					// Show top issues
+					topLocs := stats.TopLocations(3)
+					slowRecs := stats.RecentSlowExecutions(3)
+					if len(topLocs) > 0 || len(slowRecs) > 0 {
+						fmt.Fprintln(c.term, "\nTOP ISSUES")
+						if len(topLocs) > 0 {
+							fmt.Fprintln(c.term, "  Errors:")
+							for _, loc := range topLocs {
+								fmt.Fprintf(c.term, "    %s  %d\n", truncateForDisplay(loc.Location, 30), loc.Count)
+							}
+						}
+						if len(slowRecs) > 0 {
+							fmt.Fprintln(c.term, "  Slow:")
+							for _, rec := range slowRecs {
+								fmt.Fprintf(c.term, "    %s  %.0fms\n", truncateForDisplay(rec.SourcePath, 25), float64(rec.Duration.Milliseconds()))
+							}
+						}
+					}
+
+				case "errors":
+					// Sub-subcommands: summary (default), categories, locations, recent
+					errSubcmd := "summary"
 					if len(parts) >= 3 {
-						if parsed, err := strconv.Atoi(parts[2]); err == nil && parsed > 0 {
-							n = parsed
-						}
+						errSubcmd = parts[2]
 					}
-					locs := qs.TopLocations(n)
-					if len(locs) == 0 {
-						fmt.Fprintln(c.term, "No errors recorded.")
-						return nil
-					}
-					t := table.New("Location", "Count", "Last Seen").WithWriter(c.term)
-					for _, loc := range locs {
-						t.AddRow(loc.Location, loc.Count, loc.LastSeen.Format(time.RFC3339))
-					}
-					t.Print()
 
-				case "objects":
-					n := 20
-					sortBy := SortByErrors
+					switch errSubcmd {
+					case "summary":
+						g := stats.GlobalSnapshot()
+						fmt.Fprintf(c.term, "Error Summary (total: %d, rate: %.2f%%)\n\n", g.TotalErrors, g.ErrorPercent)
+						if len(g.ByCategory) > 0 {
+							fmt.Fprintln(c.term, "By category:")
+							for cat, count := range g.ByCategory {
+								fmt.Fprintf(c.term, "  %s: %d\n", cat, count)
+							}
+						}
+						fmt.Fprintf(c.term, "\nError rates: %.2f/s, %.1f/m, %.0f/h\n",
+							g.ErrorRates.PerSecond, g.ErrorRates.PerMinute, g.ErrorRates.PerHour)
+
+						// Show recent errors
+						recent := stats.RecentErrors(5)
+						if len(recent) > 0 {
+							fmt.Fprintln(c.term, "\nRecent errors:")
+							for _, rec := range recent {
+								locStr := rec.Location.String()
+								fmt.Fprintf(c.term, "  [%s] %s %s: %s\n",
+									rec.Timestamp.Format("15:04:05"),
+									rec.Category,
+									locStr,
+									rec.Message)
+							}
+						}
+
+					case "categories":
+						g := stats.GlobalSnapshot()
+						if len(g.ByCategory) == 0 {
+							fmt.Fprintln(c.term, "No errors recorded.")
+							return nil
+						}
+						t := table.New("Category", "Count").WithWriter(c.term)
+						for cat, count := range g.ByCategory {
+							t.AddRow(string(cat), count)
+						}
+						t.Print()
+
+					case "locations":
+						n := 20
+						if len(parts) >= 4 {
+							if parsed, err := strconv.Atoi(parts[3]); err == nil && parsed > 0 {
+								n = parsed
+							}
+						}
+						locs := stats.TopLocations(n)
+						if len(locs) == 0 {
+							fmt.Fprintln(c.term, "No error locations recorded.")
+							return nil
+						}
+						t := table.New("Location", "Count", "Last Seen").WithWriter(c.term)
+						for _, loc := range locs {
+							t.AddRow(loc.Location, loc.Count, loc.LastSeen.Format(time.RFC3339))
+						}
+						t.Print()
+
+					case "recent":
+						n := 10
+						if len(parts) >= 4 {
+							if parsed, err := strconv.Atoi(parts[3]); err == nil && parsed > 0 {
+								n = parsed
+							}
+						}
+						recent := stats.RecentErrors(n)
+						if len(recent) == 0 {
+							fmt.Fprintln(c.term, "No recent errors.")
+							return nil
+						}
+						for _, rec := range recent {
+							locStr := rec.Location.String()
+							fmt.Fprintf(c.term, "[%s] %s %s @ %s: %s\n",
+								rec.Timestamp.Format("15:04:05"),
+								rec.ObjectID,
+								rec.Category,
+								locStr,
+								rec.Message)
+						}
+
+					default:
+						fmt.Fprintln(c.term, "usage: /stats errors [subcommand]")
+						fmt.Fprintln(c.term, "  summary              Show error summary (default)")
+						fmt.Fprintln(c.term, "  categories           Show errors by category")
+						fmt.Fprintln(c.term, "  locations [n]        Show top n error locations (default 20)")
+						fmt.Fprintln(c.term, "  recent [n]           Show n most recent errors (default 10)")
+					}
+
+				case "perf":
+					// Sub-subcommands: summary (default), scripts, slow
+					perfSubcmd := "summary"
 					if len(parts) >= 3 {
-						switch parts[2] {
-						case "errors":
-							sortBy = SortByErrors
-						case "events":
-							sortBy = SortByEvents
-						case "rate":
-							sortBy = SortByErrorRate
+						perfSubcmd = parts[2]
+					}
+
+					switch perfSubcmd {
+					case "summary":
+						g := stats.GlobalSnapshot()
+						fmt.Fprintf(c.term, "Performance Summary\n\n")
+						fmt.Fprintf(c.term, "Total executions: %d\n", g.TotalExecs)
+						fmt.Fprintf(c.term, "Total JS time: %.1fs\n", g.TotalTimeMs/1000)
+						fmt.Fprintf(c.term, "Average time: %.1fms\n", g.AvgTimeMs)
+						fmt.Fprintf(c.term, "Slow executions: %d (%.2f%%)\n", g.TotalSlow, g.SlowPercent)
+						fmt.Fprintf(c.term, "\nExecution rates: %.2f/s, %.1f/m, %.0f/h\n",
+							g.ExecRates.PerSecond, g.ExecRates.PerMinute, g.ExecRates.PerHour)
+						fmt.Fprintf(c.term, "Time rates (JS seconds per wall time):\n")
+						fmt.Fprintf(c.term, "  Current: %.3fs/s (%.1f%% CPU)\n", g.TimeRates.PerSecond, g.TimeRates.PerSecond*100)
+						fmt.Fprintf(c.term, "  Per minute: %.1fs/m\n", g.TimeRates.PerMinute)
+						fmt.Fprintf(c.term, "  Per hour: %.0fs/h\n", g.TimeRates.PerHour)
+
+					case "scripts":
+						sortBy := SortScriptByTime
+						if len(parts) >= 4 {
+							switch parts[3] {
+							case "time":
+								sortBy = SortScriptByTime
+							case "execs":
+								sortBy = SortScriptByExecs
+							case "slow":
+								sortBy = SortScriptBySlow
+							}
 						}
-					}
-					if len(parts) >= 4 {
-						if parsed, err := strconv.Atoi(parts[3]); err == nil && parsed > 0 {
-							n = parsed
+						n := 20
+						if len(parts) >= 5 {
+							if parsed, err := strconv.Atoi(parts[4]); err == nil && parsed > 0 {
+								n = parsed
+							}
 						}
-					}
-					objs := qs.TopObjects(sortBy, n, 10) // min 10 events for rate sorting
-					if len(objs) == 0 {
-						fmt.Fprintln(c.term, "No objects recorded.")
-						return nil
-					}
-					t := table.New("Object", "Events", "Errors", "Rate%").WithWriter(c.term)
-					for _, obj := range objs {
-						t.AddRow(obj.ObjectID, obj.Events, obj.Errors, fmt.Sprintf("%.1f", obj.ErrorRate*100))
-					}
-					t.Print()
-
-				case "object":
-					if len(parts) < 3 {
-						fmt.Fprintln(c.term, "usage: /queuestats object <objectID>")
-						return nil
-					}
-					objectID := parts[2]
-					obj := qs.ObjectSnapshot(objectID)
-					if obj == nil {
-						fmt.Fprintf(c.term, "No stats for object %q\n", objectID)
-						return nil
-					}
-					fmt.Fprintf(c.term, "Object: %s\n", obj.ObjectID)
-					fmt.Fprintf(c.term, "Events: %d, Errors: %d (%.2f%%)\n", obj.Events, obj.Errors, obj.ErrorRate*100)
-					if !obj.LastEvent.IsZero() {
-						fmt.Fprintf(c.term, "Last event: %s\n", obj.LastEvent.Format(time.RFC3339))
-					}
-					if !obj.LastError.IsZero() {
-						fmt.Fprintf(c.term, "Last error: %s\n", obj.LastError.Format(time.RFC3339))
-					}
-					fmt.Fprintf(c.term, "\nEvent rates: %.2f/s, %.1f/m, %.0f/h\n",
-						obj.EventRates.PerSecond, obj.EventRates.PerMinute, obj.EventRates.PerHour)
-					fmt.Fprintf(c.term, "Error rates: %.2f/s, %.1f/m, %.0f/h\n",
-						obj.ErrorRates.PerSecond, obj.ErrorRates.PerMinute, obj.ErrorRates.PerHour)
-					if len(obj.ByCategory) > 0 {
-						fmt.Fprintln(c.term, "\nBy category:")
-						for cat, count := range obj.ByCategory {
-							fmt.Fprintf(c.term, "  %s: %d\n", cat, count)
+						scripts := stats.TopScripts(sortBy, n)
+						if len(scripts) == 0 {
+							fmt.Fprintln(c.term, "No scripts recorded.")
+							return nil
 						}
-					}
-					if len(obj.ByLocation) > 0 {
-						fmt.Fprintln(c.term, "\nBy location:")
-						for loc, count := range obj.ByLocation {
-							fmt.Fprintf(c.term, "  %s: %d\n", loc, count)
+						t := table.New("Source Path", "Execs", "Avg(ms)", "Max(ms)", "Slow%").WithWriter(c.term)
+						for _, script := range scripts {
+							t.AddRow(
+								script.SourcePath,
+								script.Executions,
+								fmt.Sprintf("%.1f", script.AvgTimeMs),
+								fmt.Sprintf("%.1f", script.MaxTimeMs),
+								fmt.Sprintf("%.1f", script.SlowPercent),
+							)
 						}
-					}
+						t.Print()
 
-				case "recent":
-					n := 10
-					if len(parts) >= 3 {
-						if parsed, err := strconv.Atoi(parts[2]); err == nil && parsed > 0 {
-							n = parsed
+					case "slow":
+						n := 10
+						if len(parts) >= 4 {
+							if parsed, err := strconv.Atoi(parts[3]); err == nil && parsed > 0 {
+								n = parsed
+							}
 						}
-					}
-					recent := qs.RecentErrors(n)
-					if len(recent) == 0 {
-						fmt.Fprintln(c.term, "No recent errors.")
-						return nil
-					}
-					for _, rec := range recent {
-						fmt.Fprintf(c.term, "[%s] %s %s @ %s: %s\n",
-							rec.Timestamp.Format("15:04:05"),
-							rec.ObjectID,
-							rec.Category,
-							rec.Location,
-							rec.Message)
-					}
-
-				case "intervals":
-					n := 20
-					if len(parts) >= 3 {
-						if parsed, err := strconv.Atoi(parts[2]); err == nil && parsed > 0 {
-							n = parsed
+						recent := stats.RecentSlowExecutions(n)
+						if len(recent) == 0 {
+							fmt.Fprintln(c.term, "No slow executions recorded.")
+							return nil
 						}
+						for _, rec := range recent {
+							fmt.Fprintf(c.term, "[%s] #%s %s %.1fms\n",
+								rec.Timestamp.Format("15:04:05"),
+								rec.ObjectID,
+								rec.SourcePath,
+								float64(rec.Duration.Milliseconds()))
+							if len(rec.ImportChain) > 1 {
+								fmt.Fprintf(c.term, "  Imports: ")
+								for i, dep := range rec.ImportChain[1:] { // Skip first (the source itself)
+									if i > 0 {
+										fmt.Fprint(c.term, ", ")
+									}
+									fmt.Fprint(c.term, dep)
+								}
+								fmt.Fprintln(c.term)
+							}
+						}
+
+					default:
+						fmt.Fprintln(c.term, "usage: /stats perf [subcommand]")
+						fmt.Fprintln(c.term, "  summary              Show performance summary (default)")
+						fmt.Fprintln(c.term, "  scripts [sort] [n]   Show top n scripts (sort: time|execs|slow)")
+						fmt.Fprintln(c.term, "  slow [n]             Show n most recent slow executions (default 10)")
 					}
-					intervals := qs.TopIntervals(n)
-					if len(intervals) == 0 {
-						fmt.Fprintln(c.term, "No interval errors recorded.")
-						return nil
-					}
-					t := table.New("Interval ID", "Object ID", "Event", "Errors", "Last Error").WithWriter(c.term)
-					for _, iv := range intervals {
-						t.AddRow(iv.IntervalID, iv.ObjectID, iv.EventName, iv.Count, iv.LastSeen.Format("15:04:05"))
-					}
-					t.Print()
-
-				case "reset":
-					qs.Reset()
-					fmt.Fprintln(c.term, "Queue statistics reset.")
-
-				default:
-					fmt.Fprintln(c.term, "usage: /queuestats [subcommand]")
-					fmt.Fprintln(c.term, "  summary              Show global statistics (default)")
-					fmt.Fprintln(c.term, "  categories           Show errors by category")
-					fmt.Fprintln(c.term, "  locations [n]        Show top n error locations (default 20)")
-					fmt.Fprintln(c.term, "  objects [sort] [n]   Show top n objects (sort: errors|events|rate)")
-					fmt.Fprintln(c.term, "  object <id>          Show stats for specific object")
-					fmt.Fprintln(c.term, "  intervals [n]        Show top n intervals by error count (default 20)")
-					fmt.Fprintln(c.term, "  recent [n]           Show n most recent errors (default 10)")
-					fmt.Fprintln(c.term, "  reset                Clear all statistics")
-				}
-				return nil
-			},
-		},
-		{
-			names: m("/jsstats"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
-				jsStats := c.game.jsStats
-
-				// Subcommands: summary (default), scripts, script, objects, slow, reset
-				subcmd := "summary"
-				if len(parts) >= 2 {
-					subcmd = parts[1]
-				}
-
-				switch subcmd {
-				case "summary":
-					g := jsStats.GlobalSnapshot()
-					fmt.Fprintf(c.term, "JS Execution Statistics (uptime: %s)\n\n", g.Uptime.Round(time.Second))
-					fmt.Fprintf(c.term, "Total executions: %d\n", g.TotalExecs)
-					fmt.Fprintf(c.term, "Total JS time: %.1fs\n", g.TotalTimeMs/1000)
-					fmt.Fprintf(c.term, "Average time: %.1fms\n", g.AvgTimeMs)
-					fmt.Fprintf(c.term, "Slow executions: %d (%.2f%%)\n", g.TotalSlow, g.SlowPercent)
-					fmt.Fprintf(c.term, "\nExecution rates:\n")
-					fmt.Fprintf(c.term, "  Per second: %.2f\n", g.ExecRates.PerSecond)
-					fmt.Fprintf(c.term, "  Per minute: %.1f\n", g.ExecRates.PerMinute)
-					fmt.Fprintf(c.term, "  Per hour:   %.0f\n", g.ExecRates.PerHour)
-					fmt.Fprintf(c.term, "\nTime rates (JS seconds per wall second):\n")
-					fmt.Fprintf(c.term, "  Current: %.3fs/s (%.1f%% CPU)\n", g.TimeRates.PerSecond, g.TimeRates.PerSecond*100)
-					fmt.Fprintf(c.term, "  Per minute: %.1fs/m\n", g.TimeRates.PerMinute)
-					fmt.Fprintf(c.term, "  Per hour:   %.0fs/h\n", g.TimeRates.PerHour)
 
 				case "scripts":
 					sortBy := SortScriptByTime
@@ -588,6 +632,10 @@ func (c *Connection) wizCommands() commands {
 							sortBy = SortScriptByExecs
 						case "slow":
 							sortBy = SortScriptBySlow
+						case "errors":
+							sortBy = SortScriptByErrors
+						case "errorrate":
+							sortBy = SortScriptByErrorRate
 						}
 					}
 					n := 20
@@ -596,12 +644,12 @@ func (c *Connection) wizCommands() commands {
 							n = parsed
 						}
 					}
-					scripts := jsStats.TopScripts(sortBy, n)
+					scripts := stats.TopScripts(sortBy, n)
 					if len(scripts) == 0 {
 						fmt.Fprintln(c.term, "No scripts recorded.")
 						return nil
 					}
-					t := table.New("Source Path", "Execs", "Avg(ms)", "Max(ms)", "Slow%").WithWriter(c.term)
+					t := table.New("Source Path", "Execs", "Avg(ms)", "Max(ms)", "Slow%", "Errs", "Err%").WithWriter(c.term)
 					for _, script := range scripts {
 						t.AddRow(
 							script.SourcePath,
@@ -609,17 +657,19 @@ func (c *Connection) wizCommands() commands {
 							fmt.Sprintf("%.1f", script.AvgTimeMs),
 							fmt.Sprintf("%.1f", script.MaxTimeMs),
 							fmt.Sprintf("%.1f", script.SlowPercent),
+							script.Errors,
+							fmt.Sprintf("%.1f", script.ErrorPercent),
 						)
 					}
 					t.Print()
 
 				case "script":
 					if len(parts) < 3 {
-						fmt.Fprintln(c.term, "usage: /jsstats script <path>")
+						fmt.Fprintln(c.term, "usage: /stats script <path>")
 						return nil
 					}
 					sourcePath := parts[2]
-					script := jsStats.ScriptSnapshot(sourcePath)
+					script := stats.ScriptSnapshot(sourcePath)
 					if script == nil {
 						fmt.Fprintf(c.term, "No stats for script %q\n", sourcePath)
 						return nil
@@ -629,13 +679,31 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintf(c.term, "Time: avg=%.1fms, min=%.1fms, max=%.1fms\n",
 						script.AvgTimeMs, script.MinTimeMs, script.MaxTimeMs)
 					fmt.Fprintf(c.term, "Slow: %d (%.2f%%)\n", script.SlowCount, script.SlowPercent)
+					fmt.Fprintf(c.term, "Errors: %d (%.2f%%)\n", script.Errors, script.ErrorPercent)
 					if !script.LastExecution.IsZero() {
 						fmt.Fprintf(c.term, "Last execution: %s\n", script.LastExecution.Format(time.RFC3339))
+					}
+					if !script.LastError.IsZero() {
+						fmt.Fprintf(c.term, "Last error: %s\n", script.LastError.Format(time.RFC3339))
 					}
 					fmt.Fprintf(c.term, "\nExecution rates: %.2f/s, %.1f/m, %.0f/h\n",
 						script.ExecRates.PerSecond, script.ExecRates.PerMinute, script.ExecRates.PerHour)
 					fmt.Fprintf(c.term, "Time rates: %.3fs/s, %.1fs/m, %.0fs/h\n",
 						script.TimeRates.PerSecond, script.TimeRates.PerMinute, script.TimeRates.PerHour)
+					fmt.Fprintf(c.term, "Error rates: %.2f/s, %.1f/m, %.0f/h\n",
+						script.ErrorRates.PerSecond, script.ErrorRates.PerMinute, script.ErrorRates.PerHour)
+					if len(script.ByCategory) > 0 {
+						fmt.Fprintln(c.term, "\nErrors by category:")
+						for cat, count := range script.ByCategory {
+							fmt.Fprintf(c.term, "  %s: %d\n", cat, count)
+						}
+					}
+					if len(script.ByLocation) > 0 {
+						fmt.Fprintln(c.term, "\nErrors by location:")
+						for loc, count := range script.ByLocation {
+							fmt.Fprintf(c.term, "  %s: %d\n", loc, count)
+						}
+					}
 					if len(script.ImportChain) > 1 {
 						fmt.Fprintln(c.term, "\nImport chain:")
 						for _, dep := range script.ImportChain {
@@ -653,6 +721,10 @@ func (c *Connection) wizCommands() commands {
 							sortBy = SortObjectByExecs
 						case "slow":
 							sortBy = SortObjectBySlow
+						case "errors":
+							sortBy = SortObjectByErrors
+						case "errorrate":
+							sortBy = SortObjectByErrorRate
 						}
 					}
 					n := 20
@@ -661,62 +733,77 @@ func (c *Connection) wizCommands() commands {
 							n = parsed
 						}
 					}
-					objs := jsStats.TopObjects(sortBy, n)
+					objs := stats.TopObjects(sortBy, n)
 					if len(objs) == 0 {
 						fmt.Fprintln(c.term, "No objects recorded.")
 						return nil
 					}
-					t := table.New("Object ID", "Source", "Execs", "Avg(ms)", "Max(ms)", "Slow%").WithWriter(c.term)
+					t := table.New("Object ID", "Source", "Execs", "Avg(ms)", "Slow%", "Errs", "Err%").WithWriter(c.term)
 					for _, obj := range objs {
-						// Truncate source path for display
-						src := obj.SourcePath
-						if len(src) > 20 {
-							src = "..." + src[len(src)-17:]
-						}
 						t.AddRow(
 							obj.ObjectID,
-							src,
+							truncateForDisplay(obj.SourcePath, 20),
 							obj.Executions,
 							fmt.Sprintf("%.1f", obj.AvgTimeMs),
-							fmt.Sprintf("%.1f", obj.MaxTimeMs),
 							fmt.Sprintf("%.1f", obj.SlowPercent),
+							obj.Errors,
+							fmt.Sprintf("%.1f", obj.ErrorPercent),
 						)
 					}
 					t.Print()
 
-				case "slow":
-					n := 10
-					if len(parts) >= 3 {
-						if parsed, err := strconv.Atoi(parts[2]); err == nil && parsed > 0 {
-							n = parsed
-						}
-					}
-					recent := jsStats.RecentSlowExecutions(n)
-					if len(recent) == 0 {
-						fmt.Fprintln(c.term, "No slow executions recorded.")
+				case "object":
+					if len(parts) < 3 {
+						fmt.Fprintln(c.term, "usage: /stats object <id>")
 						return nil
 					}
-					for _, rec := range recent {
-						fmt.Fprintf(c.term, "[%s] #%s %s %.1fms\n",
-							rec.Timestamp.Format("15:04:05"),
-							rec.ObjectID,
-							rec.SourcePath,
-							float64(rec.Duration.Milliseconds()))
-						if len(rec.ImportChain) > 1 {
-							fmt.Fprintf(c.term, "  Imports: ")
-							for i, dep := range rec.ImportChain[1:] { // Skip first (the source itself)
-								if i > 0 {
-									fmt.Fprint(c.term, ", ")
-								}
-								fmt.Fprint(c.term, dep)
-							}
-							fmt.Fprintln(c.term)
+					objectID := parts[2]
+					obj := stats.ObjectExecSnapshot(objectID)
+					if obj == nil {
+						fmt.Fprintf(c.term, "No stats for object %q\n", objectID)
+						return nil
+					}
+					fmt.Fprintf(c.term, "Object: %s\n", obj.ObjectID)
+					fmt.Fprintf(c.term, "Source: %s\n", obj.SourcePath)
+					fmt.Fprintf(c.term, "Executions: %d\n", obj.Executions)
+					fmt.Fprintf(c.term, "Time: avg=%.1fms, min=%.1fms, max=%.1fms\n",
+						obj.AvgTimeMs, obj.MinTimeMs, obj.MaxTimeMs)
+					fmt.Fprintf(c.term, "Slow: %d (%.2f%%)\n", obj.SlowCount, obj.SlowPercent)
+					fmt.Fprintf(c.term, "Errors: %d (%.2f%%)\n", obj.Errors, obj.ErrorPercent)
+					if !obj.LastExecution.IsZero() {
+						fmt.Fprintf(c.term, "Last execution: %s\n", obj.LastExecution.Format(time.RFC3339))
+					}
+					if !obj.LastError.IsZero() {
+						fmt.Fprintf(c.term, "Last error: %s\n", obj.LastError.Format(time.RFC3339))
+					}
+					fmt.Fprintf(c.term, "\nExecution rates: %.2f/s, %.1f/m, %.0f/h\n",
+						obj.ExecRates.PerSecond, obj.ExecRates.PerMinute, obj.ExecRates.PerHour)
+					fmt.Fprintf(c.term, "Time rates: %.3fs/s, %.1fs/m, %.0fs/h\n",
+						obj.TimeRates.PerSecond, obj.TimeRates.PerMinute, obj.TimeRates.PerHour)
+					fmt.Fprintf(c.term, "Error rates: %.2f/s, %.1f/m, %.0f/h\n",
+						obj.ErrorRates.PerSecond, obj.ErrorRates.PerMinute, obj.ErrorRates.PerHour)
+					if len(obj.ByCategory) > 0 {
+						fmt.Fprintln(c.term, "\nErrors by category:")
+						for cat, count := range obj.ByCategory {
+							fmt.Fprintf(c.term, "  %s: %d\n", cat, count)
+						}
+					}
+					if len(obj.ByLocation) > 0 {
+						fmt.Fprintln(c.term, "\nErrors by location:")
+						for loc, count := range obj.ByLocation {
+							fmt.Fprintf(c.term, "  %s: %d\n", loc, count)
+						}
+					}
+					if len(obj.ByScript) > 0 {
+						fmt.Fprintln(c.term, "\nErrors by script:")
+						for script, count := range obj.ByScript {
+							fmt.Fprintf(c.term, "  %s: %d\n", script, count)
 						}
 					}
 
 				case "intervals":
-					n := 20
 					sortBy := SortIntervalByTime
+					n := 20
 					if len(parts) >= 3 {
 						switch parts[2] {
 						case "time":
@@ -725,6 +812,10 @@ func (c *Connection) wizCommands() commands {
 							sortBy = SortIntervalByExecs
 						case "slow":
 							sortBy = SortIntervalBySlow
+						case "errors":
+							sortBy = SortIntervalByErrors
+						case "errorrate":
+							sortBy = SortIntervalByErrorRate
 						default:
 							// If it looks like a number, use it as n
 							if parsed, err := strconv.Atoi(parts[2]); err == nil && parsed > 0 {
@@ -732,17 +823,18 @@ func (c *Connection) wizCommands() commands {
 							}
 						}
 					}
+					// Check for n in parts[3] (only if parts[2] was a sort key)
 					if len(parts) >= 4 {
 						if parsed, err := strconv.Atoi(parts[3]); err == nil && parsed > 0 {
 							n = parsed
 						}
 					}
-					intervals := jsStats.TopIntervals(sortBy, n)
+					intervals := stats.TopIntervals(sortBy, n)
 					if len(intervals) == 0 {
 						fmt.Fprintln(c.term, "No interval executions recorded.")
 						return nil
 					}
-					t := table.New("Interval ID", "Object ID", "Event", "Execs", "Avg(ms)", "Max(ms)", "Slow%").WithWriter(c.term)
+					t := table.New("Interval ID", "Object ID", "Event", "Execs", "Avg(ms)", "Slow%", "Errs").WithWriter(c.term)
 					for _, iv := range intervals {
 						t.AddRow(
 							iv.IntervalID,
@@ -750,25 +842,27 @@ func (c *Connection) wizCommands() commands {
 							iv.EventName,
 							iv.Executions,
 							fmt.Sprintf("%.1f", iv.AvgTimeMs),
-							fmt.Sprintf("%.1f", iv.MaxTimeMs),
 							fmt.Sprintf("%.1f", iv.SlowPercent),
+							iv.Errors,
 						)
 					}
 					t.Print()
 
 				case "reset":
-					jsStats.Reset()
-					fmt.Fprintln(c.term, "JS statistics reset.")
+					stats.Reset()
+					fmt.Fprintln(c.term, "Statistics reset.")
 
 				default:
-					fmt.Fprintln(c.term, "usage: /jsstats [subcommand]")
-					fmt.Fprintln(c.term, "  summary                  Show global statistics (default)")
-					fmt.Fprintln(c.term, "  scripts [sort] [n]       Show top n scripts (sort: time|execs|slow)")
-					fmt.Fprintln(c.term, "  script <path>            Show stats for specific script")
-					fmt.Fprintln(c.term, "  objects [sort] [n]       Show top n objects (sort: time|execs|slow)")
-					fmt.Fprintln(c.term, "  intervals [sort] [n]     Show top n intervals (sort: time|execs|slow)")
-					fmt.Fprintln(c.term, "  slow [n]                 Show n most recent slow executions (default 10)")
-					fmt.Fprintln(c.term, "  reset                    Clear all statistics")
+					fmt.Fprintln(c.term, "usage: /stats [subcommand]")
+					fmt.Fprintln(c.term, "  summary                    Dashboard view (default)")
+					fmt.Fprintln(c.term, "  errors [sub]               Error stats (sub: summary|categories|locations|recent)")
+					fmt.Fprintln(c.term, "  perf [sub]                 Performance stats (sub: summary|scripts|slow)")
+					fmt.Fprintln(c.term, "  scripts [sort] [n]         Top n scripts (sort: time|execs|slow|errors|errorrate)")
+					fmt.Fprintln(c.term, "  script <path>              Detailed stats for specific script")
+					fmt.Fprintln(c.term, "  objects [sort] [n]         Top n objects (sort: time|execs|slow|errors|errorrate)")
+					fmt.Fprintln(c.term, "  object <id>                Detailed stats for specific object")
+					fmt.Fprintln(c.term, "  intervals [sort] [n]       Top n intervals (sort: time|execs|slow|errors|errorrate)")
+					fmt.Fprintln(c.term, "  reset                      Clear all statistics")
 				}
 				return nil
 			},

@@ -127,7 +127,6 @@ func initialObjects() map[string]*structs.ObjectDO {
 
 type Game struct {
 	storage          *storage.Storage
-	queueStats       *QueueStats
 	jsStats          *JSStats
 	loginRateLimiter *loginRateLimiter
 	workChan         chan *structs.Event // Unbuffered channel for event handoff to workers
@@ -236,7 +235,6 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 
 	g := &Game{
 		storage:          s,
-		queueStats:       NewQueueStats(ctx),
 		jsStats:          NewJSStats(ctx, s.ImportResolver()),
 		loginRateLimiter: newLoginRateLimiter(ctx),
 		workChan:         make(chan *structs.Event), // Unbuffered for synchronous handoff
@@ -254,18 +252,14 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 					if ev.Call.Name != "" {
 						call = &ev.Call
 					}
-					g.queueStats.RecordEvent(ev.Object)
-
 					// Check if this is an interval event for stats tracking
-					var queueIntervalInfo *IntervalInfo
-					var jsIntervalInfo *IntervalExecInfo
+					var intervalInfo *IntervalExecInfo
 					if ev.IntervalID != "" {
-						queueIntervalInfo = &IntervalInfo{IntervalID: ev.IntervalID, EventName: ev.Call.Name}
-						jsIntervalInfo = &IntervalExecInfo{IntervalID: ev.IntervalID, EventName: ev.Call.Name}
+						intervalInfo = &IntervalExecInfo{IntervalID: ev.IntervalID, EventName: ev.Call.Name}
 					}
 
-					if _, _, err := g.loadRun(ctx, ev.Object, call, jsIntervalInfo); err != nil {
-						g.queueStats.RecordError(ev.Object, err, queueIntervalInfo)
+					// run() and loadRun() handle recording execution time and errors
+					if _, _, err := g.loadRun(ctx, ev.Object, call, intervalInfo); err != nil {
 						log.Printf("trying to execute %+v: %v", ev, err)
 						log.Printf("%v", juicemud.StackTrace(err))
 					}
@@ -273,6 +267,7 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 					// Handle interval re-enqueueing after handler execution
 					if ev.IntervalID != "" {
 						if err := g.reEnqueueInterval(ctx, ev.Object, ev.IntervalID); err != nil {
+							g.jsStats.RecordRecoveryError(ev.Object, ev.IntervalID, err)
 							log.Printf("re-enqueueing interval %s for %s: %v", ev.IntervalID, ev.Object, err)
 						}
 					}
@@ -320,6 +315,7 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 		Console:   os.Stderr,
 	}
 	if _, err := bootTarget.Run(ctx, nil, time.Second); err != nil {
+		g.jsStats.RecordBootError(err)
 		log.Printf("trying to run %q: %v", bootSource, err)
 		log.Println(juicemud.StackTrace(err))
 		return g, nil
