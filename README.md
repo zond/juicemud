@@ -188,7 +188,7 @@ addCallback('movement', ['emit'], (msg) => {
     // msg.Source: old location ID (or null if created)
     // msg.Destination: new location ID (or null if removed)
     if (msg.Object && msg.Destination) {
-        log('Detected arrival:', msg.Object.Unsafe.Name);
+        log('Detected arrival:', msg.Object.Id);
     }
 });
 ```
@@ -197,12 +197,12 @@ addCallback('movement', ['emit'], (msg) => {
 ```javascript
 // Sent to container when it gains content
 addCallback('received', ['emit'], (msg) => {
-    log('Container received:', msg.Object.Unsafe.Id);
+    log('Container received:', msg.Object.Id);
 });
 
 // Sent to container when it loses content
 addCallback('transmitted', ['emit'], (msg) => {
-    log('Container lost:', msg.Object.Unsafe.Id);
+    log('Container lost:', msg.Object.Id);
 });
 ```
 
