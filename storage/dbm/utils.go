@@ -27,6 +27,11 @@ func WithHash(t testing.TB, f func(*Hash)) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer func() {
+			if err := dbm.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
 		f(dbm)
 	})
 }
@@ -38,6 +43,11 @@ func WithTypeHash[T any, S structs.Serializable[T]](t testing.TB, f func(*TypeHa
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer func() {
+			if err := dbm.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
 		f(dbm)
 	})
 }
@@ -45,36 +55,49 @@ func WithTypeHash[T any, S structs.Serializable[T]](t testing.TB, f func(*TypeHa
 func WithLiveTypeHash[T any, S structs.Snapshottable[T]](t testing.TB, f func(*LiveTypeHash[T, S])) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	withFile(t, ".tkh", func(path string) {
 		dbm, err := OpenLiveTypeHash[T, S](ctx, path)
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer func() {
+			cancel() // Cancel context first so flush goroutine stops
+			if err := dbm.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
 		f(dbm)
 	})
 }
 
 func WithTree(t testing.TB, f func(*Tree)) {
 	t.Helper()
-	t.Helper()
 	withFile(t, ".tkt", func(path string) {
 		dbm, err := OpenTree(path)
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer func() {
+			if err := dbm.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
 		f(dbm)
 	})
 }
 
 func WithTypeTree[T any, S structs.Serializable[T]](t testing.TB, f func(*TypeTree[T, S])) {
 	t.Helper()
-	t.Helper()
 	withFile(t, ".tkt", func(path string) {
 		dbm, err := OpenTypeTree[T, S](path)
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer func() {
+			if err := dbm.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
 		f(dbm)
 	})
 }

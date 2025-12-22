@@ -17,11 +17,14 @@ import (
 	"github.com/zond/juicemud/structs"
 )
 
+// Hash wraps a tkrzw hash database for unordered key-value storage.
+// All operations are thread-safe via internal mutex.
 type Hash struct {
 	dbm   *tkrzw.DBM
 	mutex sync.RWMutex
 }
 
+// Close closes the underlying database file.
 func (h *Hash) Close() error {
 	if stat := h.dbm.Close(); !stat.IsOK() {
 		return juicemud.WithStack(stat)
@@ -29,11 +32,13 @@ func (h *Hash) Close() error {
 	return nil
 }
 
+// BEntry is a byte-level key-value pair used for iteration.
 type BEntry struct {
 	K string
 	V []byte
 }
 
+// Each iterates over all entries in the hash.
 func (h *Hash) Each() iter.Seq2[BEntry, error] {
 	return func(yield func(BEntry, error) bool) {
 		h.mutex.RLock()
@@ -46,12 +51,9 @@ func (h *Hash) Each() iter.Seq2[BEntry, error] {
 			if status.GetCode() == tkrzw.StatusNotFoundError {
 				break
 			} else if !status.IsOK() {
-				if !yield(BEntry{
-					K: string(key),
-					V: value,
-				}, juicemud.WithStack(status)) {
-					break
-				}
+				// On error, yield empty entry with error and stop iteration
+				yield(BEntry{}, juicemud.WithStack(status))
+				break
 			} else {
 				if !yield(BEntry{
 					K: string(key),
@@ -65,12 +67,14 @@ func (h *Hash) Each() iter.Seq2[BEntry, error] {
 	}
 }
 
+// Has returns true if the key exists in the hash.
 func (h *Hash) Has(k string) bool {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
 	return h.dbm.Check(k)
 }
 
+// Get retrieves a value by key. Returns os.ErrNotExist if key doesn't exist.
 func (h *Hash) Get(k string) ([]byte, error) {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
@@ -83,6 +87,7 @@ func (h *Hash) Get(k string) ([]byte, error) {
 	return b, nil
 }
 
+// Set stores a key-value pair. If overwrite is false, fails if key exists.
 func (h *Hash) Set(k string, v []byte, overwrite bool) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -92,6 +97,7 @@ func (h *Hash) Set(k string, v []byte, overwrite bool) error {
 	return nil
 }
 
+// Del removes a key. Returns os.ErrNotExist if key doesn't exist.
 func (h *Hash) Del(k string) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -101,6 +107,17 @@ func (h *Hash) Del(k string) error {
 		return juicemud.WithStack(stat)
 	}
 	return nil
+}
+
+// GetMulti retrieves multiple values atomically. Missing keys are omitted from result.
+func (h *Hash) GetMulti(keys map[string]bool) map[string][]byte {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+	ids := make([]string, 0, len(keys))
+	for key := range keys {
+		ids = append(ids, key)
+	}
+	return h.dbm.GetMulti(ids)
 }
 
 const (
@@ -172,6 +189,7 @@ func (l *LiveTypeHash[T, S]) FlushHealth() FlushHealth {
 
 // Flush writes all dirty entries to disk.
 // Note: updatesMutex is released before stageMutex is acquired to avoid deadlock.
+// On partial failure, remaining keys are re-added to updates to retry later.
 func (l *LiveTypeHash[T, S]) Flush() error {
 	toUpdate := []string{}
 	l.updatesMutex.Lock()
@@ -181,7 +199,7 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 	l.updates = map[string]bool{}
 	l.updatesMutex.Unlock()
 	// updatesMutex released above before acquiring stageMutex below
-	for _, key := range toUpdate {
+	for i, key := range toUpdate {
 		l.stageMutex.RLock()
 		obj, found := l.stage[key]
 		l.stageMutex.RUnlock()
@@ -189,6 +207,12 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 			continue
 		}
 		if err := l.hash.Set(key, obj, true); err != nil {
+			// Re-add this key and all remaining keys back to updates
+			l.updatesMutex.Lock()
+			for _, remainingKey := range toUpdate[i:] {
+				l.updates[remainingKey] = true
+			}
+			l.updatesMutex.Unlock()
 			return juicemud.WithStack(err)
 		}
 	}
@@ -259,22 +283,25 @@ func (l *LiveTypeHash[T, S]) updated(t *T) {
 	l.updates[id] = true
 }
 
+// SetIfMissing adds a value only if the key doesn't exist.
 func (l *LiveTypeHash[T, S]) SetIfMissing(t *T) error {
 	id := S(t).GetId()
 
+	// Fast path: read-only check (safe with RLock, doesn't modify stage)
 	l.stageMutex.RLock()
-	_, err := l.getNOLOCK(id)
+	_, inStage := l.stage[id]
+	inHash := !inStage && l.hash.Has(id)
 	l.stageMutex.RUnlock()
-	if err == nil {
+	if inStage || inHash {
 		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return juicemud.WithStack(err)
 	}
 
+	// Slow path: need to add, take write lock
 	l.stageMutex.Lock()
 	defer l.stageMutex.Unlock()
 
-	if _, err = l.getNOLOCK(id); err == nil {
+	// Double-check under write lock (another goroutine may have added it)
+	if _, err := l.getNOLOCK(id); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return juicemud.WithStack(err)
@@ -326,6 +353,7 @@ func (l *LiveTypeHash[T, S]) LProc(key string, fun func(string, *T) (*T, error))
 
 // Proc atomically applies multiple operations. Each LProc's function receives
 // the current value and returns the new value (or nil to delete).
+// Lock ordering: stageMutex is acquired before hash.mutex (via l.hash.Proc).
 func (l *LiveTypeHash[T, S]) Proc(procs []LProc[T, S]) error {
 	l.stageMutex.Lock()
 	defer l.stageMutex.Unlock()
@@ -374,41 +402,32 @@ func (l *LiveTypeHash[T, S]) getNOLOCK(k string) (*T, error) {
 
 func (l *LiveTypeHash[T, S]) Has(k string) bool {
 	l.stageMutex.RLock()
-	_, found := l.stage[k]
-	l.stageMutex.RUnlock()
-	if found {
+	defer l.stageMutex.RUnlock()
+	if _, found := l.stage[k]; found {
 		return true
 	}
-
+	// Check hash while still holding lock to avoid race with Proc() deletions
 	return l.hash.Has(k)
 }
 
+// Get retrieves a typed value by key. Returns os.ErrNotExist if key doesn't exist.
 func (l *LiveTypeHash[T, S]) Get(k string) (*T, error) {
-	l.stageMutex.RLock()
-	res, found := l.stage[k]
-	l.stageMutex.RUnlock()
-	if found {
-		return res, nil
-	}
-
 	l.stageMutex.Lock()
 	defer l.stageMutex.Unlock()
-
 	return l.getNOLOCK(k)
 }
 
+// TypeHash wraps a Hash with automatic serialization for typed values.
+// T is the value type, S is a pointer type implementing Serializable[T].
 type TypeHash[T any, S structs.Serializable[T]] struct {
 	*Hash
 }
 
+// Get retrieves a typed value by key. Returns os.ErrNotExist if key doesn't exist.
 func (h *TypeHash[T, S]) Get(k string) (*T, error) {
-	h.mutex.RLock()
-	defer h.mutex.RUnlock()
-	b, stat := h.dbm.Get(k)
-	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(fmt.Errorf("key %q: %w", k, os.ErrNotExist))
-	} else if !stat.IsOK() {
-		return nil, juicemud.WithStack(stat)
+	b, err := h.Hash.Get(k)
+	if err != nil {
+		return nil, err
 	}
 	t := S(new(T))
 	if err := t.Unmarshal(b); err != nil {
@@ -417,11 +436,13 @@ func (h *TypeHash[T, S]) Get(k string) (*T, error) {
 	return (*T)(t), nil
 }
 
+// SEntry is a typed key-value pair used for iteration.
 type SEntry[T any, S structs.Serializable[T]] struct {
 	K string
 	V *T
 }
 
+// Each iterates over all entries, deserializing values to type T.
 func (h *TypeHash[T, S]) Each() iter.Seq2[SEntry[T, S], error] {
 	return func(yield func(SEntry[T, S], error) bool) {
 		for entry, err := range h.Hash.Each() {
@@ -454,14 +475,9 @@ func (h *TypeHash[T, S]) Each() iter.Seq2[SEntry[T, S], error] {
 	}
 }
 
+// GetMulti retrieves multiple typed values atomically. Missing keys are omitted.
 func (h *TypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
-	h.mutex.RLock()
-	defer h.mutex.RUnlock()
-	ids := make([]string, 0, len(keys))
-	for key := range keys {
-		ids = append(ids, key)
-	}
-	byteResults := h.dbm.GetMulti(ids)
+	byteResults := h.Hash.GetMulti(keys)
 	results := map[string]*T{}
 	for key, byteResult := range byteResults {
 		result := S(new(T))
@@ -473,23 +489,21 @@ func (h *TypeHash[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
 	return results, nil
 }
 
+// Set stores a typed value. If overwrite is false, fails if key exists.
 func (h *TypeHash[T, S]) Set(k string, v *T, overwrite bool) error {
-	h.mutex.Lock()
-	defer h.mutex.Unlock()
 	s := S(v)
 	b := make([]byte, s.Size())
 	s.Marshal(b)
-	if stat := h.dbm.Set(k, b, overwrite); !stat.IsOK() {
-		return juicemud.WithStack(stat)
-	}
-	return nil
+	return h.Hash.Set(k, b, overwrite)
 }
 
+// Proc is an atomic read-modify-write operation. Returns new value or nil to delete.
 type Proc interface {
 	Key() string
 	Proc(string, []byte) ([]byte, error)
 }
 
+// BProc is a byte-level Proc implementation.
 type BProc struct {
 	K string
 	F func(string, []byte) ([]byte, error)
@@ -503,6 +517,7 @@ func (p *BProc) Proc(k string, v []byte) ([]byte, error) {
 	return p.F(k, v)
 }
 
+// SProc creates a typed Proc for use with Hash.Proc().
 func (h TypeHash[T, S]) SProc(key string, fun func(string, *T) (*T, error)) *SProc[T, S] {
 	return &SProc[T, S]{
 		K: key,
@@ -510,6 +525,7 @@ func (h TypeHash[T, S]) SProc(key string, fun func(string, *T) (*T, error)) *SPr
 	}
 }
 
+// SProc is a typed Proc implementation that handles serialization.
 type SProc[T any, S structs.Serializable[T]] struct {
 	K string
 	F func(string, *T) (*T, error)
@@ -550,6 +566,7 @@ func (h *Hash) Proc(pairs []Proc, write bool) error {
 	procs := make([]tkrzw.KeyProcPair, len(pairs)*2)
 	var abort error
 	for index, pair := range pairs {
+		index, pair := index, pair // Capture loop variables for closure
 		procs[index] = tkrzw.KeyProcPair{
 			Key: pair.Key(),
 			Proc: func(key []byte, value []byte) any {
@@ -567,6 +584,7 @@ func (h *Hash) Proc(pairs []Proc, write bool) error {
 		}
 	}
 	for index, pair := range pairs {
+		index := index // Capture loop variable for closure
 		procs[index+len(pairs)] = tkrzw.KeyProcPair{
 			Key: pair.Key(),
 			Proc: func(key []byte, value []byte) any {
@@ -595,6 +613,47 @@ type Tree struct {
 	*Hash
 }
 
+// SubBProc is a byte-level proc for Tree's hierarchical keys.
+// Implements the Proc interface so it can be used with Tree.Proc (inherited from Hash).
+type SubBProc struct {
+	compositeKey []byte
+	F            func([]byte) ([]byte, error)
+}
+
+func (p *SubBProc) Key() string                            { return string(p.compositeKey) }
+func (p *SubBProc) Proc(_ string, v []byte) ([]byte, error) { return p.F(v) }
+
+// SubBProc creates a byte-level Proc for hierarchical keys. Use with Hash.Proc().
+func (t *Tree) SubBProc(set, key string, f func([]byte) ([]byte, error)) *SubBProc {
+	return &SubBProc{
+		compositeKey: appendKey(nil, set, key),
+		F:            f,
+	}
+}
+
+// First returns the first (smallest) key-value pair in the tree.
+// Returns os.ErrNotExist if tree is empty.
+func (t *Tree) First() ([]byte, []byte, error) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	iter := t.dbm.MakeIterator()
+	defer iter.Destruct()
+	if stat := iter.First(); !stat.IsOK() {
+		if stat.GetCode() == tkrzw.StatusNotFoundError {
+			return nil, nil, juicemud.WithStack(fmt.Errorf("tree is empty: %w", os.ErrNotExist))
+		}
+		return nil, nil, juicemud.WithStack(stat)
+	}
+	k, v, stat := iter.Get()
+	if stat.GetCode() == tkrzw.StatusNotFoundError {
+		return nil, nil, juicemud.WithStack(fmt.Errorf("tree is empty: %w", os.ErrNotExist))
+	} else if !stat.IsOK() {
+		return nil, nil, juicemud.WithStack(stat)
+	}
+	return k, v, nil
+}
+
+// appendKey builds a composite key from parts using length-prefixed encoding.
 func appendKey(b []byte, parts ...string) []byte {
 	for _, part := range parts {
 		partBytes := []byte(part)
@@ -607,6 +666,7 @@ func appendKey(b []byte, parts ...string) []byte {
 	return b
 }
 
+// SubSet stores a value under a hierarchical key (set, key).
 func (t *Tree) SubSet(set string, key string, b []byte) error {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
@@ -617,6 +677,7 @@ func (t *Tree) SubSet(set string, key string, b []byte) error {
 	return nil
 }
 
+// SubDel removes a value under a hierarchical key (set, key).
 func (t *Tree) SubDel(set string, key string) error {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
@@ -629,6 +690,7 @@ func (t *Tree) SubDel(set string, key string) error {
 	return nil
 }
 
+// SubGet retrieves a value under a hierarchical key (set, key).
 func (t *Tree) SubGet(set string, key string) ([]byte, error) {
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
@@ -642,6 +704,7 @@ func (t *Tree) SubGet(set string, key string) ([]byte, error) {
 	return b, nil
 }
 
+// SubCount returns the number of keys in a set.
 func (t *Tree) SubCount(set string) (int, error) {
 	c := 0
 	for _, err := range t.SubEach(set) {
@@ -653,8 +716,10 @@ func (t *Tree) SubCount(set string) (int, error) {
 	return c, nil
 }
 
+// SubEach iterates over all entries within a set.
 func (t *Tree) SubEach(set string) iter.Seq2[BEntry, error] {
 	keyPrefix := appendKey(nil, set)
+	keyOffset := len(keyPrefix) + binary.Size(uint32(0))
 	return func(yield func(BEntry, error) bool) {
 		t.mutex.RLock()
 		defer t.mutex.RUnlock()
@@ -674,8 +739,16 @@ func (t *Tree) SubEach(set string) iter.Seq2[BEntry, error] {
 				}
 			} else {
 				if bytes.HasPrefix(key, keyPrefix) {
+					if len(key) < keyOffset {
+						// Malformed key - too short to contain the sub-key
+						if !yield(BEntry{}, juicemud.WithStack(fmt.Errorf("malformed key: too short"))) {
+							break
+						}
+						iter.Next()
+						continue
+					}
 					if !yield(BEntry{
-						K: string(key[len(keyPrefix)+binary.Size(uint32(0)):]),
+						K: string(key[keyOffset:]),
 						V: value,
 					}, nil) {
 						break
@@ -763,31 +836,135 @@ func incrementBytes(b []byte) []byte {
 	return nil // All bytes overflowed
 }
 
+// TypeTree provides typed operations on a Tree.
+// It embeds *Tree to inherit tree operations, and casts to *TypeHash
+// for typed get/set since Tree and TypeHash have identical memory layout.
 type TypeTree[T any, S structs.Serializable[T]] struct {
-	*TypeHash[T, S]
+	*Tree
 }
 
-func (t *TypeTree[T, S]) First() (*T, error) {
-	t.mutex.RLock()
-	defer t.mutex.RUnlock()
-	iter := t.dbm.MakeIterator()
-	defer iter.Destruct()
-	if stat := iter.First(); !stat.IsOK() {
-		return nil, juicemud.WithStack(stat)
+// asTypeHash returns a TypeHash view of the underlying Hash for typed operations.
+func (t *TypeTree[T, S]) asTypeHash() *TypeHash[T, S] {
+	return &TypeHash[T, S]{t.Tree.Hash}
+}
+
+// Get retrieves a typed value by key.
+func (t *TypeTree[T, S]) Get(k string) (*T, error) {
+	return t.asTypeHash().Get(k)
+}
+
+// Set stores a typed value.
+func (t *TypeTree[T, S]) Set(k string, v *T, overwrite bool) error {
+	return t.asTypeHash().Set(k, v, overwrite)
+}
+
+// Each iterates over all entries in order.
+func (t *TypeTree[T, S]) Each() iter.Seq2[SEntry[T, S], error] {
+	return t.asTypeHash().Each()
+}
+
+// GetMulti retrieves multiple typed values atomically.
+func (t *TypeTree[T, S]) GetMulti(keys map[string]bool) (map[string]*T, error) {
+	return t.asTypeHash().GetMulti(keys)
+}
+
+// SubGet retrieves a typed value under a hierarchical key (set, key).
+func (t *TypeTree[T, S]) SubGet(set, key string) (*T, error) {
+	b, err := t.Tree.SubGet(set, key)
+	if err != nil {
+		return nil, err
 	}
-	_, b, stat := iter.Get()
-	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(fmt.Errorf("tree is empty: %w", os.ErrNotExist))
-	} else if !stat.IsOK() {
-		return nil, juicemud.WithStack(stat)
-	}
-	first := S(new(T))
-	if err := first.Unmarshal(b); err != nil {
+	v := S(new(T))
+	if err := v.Unmarshal(b); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	return (*T)(first), nil
+	return (*T)(v), nil
 }
 
+// SubSet stores a typed value under a hierarchical key (set, key).
+func (t *TypeTree[T, S]) SubSet(set, key string, v *T) error {
+	s := S(v)
+	b := make([]byte, s.Size())
+	s.Marshal(b)
+	return t.Tree.SubSet(set, key, b)
+}
+
+// SubEach iterates over all typed entries within a set.
+func (t *TypeTree[T, S]) SubEach(set string) iter.Seq2[*T, error] {
+	return func(yield func(*T, error) bool) {
+		for entry, err := range t.Tree.SubEach(set) {
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				continue
+			}
+			v := S(new(T))
+			if err := v.Unmarshal(entry.V); err != nil {
+				if !yield(nil, juicemud.WithStack(err)) {
+					return
+				}
+				continue
+			}
+			if !yield((*T)(v), nil) {
+				return
+			}
+		}
+	}
+}
+
+// SubSProc is a typed Proc for hierarchical keys. Implements Proc interface.
+type SubSProc[T any, S structs.Serializable[T]] struct {
+	compositeKey []byte
+	F            func(*T) (*T, error)
+}
+
+func (p *SubSProc[T, S]) Key() string { return string(p.compositeKey) }
+
+func (p *SubSProc[T, S]) Proc(_ string, v []byte) ([]byte, error) {
+	var input *T
+	if v != nil {
+		input = new(T)
+		if err := S(input).Unmarshal(v); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+	}
+	output, err := p.F(input)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	if output != nil {
+		s := S(output)
+		v = make([]byte, s.Size())
+		s.Marshal(v)
+	} else {
+		v = nil
+	}
+	return v, nil
+}
+
+// SubSProc creates a typed Proc for hierarchical keys. Use with Hash.Proc().
+func (t *TypeTree[T, S]) SubSProc(set, key string, f func(*T) (*T, error)) *SubSProc[T, S] {
+	return &SubSProc[T, S]{
+		compositeKey: appendKey(nil, set, key),
+		F:            f,
+	}
+}
+
+// First returns the first (smallest) key-value pair. Returns os.ErrNotExist if empty.
+func (t *TypeTree[T, S]) First() (string, *T, error) {
+	k, v, err := t.Tree.First()
+	if err != nil {
+		return "", nil, err
+	}
+	first := S(new(T))
+	if err := first.Unmarshal(v); err != nil {
+		return "", nil, juicemud.WithStack(err)
+	}
+	return string(k), (*T)(first), nil
+}
+
+// OpenHash opens or creates a hash database file (appends .tkh extension).
 func OpenHash(path string) (*Hash, error) {
 	dbm := tkrzw.NewDBM()
 	stat := dbm.Open(fmt.Sprintf("%s.tkh", path), true, map[string]string{
@@ -801,6 +978,7 @@ func OpenHash(path string) (*Hash, error) {
 	return &Hash{dbm: dbm}, nil
 }
 
+// OpenTypeHash opens a typed hash database file.
 func OpenTypeHash[T any, S structs.Serializable[T]](path string) (*TypeHash[T, S], error) {
 	h, err := OpenHash(path)
 	if err != nil {
@@ -826,6 +1004,7 @@ func OpenLiveTypeHash[T any, S structs.Snapshottable[T]](ctx context.Context, pa
 	return l, nil
 }
 
+// OpenTree opens or creates a B-tree database file (appends .tkt extension).
 func OpenTree(path string) (*Tree, error) {
 	dbm := tkrzw.NewDBM()
 	stat := dbm.Open(fmt.Sprintf("%s.tkt", path), true, map[string]string{
@@ -839,10 +1018,11 @@ func OpenTree(path string) (*Tree, error) {
 	return &Tree{&Hash{dbm: dbm}}, nil
 }
 
+// OpenTypeTree opens a typed B-tree database file.
 func OpenTypeTree[T any, S structs.Serializable[T]](path string) (*TypeTree[T, S], error) {
 	t, err := OpenTree(path)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	return &TypeTree[T, S]{(*TypeHash[T, S])(t)}, nil
+	return &TypeTree[T, S]{t}, nil
 }

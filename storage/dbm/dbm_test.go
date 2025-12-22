@@ -147,7 +147,7 @@ func BenchmarkStructTree(b *testing.B) {
 		if err := benchTree.Set(ev.Key, ev, false); err != nil {
 			b.Fatal(err)
 		}
-		ev, err := benchTree.First()
+		_, ev, err := benchTree.First()
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -292,7 +292,7 @@ func TestFirst(t *testing.T) {
 			v := uint32(want)
 			wantKey := make([]byte, binary.Size(v))
 			binary.BigEndian.PutUint32(wantKey, v)
-			obj, err := st.First()
+			_, obj, err := st.First()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -469,6 +469,274 @@ func TestEachSetWithRandomData(t *testing.T) {
 			if !gotSets[setID] {
 				t.Errorf("missing set %q", setID)
 			}
+		}
+	})
+}
+
+func TestTreeFirst(t *testing.T) {
+	WithTree(t, func(tr *Tree) {
+		// Empty tree should return error
+		_, _, err := tr.First()
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("got %v, want os.ErrNotExist", err)
+		}
+
+		// Add entries with ordered keys
+		for _, v := range rand.Perm(10) {
+			key := make([]byte, 4)
+			binary.BigEndian.PutUint32(key, uint32(v))
+			if err := tr.Set(string(key), key, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// First should return smallest key and value
+		k, v, err := tr.First()
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotKey := binary.BigEndian.Uint32(k)
+		if gotKey != 0 {
+			t.Errorf("key: got %d, want 0", gotKey)
+		}
+		gotVal := binary.BigEndian.Uint32(v)
+		if gotVal != 0 {
+			t.Errorf("value: got %d, want 0", gotVal)
+		}
+	})
+}
+
+func TestSubBProc(t *testing.T) {
+	WithTree(t, func(tr *Tree) {
+		// Set initial values
+		if err := tr.SubSet("set1", "key1", []byte("value1")); err != nil {
+			t.Fatal(err)
+		}
+		if err := tr.SubSet("set1", "key2", []byte("value2")); err != nil {
+			t.Fatal(err)
+		}
+
+		// Use Proc to atomically update
+		if err := tr.Proc([]Proc{
+			tr.SubBProc("set1", "key1", func(v []byte) ([]byte, error) {
+				return []byte("updated1"), nil
+			}),
+			tr.SubBProc("set1", "key2", func(v []byte) ([]byte, error) {
+				return []byte("updated2"), nil
+			}),
+		}, true); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify updates
+		v1, err := tr.SubGet("set1", "key1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(v1) != "updated1" {
+			t.Errorf("got %q, want %q", string(v1), "updated1")
+		}
+
+		v2, err := tr.SubGet("set1", "key2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(v2) != "updated2" {
+			t.Errorf("got %q, want %q", string(v2), "updated2")
+		}
+	})
+}
+
+func TestSubBProcDelete(t *testing.T) {
+	WithTree(t, func(tr *Tree) {
+		if err := tr.SubSet("set1", "key1", []byte("value1")); err != nil {
+			t.Fatal(err)
+		}
+
+		// Return nil to delete
+		if err := tr.Proc([]Proc{
+			tr.SubBProc("set1", "key1", func(v []byte) ([]byte, error) {
+				return nil, nil
+			}),
+		}, true); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify deleted
+		_, err := tr.SubGet("set1", "key1")
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("got %v, want os.ErrNotExist", err)
+		}
+	})
+}
+
+func TestSubBProcUpdateIfExists(t *testing.T) {
+	WithTree(t, func(tr *Tree) {
+		// Proc on non-existent key - should not create
+		if err := tr.Proc([]Proc{
+			tr.SubBProc("set1", "key1", func(v []byte) ([]byte, error) {
+				if v == nil {
+					return nil, nil // Don't create if doesn't exist
+				}
+				return []byte("updated"), nil
+			}),
+		}, true); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify not created
+		_, err := tr.SubGet("set1", "key1")
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("got %v, want os.ErrNotExist", err)
+		}
+	})
+}
+
+func TestTypeTreeSubOps(t *testing.T) {
+	WithTypeTree(t, func(tt *TypeTree[Obj, *Obj]) {
+		// SubSet and SubGet
+		want := &Obj{I: 42, S: "test"}
+		if err := tt.SubSet("set1", "key1", want); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := tt.SubGet("set1", "key1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+
+		// SubEach
+		if err := tt.SubSet("set1", "key2", &Obj{I: 43, S: "test2"}); err != nil {
+			t.Fatal(err)
+		}
+
+		count := 0
+		for obj, err := range tt.SubEach("set1") {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if obj.I != 42 && obj.I != 43 {
+				t.Errorf("unexpected I: %d", obj.I)
+			}
+			count++
+		}
+		if count != 2 {
+			t.Errorf("got %d entries, want 2", count)
+		}
+	})
+}
+
+func TestTypeTreeSubSProc(t *testing.T) {
+	WithTypeTree(t, func(tt *TypeTree[Obj, *Obj]) {
+		if err := tt.SubSet("set1", "key1", &Obj{I: 10, S: "original"}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Use SubSProc to update
+		if err := tt.Proc([]Proc{
+			tt.SubSProc("set1", "key1", func(obj *Obj) (*Obj, error) {
+				obj.I = 20
+				obj.S = "updated"
+				return obj, nil
+			}),
+		}, true); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := tt.SubGet("set1", "key1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.I != 20 || got.S != "updated" {
+			t.Errorf("got %+v, want I=20 S=updated", got)
+		}
+	})
+}
+
+func TestTypeTreeSubSProcConditionalUpdate(t *testing.T) {
+	WithTypeTree(t, func(tt *TypeTree[Obj, *Obj]) {
+		// Try to update non-existent key - should not create
+		if err := tt.Proc([]Proc{
+			tt.SubSProc("set1", "key1", func(obj *Obj) (*Obj, error) {
+				if obj == nil {
+					return nil, nil // Don't create
+				}
+				obj.I = 99
+				return obj, nil
+			}),
+		}, true); err != nil {
+			t.Fatal(err)
+		}
+
+		// Should not exist
+		_, err := tt.SubGet("set1", "key1")
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("got %v, want os.ErrNotExist", err)
+		}
+
+		// Now create it
+		if err := tt.SubSet("set1", "key1", &Obj{I: 1}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Update should work now
+		if err := tt.Proc([]Proc{
+			tt.SubSProc("set1", "key1", func(obj *Obj) (*Obj, error) {
+				if obj == nil {
+					return nil, nil
+				}
+				obj.I = 99
+				return obj, nil
+			}),
+		}, true); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := tt.SubGet("set1", "key1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.I != 99 {
+			t.Errorf("got I=%d, want 99", got.I)
+		}
+	})
+}
+
+func TestTypeTreeEachAndGetMulti(t *testing.T) {
+	WithTypeTree(t, func(tt *TypeTree[Obj, *Obj]) {
+		want := map[string]*Obj{
+			"a": {I: 1, S: "a"},
+			"b": {I: 2, S: "b"},
+			"c": {I: 3, S: "c"},
+		}
+		for k, v := range want {
+			if err := tt.Set(k, v, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Test Each
+		got := map[string]*Obj{}
+		for entry, err := range tt.Each() {
+			if err != nil {
+				t.Fatal(err)
+			}
+			got[entry.K] = entry.V
+		}
+		if diff := cmp.Diff(got, want); diff != "" {
+			t.Errorf("Each: %v", diff)
+		}
+
+		// Test GetMulti
+		got, err := tt.GetMulti(map[string]bool{"a": true, "b": true, "c": true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(got, want); diff != "" {
+			t.Errorf("GetMulti: %v", diff)
 		}
 	})
 }
