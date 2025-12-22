@@ -898,6 +898,84 @@ addCallback('movement', ['emit'], (msg) => {
 
 	fmt.Println("  Movement event notifications: OK")
 
+	// === Test 12b: Custom movement verb ===
+	fmt.Println("Testing custom movement verb...")
+
+	// Create an object with a custom movement verb "scurries"
+	scurrySource := `setDescriptions([{Short: 'tiny mouse'}]);
+setMovement({Active: true, Verb: 'scurries'});
+`
+	if err := ts.WriteSource("/scurry.js", scurrySource); err != nil {
+		return fmt.Errorf("failed to create /scurry.js: %w", err)
+	}
+
+	scurryID, err := tc.createObject("/scurry.js")
+	if err != nil {
+		return fmt.Errorf("create scurry object: %w", err)
+	}
+
+	// Move the scurry object to lookroom - we should see "A tiny mouse scurries south."
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", scurryID, lookRoomID)); err != nil {
+		return fmt.Errorf("/move scurry to lookroom: %w", err)
+	}
+	// Wait for prompt, then wait for the async movement message
+	tc.waitForPrompt(defaultWaitTimeout)
+	output = tc.readUntil(500*time.Millisecond, func(s string) bool {
+		return strings.Contains(s, "scurries")
+	})
+	if !strings.Contains(output, "scurries") {
+		return fmt.Errorf("movement message should contain custom verb 'scurries': %q", output)
+	}
+
+	fmt.Println("  Custom movement verb: OK")
+
+	// === Test 12c: JS-based movement rendering ===
+	fmt.Println("Testing JS-based movement rendering...")
+
+	// Create an object that handles its own movement rendering via JS
+	jsRenderSource := `setDescriptions([{Short: 'glowing orb'}]);
+setMovement({Active: false, Verb: ''});
+
+addCallback('renderMovement', ['emit'], (msg) => {
+	var text;
+	if (msg.Source && msg.Source.Here && msg.Destination && msg.Destination.Exit) {
+		text = 'The glowing orb floats away ' + msg.Destination.Exit + ' with an eerie hum.';
+	} else if (msg.Destination && msg.Destination.Here && msg.Source && msg.Source.Exit) {
+		text = 'A glowing orb drifts in from ' + msg.Source.Exit + ', humming softly.';
+	} else if (msg.Destination && msg.Destination.Here) {
+		text = 'A glowing orb materializes with a soft pop.';
+	} else if (msg.Source && msg.Source.Here) {
+		text = 'The glowing orb fades from existence.';
+	} else {
+		text = 'A glowing orb does something mysterious.';
+	}
+	emit(msg.Observer, 'movementRendered', {Message: text});
+});
+`
+	if err := ts.WriteSource("/jsorb.js", jsRenderSource); err != nil {
+		return fmt.Errorf("failed to create /jsorb.js: %w", err)
+	}
+
+	jsOrbID, err := tc.createObject("/jsorb.js")
+	if err != nil {
+		return fmt.Errorf("create jsorb object: %w", err)
+	}
+
+	// Move the orb to lookroom - we should see the custom JS-rendered message
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", jsOrbID, lookRoomID)); err != nil {
+		return fmt.Errorf("/move jsorb to lookroom: %w", err)
+	}
+	// Wait for prompt, then wait for the async movement message
+	tc.waitForPrompt(defaultWaitTimeout)
+	output = tc.readUntil(500*time.Millisecond, func(s string) bool {
+		return strings.Contains(s, "floats away") || strings.Contains(s, "eerie hum")
+	})
+	if !strings.Contains(output, "floats away") && !strings.Contains(output, "eerie hum") {
+		return fmt.Errorf("movement message should contain JS-rendered text: %q", output)
+	}
+
+	fmt.Println("  JS-based movement rendering: OK")
+
 	// === Test 13: /debug and log() ===
 	fmt.Println("Testing /debug and log()...")
 

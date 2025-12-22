@@ -196,3 +196,13 @@ func (v *Object) SetSourceModTime(p int64) {
 	defer v.Unlock()
 	v.Unsafe.SourceModTime = p
 }
+func (v *Object) GetMovement() Movement {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.Movement
+}
+func (v *Object) SetMovement(p Movement) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.Movement = p
+}

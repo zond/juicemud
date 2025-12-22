@@ -330,6 +330,9 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 		return errors.Errorf("can't create object already known to storage: %+v", obj)
 	}
 
+	// Set default movement: use Go-based rendering with "moves" verb
+	obj.SetMovement(structs.Movement{Active: true, Verb: "moves"})
+
 	id := obj.GetId()
 	locID := obj.GetLocation()
 

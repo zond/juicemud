@@ -221,6 +221,41 @@ addCallback('exitFailed', ['emit'], (msg) => {
 });
 ```
 
+**Movement Rendering**: When players observe objects moving, they see descriptive messages like "A rat scurries south" or "A ghost drifts in from north". This rendering is controlled by the `Movement` field on objects:
+
+```javascript
+// Simple case: use default rendering with custom verb
+setMovement({Active: true, Verb: 'scurries'});  // "A rat scurries south"
+setMovement({Active: true, Verb: 'slithers'});  // "A snake slithers in from east"
+
+// Default for new objects: {Active: true, Verb: 'moves'}
+```
+
+For advanced cases, set `Active: false` and handle the `renderMovement` event yourself. The event includes the observer's perspective on the movement:
+```javascript
+setMovement({Active: false, Verb: ''});
+
+addCallback('renderMovement', ['emit'], (msg) => {
+    // msg.Observer: ID of the player observing this movement
+    // msg.Source: {Here: true} if observer's room, {Exit: 'north'} if visible neighbor, or null
+    // msg.Destination: same format as Source
+
+    var text;
+    if (msg.Source && msg.Source.Here && msg.Destination && msg.Destination.Exit) {
+        text = 'The ghost fades away ' + msg.Destination.Exit + '...';
+    } else if (msg.Destination && msg.Destination.Here && msg.Source && msg.Source.Exit) {
+        text = 'A chill runs down your spine as a ghost drifts in from ' + msg.Source.Exit + '.';
+    } else if (msg.Destination && msg.Destination.Here) {
+        text = 'A ghost materializes before you!';
+    } else {
+        text = 'You sense a ghostly presence nearby.';
+    }
+
+    // Send the rendered message back to the observer
+    emit(msg.Observer, 'movementRendered', {Message: text});
+});
+```
+
 **Object Identification**: Commands that target objects (like `look`, action commands) use pattern matching against Short descriptions:
 - **Word matching**: `tome` matches "dusty tome", `torch` matches "burning torch"
 - **Glob patterns**: `dust*` matches "dusty", `*orch` matches "torch"

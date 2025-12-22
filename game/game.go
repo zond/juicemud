@@ -39,6 +39,14 @@ const (
 	// Hardwired notification, NOT subject to skill challenges.
 	// Use for programmatic bookkeeping where containers need reliable content tracking.
 	transmittedEventType = "transmitted"
+
+	// renderMovementEventType is sent to a moving object when Movement.Active is false.
+	// The object should handle this and emit movementRenderedEventType back to the observer.
+	renderMovementEventType = "renderMovement"
+
+	// movementRenderedEventType is sent back to an observer from a moving object
+	// containing the custom movement message to display.
+	movementRenderedEventType = "movementRendered"
 )
 
 const (

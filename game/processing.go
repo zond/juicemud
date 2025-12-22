@@ -82,6 +82,26 @@ type contentChange struct {
 	Object *structs.Object // the object that was added/removed
 }
 
+// movementPerspective describes a location from an observer's perspective.
+// Either Here is true (observer's current room) or Exit contains the exit name.
+type movementPerspective struct {
+	Here bool
+	Exit string
+}
+
+// renderMovementRequest is sent to a moving object when Movement.Active is false.
+// The object should emit movementRenderedResponse back to the observer.
+type renderMovementRequest struct {
+	Observer    string               // Observer's object ID to emit response to
+	Source      *movementPerspective // nil if not visible
+	Destination *movementPerspective // nil if not visible
+}
+
+// movementRenderedResponse is sent back to an observer with the message to display.
+type movementRenderedResponse struct {
+	Message string
+}
+
 // emitMovement notifies all objects that can perceive the moving object about the movement.
 // Also notifies source and destination containers about content changes:
 // - source container receives "transmitted" event (lost content)
@@ -408,6 +428,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	// This allows wizards to reassign object sources while maintaining security.
 	addGetSetPair("SourcePath", &object.Unsafe.SourcePath, object, callbacks)
 	addGetSetPair("Learning", &object.Unsafe.Learning, object, callbacks)
+	addGetSetPair("Movement", &object.Unsafe.Movement, object, callbacks)
 
 	// moveObject(objectId, destinationId) - safely moves an object using storage.MoveObject
 	// which validates containment, prevents cycles, and atomically updates all references.
@@ -587,14 +608,23 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		}
 		if call != nil {
 
-			if call.Name == movementEventType && call.Tag == emitEventTag {
+			if call.Tag == emitEventTag {
 				if c, found := connectionByObjectID.GetHas(id); found {
-					m := &movement{}
-					if err := goccy.Unmarshal([]byte(call.Message), m); err != nil {
-						return false, juicemud.WithStack(err)
-					}
-					if err := c.renderMovement(m); err != nil {
-						return false, juicemud.WithStack(err)
+					switch call.Name {
+					case movementEventType:
+						m := &movement{}
+						if err := goccy.Unmarshal([]byte(call.Message), m); err != nil {
+							return false, juicemud.WithStack(err)
+						}
+						if err := c.renderMovement(m); err != nil {
+							return false, juicemud.WithStack(err)
+						}
+					case movementRenderedEventType:
+						resp := &movementRenderedResponse{}
+						if err := goccy.Unmarshal([]byte(call.Message), resp); err != nil {
+							return false, juicemud.WithStack(err)
+						}
+						fmt.Fprintln(c.term, resp.Message)
 					}
 				}
 			}

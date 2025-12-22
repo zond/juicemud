@@ -684,6 +684,120 @@ func (exit *Exit) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     return
 }
 
+// Struct - Movement
+type Movement struct {
+    Verb string
+    Active bool
+}
+
+// Reserved Ids - Movement
+var movementRIds = []uint16{}
+
+// Size - Movement
+func (movement *Movement) Size() int {
+    return movement.size(0)
+}
+
+// Nested Size - Movement
+func (movement *Movement) size(id uint16) (s int) {
+    s += bstd.SizeString(movement.Verb) + 2
+    s += bstd.SizeBool() + 2
+
+    if id > 255 {
+        s += 5
+        return
+    }
+    s += 4
+    return
+}
+
+// SizePlain - Movement
+func (movement *Movement) SizePlain() (s int) {
+    s += bstd.SizeString(movement.Verb)
+    s += bstd.SizeBool()
+    return
+}
+
+// Marshal - Movement
+func (movement *Movement) Marshal(b []byte) {
+    movement.marshal(0, b, 0)
+}
+
+// Nested Marshal - Movement
+func (movement *Movement) marshal(tn int, b []byte, id uint16) (n int) {
+    n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 1)
+    n = bstd.MarshalString(n, b, movement.Verb)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed8, 2)
+    n = bstd.MarshalBool(n, b, movement.Active)
+
+    n += 2
+    b[n-2] = 1
+    b[n-1] = 1
+    return
+}
+
+// MarshalPlain - Movement
+func (movement *Movement) MarshalPlain(tn int, b []byte) (n int) {
+    n = tn
+    n = bstd.MarshalString(n, b, movement.Verb)
+    n = bstd.MarshalBool(n, b, movement.Active)
+    return n
+}
+
+// Unmarshal - Movement
+func (movement *Movement) Unmarshal(b []byte) (err error) {
+    _, err = movement.unmarshal(0, b, []uint16{}, 0)
+    return
+}
+
+// Nested Unmarshal - Movement
+func (movement *Movement) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err error) {
+    var ok bool
+    if n, ok, err = bgenimpl.HandleCompatibility(tn, b, r, id); !ok {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, movementRIds, 1); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, movement.Verb, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, movementRIds, 2); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, movement.Active, err = bstd.UnmarshalBool(n, b); err != nil {
+            return
+        }
+    }
+    n += 2
+    return
+}
+
+// UnmarshalPlain - Movement
+func (movement *Movement) UnmarshalPlain(tn int, b []byte) (n int, err error) {
+    n = tn
+    if n, movement.Verb, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, movement.Active, err = bstd.UnmarshalBool(n, b); err != nil {
+        return
+    }
+    return
+}
+
 // Struct - ObjectDO
 type ObjectDO struct {
     Id string
@@ -697,6 +811,7 @@ type ObjectDO struct {
     Exits []Exit
     SourcePath string
     SourceModTime int64
+    Movement Movement
 }
 
 // Reserved Ids - ObjectDO
@@ -720,6 +835,7 @@ func (objectDO *ObjectDO) size(id uint16) (s int) {
     s += bstd.SizeSlice(objectDO.Exits, func (s Exit) int { return s.SizePlain() }) + 2
     s += bstd.SizeString(objectDO.SourcePath) + 2
     s += bstd.SizeInt64() + 2
+    s += objectDO.Movement.size(12)
 
     if id > 255 {
         s += 5
@@ -742,6 +858,7 @@ func (objectDO *ObjectDO) SizePlain() (s int) {
     s += bstd.SizeSlice(objectDO.Exits, func (s Exit) int { return s.SizePlain() })
     s += bstd.SizeString(objectDO.SourcePath)
     s += bstd.SizeInt64()
+    s += objectDO.Movement.SizePlain()
     return
 }
 
@@ -775,6 +892,7 @@ func (objectDO *ObjectDO) marshal(tn int, b []byte, id uint16) (n int) {
     n = bstd.MarshalString(n, b, objectDO.SourcePath)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 11)
     n = bstd.MarshalInt64(n, b, objectDO.SourceModTime)
+    n = objectDO.Movement.marshal(n, b, 12)
 
     n += 2
     b[n-2] = 1
@@ -796,6 +914,7 @@ func (objectDO *ObjectDO) MarshalPlain(tn int, b []byte) (n int) {
     n = bstd.MarshalSlice(n, b, objectDO.Exits, func (n int, b []byte, s Exit) int { return s.MarshalPlain(n, b) })
     n = bstd.MarshalString(n, b, objectDO.SourcePath)
     n = bstd.MarshalInt64(n, b, objectDO.SourceModTime)
+    n = objectDO.Movement.MarshalPlain(n, b)
     return n
 }
 
@@ -935,6 +1054,9 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
             return
         }
     }
+    if n, err = objectDO.Movement.unmarshal(n, b, objectDORIds, 12); err != nil {
+        return
+    }
     n += 2
     return
 }
@@ -973,6 +1095,9 @@ func (objectDO *ObjectDO) UnmarshalPlain(tn int, b []byte) (n int, err error) {
         return
     }
     if n, objectDO.SourceModTime, err = bstd.UnmarshalInt64(n, b); err != nil {
+        return
+    }
+    if n, err = objectDO.Movement.UnmarshalPlain(n, b); err != nil {
         return
     }
     return

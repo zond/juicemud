@@ -244,32 +244,115 @@ func (c *Connection) scan() error {
 	return nil
 }
 
+// renderMovement handles movement rendering for a player connection.
+// If the moved object has Movement.Active, uses fast Go-based rendering with the verb.
+// Otherwise, emits a renderMovement event to the moved object for JS handling.
 func (c *Connection) renderMovement(m *movement) error {
+	// Compute perspectives from observer's current neighbourhood
 	_, neigh, err := c.game.loadNeighbourhoodOf(c.ctx, c.user.Object)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
+
+	var src, dst *movementPerspective
 	if m.Source != nil {
 		if exit, found := neigh.FindLocation(*m.Source); found {
 			if exit != nil {
-				fmt.Fprintf(c.term, "Via exit %s, you see %v leave.\n", exit.Name(), m.Object.Indef())
+				src = &movementPerspective{Exit: exit.Name()}
 			} else {
-				fmt.Fprintf(c.term, "%v leaves.\n", lang.Capitalize(m.Object.Indef()))
+				src = &movementPerspective{Here: true}
 			}
 		}
-		// If !found, source not visible - just don't show leaving message
 	}
 	if m.Destination != nil {
 		if exit, found := neigh.FindLocation(*m.Destination); found {
 			if exit != nil {
-				fmt.Fprintf(c.term, "Via exit %s, you see %v arrive.\n", exit.Name(), m.Object.Indef())
+				dst = &movementPerspective{Exit: exit.Name()}
 			} else {
-				fmt.Fprintf(c.term, "%v arrives.\n", lang.Capitalize(m.Object.Indef()))
+				dst = &movementPerspective{Here: true}
 			}
 		}
-		// If !found, destination not visible - just don't show arriving message
+	}
+
+	// If observer has moved and can no longer see either location, skip rendering.
+	// They saw the movement happen (that's why they got the event), but rendering
+	// a message now would be confusing since they're no longer in position to see it.
+	if src == nil && dst == nil {
+		return nil
+	}
+
+	mov := m.Object.GetMovement()
+	verb := mov.Verb
+	if verb == "" {
+		verb = "moves"
+	}
+
+	if mov.Active {
+		// Use default Go-based rendering with verb
+		c.renderDefaultMovement(m, src, dst, verb)
+	} else if m.Object.HasCallback(renderMovementEventType, emitEventTag) {
+		// Emit renderMovement event to the moved object for JS handling
+		if err := c.game.storage.Queue().Push(c.ctx, &structs.AnyEvent{
+			At:     c.game.storage.Queue().Now(),
+			Object: m.Object.GetId(),
+			Caller: &structs.AnyCall{
+				Name: renderMovementEventType,
+				Tag:  emitEventTag,
+				Content: &renderMovementRequest{
+					Observer:    c.user.Object,
+					Source:      src,
+					Destination: dst,
+				},
+			},
+		}); err != nil {
+			return juicemud.WithStack(err)
+		}
+	} else {
+		// Movement.Active is false but no JS callback registered - fall back to default
+		c.renderDefaultMovement(m, src, dst, verb)
 	}
 	return nil
+}
+
+// renderDefaultMovement renders a movement message using Go-based rendering.
+// src/dst are the pre-computed perspectives (nil if not visible, Here=true for current room,
+// or Exit set to the exit name for neighbors). verb is the movement verb (e.g., "moves", "scurries").
+func (c *Connection) renderDefaultMovement(m *movement, src, dst *movementPerspective, verb string) {
+	name := lang.Capitalize(m.Object.Indef())
+	srcHere := src != nil && src.Here
+	dstHere := dst != nil && dst.Here
+	srcNeighbor := src != nil && src.Exit != ""
+	dstNeighbor := dst != nil && dst.Exit != ""
+
+	switch {
+	case srcHere && dstNeighbor:
+		// Leaves current room to visible neighbor
+		fmt.Fprintf(c.term, "%s %s %s.\n", name, verb, dst.Exit)
+
+	case srcNeighbor && dstHere:
+		// Arrives at current room from visible neighbor
+		fmt.Fprintf(c.term, "%s %s in from %s.\n", name, verb, src.Exit)
+
+	case srcNeighbor && dstNeighbor:
+		// Passes between two visible neighbors
+		fmt.Fprintf(c.term, "%s %s from %s to %s.\n", name, verb, src.Exit, dst.Exit)
+
+	case srcHere:
+		// Leaves current room to unknown/invisible destination
+		fmt.Fprintf(c.term, "%s disappears.\n", name)
+
+	case dstHere:
+		// Arrives at current room from unknown/invisible source
+		fmt.Fprintf(c.term, "%s appears.\n", name)
+
+	case srcNeighbor:
+		// Leaves visible neighbor to unknown destination
+		fmt.Fprintf(c.term, "Via %s, you see %s leave.\n", src.Exit, m.Object.Indef())
+
+	case dstNeighbor:
+		// Arrives at visible neighbor from unknown source
+		fmt.Fprintf(c.term, "Via %s, you see %s arrive.\n", dst.Exit, m.Object.Indef())
+	}
 }
 
 func (c *Connection) describeLocation(loc *structs.Location) error {
