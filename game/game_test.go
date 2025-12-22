@@ -128,7 +128,7 @@ func BenchmarkCall(b *testing.B) {
 				Name:    connectedEventType,
 				Tag:     emitEventTag,
 				Content: map[string]any{},
-			}); err != nil {
+			}, nil); err != nil {
 				b.Fatal(err)
 			}
 		}

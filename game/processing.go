@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"reflect"
 	"time"
 
+	goccy "github.com/goccy/go-json"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/js"
@@ -18,6 +20,10 @@ const (
 	defaultReactionDelay = 100 * time.Millisecond
 	// jsExecutionTimeout is the maximum time allowed for a single JavaScript execution.
 	jsExecutionTimeout = 200 * time.Millisecond
+
+	// Interval limits
+	minIntervalMS         = 5000 // Minimum interval: 5 seconds
+	maxIntervalsPerObject = 10   // Maximum intervals per object
 )
 
 type RWMutex interface {
@@ -67,6 +73,136 @@ func (g *Game) emitJSON(ctx context.Context, at structs.Timestamp, id string, na
 			Tag:     emitEventTag,
 		},
 	}))
+}
+
+// intervalMetadata is embedded in interval event messages.
+type intervalMetadata struct {
+	ID     string `json:"id"`
+	Missed int    `json:"missed"`
+}
+
+// enqueueIntervalEvent creates and enqueues an event for an interval.
+// The missedCount indicates how many intervals were missed (e.g., due to server downtime).
+func (g *Game) enqueueIntervalEvent(ctx context.Context, interval *structs.Interval, missedCount int) error {
+	// Parse the original event data
+	var data map[string]any
+	if err := goccy.Unmarshal([]byte(interval.EventData), &data); err != nil {
+		// If not an object, wrap it
+		data = map[string]any{"_data": goccy.RawMessage(interval.EventData)}
+	}
+
+	// Add interval metadata
+	data["_interval"] = intervalMetadata{
+		ID:     interval.IntervalID,
+		Missed: missedCount,
+	}
+
+	// Marshal the combined message
+	message, err := goccy.Marshal(data)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	// Enqueue at the scheduled time
+	return juicemud.WithStack(g.storage.Queue().Push(ctx, &structs.Event{
+		At:     uint64(interval.NextFireTime),
+		Object: interval.ObjectID,
+		Call: structs.Call{
+			Name:    interval.EventName,
+			Message: string(message),
+			Tag:     emitEventTag,
+		},
+		IntervalID: interval.IntervalID,
+	}))
+}
+
+// reEnqueueInterval atomically checks if an interval still exists and schedules its next execution.
+// If the interval was cleared, it silently returns nil.
+// This is called after an interval event handler completes.
+// Uses atomic Update to avoid TOCTOU race between checking existence and updating NextFireTime.
+func (g *Game) reEnqueueInterval(ctx context.Context, objectID, intervalID string) error {
+	now := int64(g.storage.Queue().Now())
+
+	// Atomically update NextFireTime if interval still exists
+	var updated *structs.Interval
+	err := g.storage.Intervals().Update(objectID, intervalID, func(interval *structs.Interval) (*structs.Interval, error) {
+		interval.NextFireTime = now + interval.IntervalMS*1e6
+		updated = interval
+		return interval, nil
+	})
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if updated == nil {
+		// Interval was cleared, nothing to re-enqueue
+		return nil
+	}
+
+	// Enqueue the next occurrence
+	return g.enqueueIntervalEvent(ctx, updated, 0)
+}
+
+// RecoverIntervals loads all intervals from persistent storage and enqueues them.
+// Called at startup to restore interval functionality after a server restart.
+// Uses NextFireTime to determine scheduling:
+// - If in future: enqueue at that time (clean shutdown, timing preserved)
+// - If in past: calculate missed intervals and enqueue for now
+// Uses atomic Update to avoid race conditions with concurrent operations.
+func (g *Game) RecoverIntervals(ctx context.Context) error {
+	now := int64(g.storage.Queue().Now())
+	recovered := 0
+
+	for interval, err := range g.storage.Intervals().Each() {
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+
+		var fireAt int64
+		var missedCount int
+
+		if interval.NextFireTime > now {
+			// Future: enqueue at scheduled time (clean shutdown case)
+			fireAt = interval.NextFireTime
+			missedCount = 0
+		} else {
+			// Past: server was down, calculate missed intervals
+			elapsed := now - interval.NextFireTime
+			intervalNS := interval.IntervalMS * 1e6
+			if intervalNS > 0 {
+				missedCount = int(elapsed / intervalNS)
+			}
+			fireAt = now // Fire immediately
+		}
+
+		// Atomically update NextFireTime before enqueueing
+		// This avoids race with concurrent clearInterval operations
+		objectID := interval.ObjectID
+		intervalID := interval.IntervalID
+		var updated *structs.Interval
+		if err := g.storage.Intervals().Update(objectID, intervalID, func(i *structs.Interval) (*structs.Interval, error) {
+			i.NextFireTime = fireAt
+			updated = i
+			return i, nil
+		}); err != nil {
+			log.Printf("updating interval %s for recovery: %v", intervalID, err)
+			continue
+		}
+		if updated == nil {
+			// Interval was cleared during recovery, skip it
+			continue
+		}
+
+		if err := g.enqueueIntervalEvent(ctx, updated, missedCount); err != nil {
+			log.Printf("recovering interval %s: %v", intervalID, err)
+			continue
+		}
+		recovered++
+	}
+
+	if recovered > 0 {
+		log.Printf("recovered %d intervals", recovered)
+	}
+	return nil
 }
 
 type movement struct {
@@ -255,7 +391,7 @@ func (g *Game) moveObject(ctx context.Context, obj *structs.Object, destination 
 }
 
 func (g *Game) runSource(ctx context.Context, object *structs.Object) error {
-	_, err := g.run(ctx, object, nil)
+	_, err := g.run(ctx, object, nil, nil)
 	return juicemud.WithStack(err)
 }
 
@@ -470,6 +606,83 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		}
 		return nil
 	}
+
+	callbacks["setInterval"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 3 || !args[1].IsString() {
+			return rc.Throw("setInterval takes [int, string, any] arguments")
+		}
+
+		intervalMS := args[0].Integer()
+		if intervalMS < minIntervalMS {
+			return rc.Throw("interval must be at least %dms", minIntervalMS)
+		}
+
+		eventName := args[1].String()
+		eventData, err := v8go.JSONStringify(rc.Context(), args[2])
+		if err != nil {
+			return rc.Throw("trying to serialize %v: %v", args[2], err)
+		}
+
+		objectID := object.GetId()
+
+		// Check per-object interval limit
+		count, err := g.storage.Intervals().CountForObject(objectID)
+		if err != nil {
+			return rc.Throw("checking interval count: %v", err)
+		}
+		if count >= maxIntervalsPerObject {
+			return rc.Throw("object %q has too many intervals (max %d)", objectID, maxIntervalsPerObject)
+		}
+
+		// Create interval record
+		intervalID := juicemud.NextUniqueID()
+		now := g.storage.Queue().Now()
+		nextFireTime := int64(now) + intervalMS*int64(time.Millisecond)
+
+		interval := &structs.Interval{
+			ObjectID:     objectID,
+			IntervalID:   intervalID,
+			IntervalMS:   intervalMS,
+			EventName:    eventName,
+			EventData:    eventData,
+			NextFireTime: nextFireTime,
+		}
+
+		if err := g.storage.Intervals().Set(interval); err != nil {
+			return rc.Throw("storing interval: %v", err)
+		}
+
+		// Enqueue the first event
+		if err := g.enqueueIntervalEvent(ctx, interval, 0); err != nil {
+			// Rollback: delete the interval
+			if delErr := g.storage.Intervals().Del(objectID, intervalID); delErr != nil {
+				log.Printf("rollback failed deleting interval %s: %v", intervalID, delErr)
+			}
+			return rc.Throw("enqueueing interval event: %v", err)
+		}
+
+		// Return the interval ID
+		return rc.String(intervalID)
+	}
+
+	callbacks["clearInterval"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 1 || !args[0].IsString() {
+			return rc.Throw("clearInterval takes [string] argument (interval ID)")
+		}
+
+		intervalID := args[0].String()
+		objectID := object.GetId()
+
+		// Delete the interval - next fire check will find it gone
+		// Ignore not found - interval may have already been cleared
+		if err := g.storage.Intervals().Del(objectID, intervalID); err != nil && !os.IsNotExist(err) {
+			return rc.Throw("deleting interval: %v", err)
+		}
+		return nil
+	}
+
 	callbacks["emit"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		// Accept 3 or 4 arguments
@@ -596,7 +809,8 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 // Note: Even if a callback returns null or undefined, the return value is true
 // because a callback was still executed. This distinction matters for command
 // handling where we need to know if the event was "handled" by JavaScript.
-func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller) (bool, error) {
+// intervalInfo is optional interval metadata for stats tracking (nil for non-interval events).
+func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller, intervalInfo *IntervalExecInfo) (bool, error) {
 	id := object.GetId()
 
 	if caller != nil {
@@ -651,7 +865,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 	}
 
 	// Record execution stats (always, even on error)
-	g.jsStats.RecordExecution(object.GetSourcePath(), object.GetId(), duration)
+	g.jsStats.RecordExecution(object.GetSourcePath(), object.GetId(), duration, intervalInfo)
 
 	if err != nil {
 		jserr := &v8go.JSError{}
@@ -670,11 +884,11 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 	return res.Value != nil, nil
 }
 
-func (g *Game) loadRun(ctx context.Context, id string, caller structs.Caller) (*structs.Object, bool, error) {
+func (g *Game) loadRun(ctx context.Context, id string, caller structs.Caller, intervalInfo *IntervalExecInfo) (*structs.Object, bool, error) {
 	object, err := g.storage.AccessObject(ctx, id, nil)
 	if err != nil {
 		return nil, false, juicemud.WithStack(err)
 	}
-	found, err := g.run(ctx, object, caller)
+	found, err := g.run(ctx, object, caller, intervalInfo)
 	return object, found, juicemud.WithStack(err)
 }

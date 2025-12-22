@@ -55,7 +55,7 @@ func (q *Queue) until(at structs.Timestamp) time.Duration {
 }
 
 func (q *Queue) peekFirst() (*structs.Event, error) {
-	res, err := q.tree.First()
+	_, res, err := q.tree.First()
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	} else if err != nil {

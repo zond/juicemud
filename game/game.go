@@ -58,6 +58,7 @@ const (
 	actionEventTag = "action"
 )
 
+
 const (
 	userSource    = "/user.js"
 	genesisSource = "/genesis.js"
@@ -254,10 +255,26 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 						call = &ev.Call
 					}
 					g.queueStats.RecordEvent(ev.Object)
-					if _, _, err := g.loadRun(ctx, ev.Object, call); err != nil {
-						g.queueStats.RecordError(ev.Object, err)
+
+					// Check if this is an interval event for stats tracking
+					var queueIntervalInfo *IntervalInfo
+					var jsIntervalInfo *IntervalExecInfo
+					if ev.IntervalID != "" {
+						queueIntervalInfo = &IntervalInfo{IntervalID: ev.IntervalID, EventName: ev.Call.Name}
+						jsIntervalInfo = &IntervalExecInfo{IntervalID: ev.IntervalID, EventName: ev.Call.Name}
+					}
+
+					if _, _, err := g.loadRun(ctx, ev.Object, call, jsIntervalInfo); err != nil {
+						g.queueStats.RecordError(ev.Object, err, queueIntervalInfo)
 						log.Printf("trying to execute %+v: %v", ev, err)
 						log.Printf("%v", juicemud.StackTrace(err))
+					}
+
+					// Handle interval re-enqueueing after handler execution
+					if ev.IntervalID != "" {
+						if err := g.reEnqueueInterval(ctx, ev.Object, ev.IntervalID); err != nil {
+							log.Printf("re-enqueueing interval %s for %s: %v", ev.IntervalID, ev.Object, err)
+						}
 					}
 				case <-ctx.Done():
 					return
@@ -283,6 +300,11 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 			log.Panic(err)
 		}
 	}()
+
+	// Recover intervals from persistent storage
+	if err := g.RecoverIntervals(ctx); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 
 	bootJS, _, err := g.storage.LoadSource(ctx, bootSource)
 	if err != nil {

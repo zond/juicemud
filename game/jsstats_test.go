@@ -31,7 +31,7 @@ func TestRecordExecution(t *testing.T) {
 	stats := NewJSStats(ctx, nil)
 
 	// Record a normal execution
-	stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond)
+	stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond, nil)
 
 	g := stats.GlobalSnapshot()
 	if g.TotalExecs != 1 {
@@ -70,7 +70,7 @@ func TestRecordSlowExecution(t *testing.T) {
 	stats := NewJSStats(ctx, nil)
 
 	// Record a slow execution (>= 50ms threshold)
-	stats.RecordExecution("/slow.js", "obj1", 60*time.Millisecond)
+	stats.RecordExecution("/slow.js", "obj1", 60*time.Millisecond, nil)
 
 	g := stats.GlobalSnapshot()
 	if g.TotalExecs != 1 {
@@ -100,7 +100,7 @@ func TestMinTimeInitialization(t *testing.T) {
 	stats := NewJSStats(ctx, nil)
 
 	// Record first execution
-	stats.RecordExecution("/test.js", "obj1", 20*time.Millisecond)
+	stats.RecordExecution("/test.js", "obj1", 20*time.Millisecond, nil)
 
 	script := stats.ScriptSnapshot("/test.js")
 	if script == nil {
@@ -113,7 +113,7 @@ func TestMinTimeInitialization(t *testing.T) {
 	}
 
 	// Record shorter execution
-	stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond)
+	stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond, nil)
 
 	script = stats.ScriptSnapshot("/test.js")
 	if script.MinTimeMs != 10.0 {
@@ -121,7 +121,7 @@ func TestMinTimeInitialization(t *testing.T) {
 	}
 
 	// Record longer execution - min should not change
-	stats.RecordExecution("/test.js", "obj1", 30*time.Millisecond)
+	stats.RecordExecution("/test.js", "obj1", 30*time.Millisecond, nil)
 
 	script = stats.ScriptSnapshot("/test.js")
 	if script.MinTimeMs != 10.0 {
@@ -137,16 +137,16 @@ func TestTopScriptsSorting(t *testing.T) {
 
 	// Script A: many fast executions
 	for i := 0; i < 10; i++ {
-		stats.RecordExecution("/a.js", "obj1", 5*time.Millisecond)
+		stats.RecordExecution("/a.js", "obj1", 5*time.Millisecond, nil)
 	}
 
 	// Script B: fewer but slower executions
 	for i := 0; i < 3; i++ {
-		stats.RecordExecution("/b.js", "obj2", 40*time.Millisecond)
+		stats.RecordExecution("/b.js", "obj2", 40*time.Millisecond, nil)
 	}
 
 	// Script C: one slow execution
-	stats.RecordExecution("/c.js", "obj3", 60*time.Millisecond)
+	stats.RecordExecution("/c.js", "obj3", 60*time.Millisecond, nil)
 
 	// Sort by executions: A should be first
 	byExecs := stats.TopScripts(SortScriptByExecs, 10)
@@ -176,16 +176,16 @@ func TestTopObjectsSorting(t *testing.T) {
 
 	// Object A: many fast executions
 	for i := 0; i < 10; i++ {
-		stats.RecordExecution("/test.js", "objA", 5*time.Millisecond)
+		stats.RecordExecution("/test.js", "objA", 5*time.Millisecond, nil)
 	}
 
 	// Object B: fewer but slower executions
 	for i := 0; i < 3; i++ {
-		stats.RecordExecution("/test.js", "objB", 40*time.Millisecond)
+		stats.RecordExecution("/test.js", "objB", 40*time.Millisecond, nil)
 	}
 
 	// Object C: one slow execution
-	stats.RecordExecution("/test.js", "objC", 60*time.Millisecond)
+	stats.RecordExecution("/test.js", "objC", 60*time.Millisecond, nil)
 
 	// Sort by executions: A should be first
 	byExecs := stats.TopObjects(SortObjectByExecs, 10)
@@ -207,7 +207,7 @@ func TestEmptySourcePath(t *testing.T) {
 	stats := NewJSStats(ctx, nil)
 
 	// Empty source path should be replaced with placeholder
-	stats.RecordExecution("", "obj1", 10*time.Millisecond)
+	stats.RecordExecution("", "obj1", 10*time.Millisecond, nil)
 
 	scripts := stats.TopScripts(SortScriptByExecs, 10)
 	if len(scripts) != 1 {
@@ -225,7 +225,7 @@ func TestZeroDuration(t *testing.T) {
 	stats := NewJSStats(ctx, nil)
 
 	// Zero duration should be replaced with 1ns
-	stats.RecordExecution("/test.js", "obj1", 0)
+	stats.RecordExecution("/test.js", "obj1", 0, nil)
 
 	g := stats.GlobalSnapshot()
 	if g.TotalExecs != 1 {
@@ -244,8 +244,8 @@ func TestJSStatsReset(t *testing.T) {
 	stats := NewJSStats(ctx, nil)
 
 	// Record some executions
-	stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond)
-	stats.RecordExecution("/slow.js", "obj2", 60*time.Millisecond)
+	stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond, nil)
+	stats.RecordExecution("/slow.js", "obj2", 60*time.Millisecond, nil)
 
 	g := stats.GlobalSnapshot()
 	if g.TotalExecs != 2 {
@@ -276,11 +276,11 @@ func TestRecentSlowExecutionsOrder(t *testing.T) {
 	stats := NewJSStats(ctx, nil)
 
 	// Record slow executions in order
-	stats.RecordExecution("/first.js", "obj1", 60*time.Millisecond)
+	stats.RecordExecution("/first.js", "obj1", 60*time.Millisecond, nil)
 	time.Sleep(time.Millisecond) // Ensure different timestamps
-	stats.RecordExecution("/second.js", "obj2", 70*time.Millisecond)
+	stats.RecordExecution("/second.js", "obj2", 70*time.Millisecond, nil)
 	time.Sleep(time.Millisecond)
-	stats.RecordExecution("/third.js", "obj3", 80*time.Millisecond)
+	stats.RecordExecution("/third.js", "obj3", 80*time.Millisecond, nil)
 
 	// Most recent should be first
 	recent := stats.RecentSlowExecutions(10)
@@ -308,7 +308,7 @@ func TestMemoryLimitScripts(t *testing.T) {
 	// Record more scripts than maxScripts to trigger eviction
 	// We can't easily test with the actual limit, so just verify basic eviction works
 	for i := 0; i < 1010; i++ {
-		stats.RecordExecution("/test"+string(rune(i))+".js", "obj", time.Millisecond)
+		stats.RecordExecution("/test"+string(rune(i))+".js", "obj", time.Millisecond, nil)
 	}
 
 	// Should have evicted some entries to stay under limit
@@ -330,7 +330,7 @@ func TestJSStatsConcurrentAccess(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(n int) {
 			for j := 0; j < 100; j++ {
-				stats.RecordExecution("/test.js", "obj", time.Millisecond*time.Duration(n))
+				stats.RecordExecution("/test.js", "obj", time.Millisecond*time.Duration(n), nil)
 			}
 			done <- true
 		}(i)
@@ -368,8 +368,8 @@ func TestTimeRateStats(t *testing.T) {
 	stats := NewJSStats(ctx, nil)
 
 	// Record some executions
-	stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond)
-	stats.RecordExecution("/test.js", "obj1", 20*time.Millisecond)
+	stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond, nil)
+	stats.RecordExecution("/test.js", "obj1", 20*time.Millisecond, nil)
 
 	// Trigger rate update
 	stats.UpdateRates()
@@ -391,7 +391,7 @@ func BenchmarkRecordExecution(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond)
+		stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond, nil)
 	}
 }
 
@@ -404,7 +404,7 @@ func BenchmarkRecordExecutionParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond)
+			stats.RecordExecution("/test.js", "obj1", 10*time.Millisecond, nil)
 		}
 	})
 }

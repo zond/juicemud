@@ -170,7 +170,7 @@ func (c *Connection) wizCommands() commands {
 					Content: map[string]any{
 						"creator": self,
 					},
-				}); err != nil {
+				}, nil); err != nil {
 					return juicemud.WithStack(err)
 				}
 				fmt.Fprintf(c.term, "Created #%s\n", obj.GetId())
@@ -510,6 +510,24 @@ func (c *Connection) wizCommands() commands {
 							rec.Message)
 					}
 
+				case "intervals":
+					n := 20
+					if len(parts) >= 3 {
+						if parsed, err := strconv.Atoi(parts[2]); err == nil && parsed > 0 {
+							n = parsed
+						}
+					}
+					intervals := qs.TopIntervals(n)
+					if len(intervals) == 0 {
+						fmt.Fprintln(c.term, "No interval errors recorded.")
+						return nil
+					}
+					t := table.New("Interval ID", "Object ID", "Event", "Errors", "Last Error").WithWriter(c.term)
+					for _, iv := range intervals {
+						t.AddRow(iv.IntervalID, iv.ObjectID, iv.EventName, iv.Count, iv.LastSeen.Format("15:04:05"))
+					}
+					t.Print()
+
 				case "reset":
 					qs.Reset()
 					fmt.Fprintln(c.term, "Queue statistics reset.")
@@ -521,6 +539,7 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "  locations [n]        Show top n error locations (default 20)")
 					fmt.Fprintln(c.term, "  objects [sort] [n]   Show top n objects (sort: errors|events|rate)")
 					fmt.Fprintln(c.term, "  object <id>          Show stats for specific object")
+					fmt.Fprintln(c.term, "  intervals [n]        Show top n intervals by error count (default 20)")
 					fmt.Fprintln(c.term, "  recent [n]           Show n most recent errors (default 10)")
 					fmt.Fprintln(c.term, "  reset                Clear all statistics")
 				}
@@ -695,6 +714,48 @@ func (c *Connection) wizCommands() commands {
 						}
 					}
 
+				case "intervals":
+					n := 20
+					sortBy := SortIntervalByTime
+					if len(parts) >= 3 {
+						switch parts[2] {
+						case "time":
+							sortBy = SortIntervalByTime
+						case "execs":
+							sortBy = SortIntervalByExecs
+						case "slow":
+							sortBy = SortIntervalBySlow
+						default:
+							// If it looks like a number, use it as n
+							if parsed, err := strconv.Atoi(parts[2]); err == nil && parsed > 0 {
+								n = parsed
+							}
+						}
+					}
+					if len(parts) >= 4 {
+						if parsed, err := strconv.Atoi(parts[3]); err == nil && parsed > 0 {
+							n = parsed
+						}
+					}
+					intervals := jsStats.TopIntervals(sortBy, n)
+					if len(intervals) == 0 {
+						fmt.Fprintln(c.term, "No interval executions recorded.")
+						return nil
+					}
+					t := table.New("Interval ID", "Object ID", "Event", "Execs", "Avg(ms)", "Max(ms)", "Slow%").WithWriter(c.term)
+					for _, iv := range intervals {
+						t.AddRow(
+							iv.IntervalID,
+							iv.ObjectID,
+							iv.EventName,
+							iv.Executions,
+							fmt.Sprintf("%.1f", iv.AvgTimeMs),
+							fmt.Sprintf("%.1f", iv.MaxTimeMs),
+							fmt.Sprintf("%.1f", iv.SlowPercent),
+						)
+					}
+					t.Print()
+
 				case "reset":
 					jsStats.Reset()
 					fmt.Fprintln(c.term, "JS statistics reset.")
@@ -705,9 +766,131 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "  scripts [sort] [n]       Show top n scripts (sort: time|execs|slow)")
 					fmt.Fprintln(c.term, "  script <path>            Show stats for specific script")
 					fmt.Fprintln(c.term, "  objects [sort] [n]       Show top n objects (sort: time|execs|slow)")
+					fmt.Fprintln(c.term, "  intervals [sort] [n]     Show top n intervals (sort: time|execs|slow)")
 					fmt.Fprintln(c.term, "  slow [n]                 Show n most recent slow executions (default 10)")
 					fmt.Fprintln(c.term, "  reset                    Clear all statistics")
 				}
+				return nil
+			},
+		},
+		{
+			names: m("/intervals"),
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				intervals := c.game.storage.Intervals()
+				now := c.game.storage.Queue().Now()
+
+				// Subcommands: (default: list all), <objectID>, clear <intervalID>
+				if len(parts) < 2 {
+					// List all intervals
+					t := table.New("Interval ID", "Object ID", "Event", "Interval", "Next Fire").WithWriter(c.term)
+					count := 0
+					for interval, err := range intervals.Each() {
+						if err != nil {
+							fmt.Fprintf(c.term, "Error iterating: %v\n", err)
+							continue
+						}
+						// Calculate time until next fire
+						nextFireAt := interval.NextFireTime
+						var nextFireStr string
+						if nextFireAt <= int64(now) {
+							overdue := time.Duration(int64(now) - nextFireAt)
+							nextFireStr = fmt.Sprintf("%v ago (overdue)", overdue.Truncate(time.Second))
+						} else {
+							untilFire := time.Duration(nextFireAt - int64(now))
+							nextFireStr = fmt.Sprintf("in %v", untilFire.Truncate(time.Second))
+						}
+						t.AddRow(
+							interval.IntervalID,
+							interval.ObjectID,
+							interval.EventName,
+							fmt.Sprintf("%dms", interval.IntervalMS),
+							nextFireStr,
+						)
+						count++
+					}
+					if count == 0 {
+						fmt.Fprintln(c.term, "No active intervals.")
+						return nil
+					}
+					fmt.Fprintf(c.term, "Active intervals (%d total):\n", count)
+					t.Print()
+					return nil
+				}
+
+				subcmd := parts[1]
+
+				// Check for "clear" subcommand
+				if subcmd == "clear" {
+					if len(parts) < 3 {
+						fmt.Fprintln(c.term, "usage: /intervals clear <intervalID>")
+						return nil
+					}
+					targetIntervalID := parts[2]
+
+					// Find and delete the interval (need to find objectID first)
+					var found bool
+					for interval, err := range intervals.Each() {
+						if err != nil {
+							continue
+						}
+						if interval.IntervalID == targetIntervalID {
+							if err := intervals.Del(interval.ObjectID, targetIntervalID); err != nil {
+								fmt.Fprintf(c.term, "Error deleting interval: %v\n", err)
+								return nil
+							}
+							fmt.Fprintf(c.term, "Cleared interval %s (object: %s, event: %s)\n",
+								targetIntervalID, interval.ObjectID, interval.EventName)
+							found = true
+							break
+						}
+					}
+					if !found {
+						fmt.Fprintf(c.term, "Interval %q not found.\n", targetIntervalID)
+					}
+					return nil
+				}
+
+				// Otherwise treat as objectID - list intervals for that object
+				objectID := subcmd
+				count, err := intervals.CountForObject(objectID)
+				if err != nil {
+					fmt.Fprintf(c.term, "Error counting intervals: %v\n", err)
+					return nil
+				}
+				if count == 0 {
+					fmt.Fprintf(c.term, "No intervals for object %q\n", objectID)
+					return nil
+				}
+
+				t := table.New("Interval ID", "Event", "Interval", "Next Fire").WithWriter(c.term)
+				for interval, err := range intervals.EachForObject(objectID) {
+					if err != nil {
+						fmt.Fprintf(c.term, "Error iterating: %v\n", err)
+						continue
+					}
+					// Calculate time until next fire
+					nextFireAt := interval.NextFireTime
+					var nextFireStr string
+					if nextFireAt <= int64(now) {
+						overdue := time.Duration(int64(now) - nextFireAt)
+						nextFireStr = fmt.Sprintf("%v ago (overdue)", overdue.Truncate(time.Second))
+					} else {
+						untilFire := time.Duration(nextFireAt - int64(now))
+						nextFireStr = fmt.Sprintf("in %v", untilFire.Truncate(time.Second))
+					}
+					t.AddRow(
+						interval.IntervalID,
+						interval.EventName,
+						fmt.Sprintf("%dms", interval.IntervalMS),
+						nextFireStr,
+					)
+				}
+				fmt.Fprintf(c.term, "Intervals for object %s (%d total):\n", objectID, count)
+				t.Print()
 				return nil
 			},
 		},

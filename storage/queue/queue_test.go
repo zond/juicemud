@@ -119,7 +119,7 @@ func TestQueueFutureEventsNotDrained(t *testing.T) {
 		}
 
 		// Verify future event is still in the tree.
-		ev, err := tr.First()
+		_, ev, err := tr.First()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,7 +165,7 @@ func TestQueueHandlerError(t *testing.T) {
 		runWG.Wait()
 
 		// Event should still be in tree since handler returned error.
-		ev, err := tr.First()
+		_, ev, err := tr.First()
 		if err != nil {
 			t.Fatal(err)
 		}

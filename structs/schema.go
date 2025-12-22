@@ -1243,6 +1243,7 @@ type Event struct {
     Object string
     Call Call
     Key string
+    IntervalID string
 }
 
 // Reserved Ids - Event
@@ -1259,6 +1260,7 @@ func (event *Event) size(id uint16) (s int) {
     s += bstd.SizeString(event.Object) + 2
     s += event.Call.size(3)
     s += bstd.SizeString(event.Key) + 2
+    s += bstd.SizeString(event.IntervalID) + 2
 
     if id > 255 {
         s += 5
@@ -1274,6 +1276,7 @@ func (event *Event) SizePlain() (s int) {
     s += bstd.SizeString(event.Object)
     s += event.Call.SizePlain()
     s += bstd.SizeString(event.Key)
+    s += bstd.SizeString(event.IntervalID)
     return
 }
 
@@ -1292,6 +1295,8 @@ func (event *Event) marshal(tn int, b []byte, id uint16) (n int) {
     n = event.Call.marshal(n, b, 3)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 4)
     n = bstd.MarshalString(n, b, event.Key)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 5)
+    n = bstd.MarshalString(n, b, event.IntervalID)
 
     n += 2
     b[n-2] = 1
@@ -1306,6 +1311,7 @@ func (event *Event) MarshalPlain(tn int, b []byte) (n int) {
     n = bstd.MarshalString(n, b, event.Object)
     n = event.Call.MarshalPlain(n, b)
     n = bstd.MarshalString(n, b, event.Key)
+    n = bstd.MarshalString(n, b, event.IntervalID)
     return n
 }
 
@@ -1360,6 +1366,17 @@ func (event *Event) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, e
             return
         }
     }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, eventRIds, 5); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, event.IntervalID, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
     n += 2
     return
 }
@@ -1377,6 +1394,203 @@ func (event *Event) UnmarshalPlain(tn int, b []byte) (n int, err error) {
         return
     }
     if n, event.Key, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, event.IntervalID, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    return
+}
+
+// Struct - Interval
+type Interval struct {
+    ObjectID string
+    IntervalID string
+    IntervalMS int64
+    EventName string
+    EventData string
+    NextFireTime int64
+}
+
+// Reserved Ids - Interval
+var intervalRIds = []uint16{}
+
+// Size - Interval
+func (interval *Interval) Size() int {
+    return interval.size(0)
+}
+
+// Nested Size - Interval
+func (interval *Interval) size(id uint16) (s int) {
+    s += bstd.SizeString(interval.ObjectID) + 2
+    s += bstd.SizeString(interval.IntervalID) + 2
+    s += bstd.SizeInt64() + 2
+    s += bstd.SizeString(interval.EventName) + 2
+    s += bstd.SizeString(interval.EventData) + 2
+    s += bstd.SizeInt64() + 2
+
+    if id > 255 {
+        s += 5
+        return
+    }
+    s += 4
+    return
+}
+
+// SizePlain - Interval
+func (interval *Interval) SizePlain() (s int) {
+    s += bstd.SizeString(interval.ObjectID)
+    s += bstd.SizeString(interval.IntervalID)
+    s += bstd.SizeInt64()
+    s += bstd.SizeString(interval.EventName)
+    s += bstd.SizeString(interval.EventData)
+    s += bstd.SizeInt64()
+    return
+}
+
+// Marshal - Interval
+func (interval *Interval) Marshal(b []byte) {
+    interval.marshal(0, b, 0)
+}
+
+// Nested Marshal - Interval
+func (interval *Interval) marshal(tn int, b []byte, id uint16) (n int) {
+    n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 1)
+    n = bstd.MarshalString(n, b, interval.ObjectID)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 2)
+    n = bstd.MarshalString(n, b, interval.IntervalID)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 3)
+    n = bstd.MarshalInt64(n, b, interval.IntervalMS)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 4)
+    n = bstd.MarshalString(n, b, interval.EventName)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 5)
+    n = bstd.MarshalString(n, b, interval.EventData)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 6)
+    n = bstd.MarshalInt64(n, b, interval.NextFireTime)
+
+    n += 2
+    b[n-2] = 1
+    b[n-1] = 1
+    return
+}
+
+// MarshalPlain - Interval
+func (interval *Interval) MarshalPlain(tn int, b []byte) (n int) {
+    n = tn
+    n = bstd.MarshalString(n, b, interval.ObjectID)
+    n = bstd.MarshalString(n, b, interval.IntervalID)
+    n = bstd.MarshalInt64(n, b, interval.IntervalMS)
+    n = bstd.MarshalString(n, b, interval.EventName)
+    n = bstd.MarshalString(n, b, interval.EventData)
+    n = bstd.MarshalInt64(n, b, interval.NextFireTime)
+    return n
+}
+
+// Unmarshal - Interval
+func (interval *Interval) Unmarshal(b []byte) (err error) {
+    _, err = interval.unmarshal(0, b, []uint16{}, 0)
+    return
+}
+
+// Nested Unmarshal - Interval
+func (interval *Interval) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err error) {
+    var ok bool
+    if n, ok, err = bgenimpl.HandleCompatibility(tn, b, r, id); !ok {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, intervalRIds, 1); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, interval.ObjectID, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, intervalRIds, 2); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, interval.IntervalID, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, intervalRIds, 3); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, interval.IntervalMS, err = bstd.UnmarshalInt64(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, intervalRIds, 4); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, interval.EventName, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, intervalRIds, 5); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, interval.EventData, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, intervalRIds, 6); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, interval.NextFireTime, err = bstd.UnmarshalInt64(n, b); err != nil {
+            return
+        }
+    }
+    n += 2
+    return
+}
+
+// UnmarshalPlain - Interval
+func (interval *Interval) UnmarshalPlain(tn int, b []byte) (n int, err error) {
+    n = tn
+    if n, interval.ObjectID, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, interval.IntervalID, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, interval.IntervalMS, err = bstd.UnmarshalInt64(n, b); err != nil {
+        return
+    }
+    if n, interval.EventName, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, interval.EventData, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, interval.NextFireTime, err = bstd.UnmarshalInt64(n, b); err != nil {
         return
     }
     return

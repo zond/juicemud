@@ -39,6 +39,10 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
+	intervalsTree, err := dbm.OpenTypeTree[structs.Interval, *structs.Interval](filepath.Join(dir, "intervals"))
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
 	sourcesDir := filepath.Join(dir, "src")
 	if err := os.MkdirAll(sourcesDir, 0755); err != nil {
 		return nil, juicemud.WithStack(err)
@@ -49,6 +53,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 		sourcesDir:    sourcesDir,
 		sourceObjects: sourceObjects,
 		objects:       objects,
+		intervals:     NewIntervals(intervalsTree),
 		queue:         queue.New(ctx, queueTree),
 		audit:         audit,
 		resolver:      imports.NewResolver(),
@@ -75,6 +80,7 @@ type Storage struct {
 	sourceObjects   *dbm.Tree
 	sourceObjectsMu sync.RWMutex // Protects sourceObjects operations
 	objects         *dbm.LiveTypeHash[structs.Object, *structs.Object]
+	intervals       *Intervals
 	audit           *AuditLogger
 	resolver        *imports.Resolver
 }
@@ -86,6 +92,9 @@ func (s *Storage) Close() error {
 		return juicemud.WithStack(err)
 	}
 	if err := s.sourceObjects.Close(); err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := s.intervals.Close(); err != nil {
 		return juicemud.WithStack(err)
 	}
 	if err := s.audit.Close(); err != nil {
@@ -103,6 +112,11 @@ func (s *Storage) SourcesDir() string {
 
 func (s *Storage) Queue() *queue.Queue {
 	return s.queue
+}
+
+// Intervals returns the interval storage for managing recurring timers.
+func (s *Storage) Intervals() *Intervals {
+	return s.intervals
 }
 
 // ImportResolver returns the import resolver for JavaScript source imports.
@@ -319,6 +333,11 @@ func (s *Storage) RemoveObject(ctx context.Context, obj *structs.Object) error {
 		}
 		return nil
 	}, obj, loc); err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	// Clean up intervals for the deleted object
+	if err := s.intervals.DelAllForObject(id); err != nil {
 		return juicemud.WithStack(err)
 	}
 

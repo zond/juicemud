@@ -62,11 +62,12 @@ func (l ErrorLocation) String() string {
 
 // ErrorRecord captures a single error occurrence with full context.
 type ErrorRecord struct {
-	Timestamp time.Time
-	ObjectID  string
-	Category  ErrorCategory
-	Location  ErrorLocation
-	Message   string // Truncated error message
+	Timestamp  time.Time
+	ObjectID   string
+	IntervalID string // Empty if not an interval event
+	Category   ErrorCategory
+	Location   ErrorLocation
+	Message    string // Truncated error message
 }
 
 // ErrorStats holds aggregate statistics for a particular dimension.
@@ -130,6 +131,7 @@ type ObjectStats struct {
 	LastError  time.Time
 	ByCategory map[ErrorCategory]uint64
 	ByLocation map[string]uint64 // location string -> count
+	ByInterval map[string]uint64 // intervalID -> count (only for interval events)
 
 	eventRate RateStats
 	errorRate RateStats
@@ -142,7 +144,17 @@ func newObjectStats() *ObjectStats {
 	return &ObjectStats{
 		ByCategory: make(map[ErrorCategory]uint64),
 		ByLocation: make(map[string]uint64),
+		ByInterval: make(map[string]uint64),
 	}
+}
+
+// IntervalErrorStats holds aggregate error statistics for a specific interval.
+type IntervalErrorStats struct {
+	ObjectID  string
+	EventName string // The event name for this interval
+	Count     uint64
+	FirstSeen time.Time
+	LastSeen  time.Time
 }
 
 // QueueStats tracks in-memory statistics for queue event processing.
@@ -156,17 +168,20 @@ type QueueStats struct {
 
 	// Global histograms
 	byCategory map[ErrorCategory]*ErrorStats
-	byLocation map[string]*ErrorStats // location string -> stats
+	byLocation map[string]*ErrorStats         // location string -> stats
+	byInterval map[string]*IntervalErrorStats // intervalID -> stats
 
 	// Time-bucketed tracking for efficient eviction (hour -> set of keys).
 	// When an entry is updated, it's moved to the current hour's bucket.
 	// Eviction deletes all entries in buckets older than statsTTL.
 	objectBuckets   map[time.Time]map[string]struct{}
 	locationBuckets map[time.Time]map[string]struct{}
+	intervalBuckets map[time.Time]map[string]struct{}
 
 	// Track which bucket each entry is currently in (for efficient moves)
 	objectBucket   map[string]time.Time
 	locationBucket map[string]time.Time
+	intervalBucket map[string]time.Time
 
 	// Recent errors circular buffer for debugging
 	recentErrors []ErrorRecord
@@ -195,10 +210,13 @@ func NewQueueStats(ctx context.Context) *QueueStats {
 		objects:         make(map[string]*ObjectStats),
 		byCategory:      make(map[ErrorCategory]*ErrorStats),
 		byLocation:      make(map[string]*ErrorStats),
+		byInterval:      make(map[string]*IntervalErrorStats),
 		objectBuckets:   make(map[time.Time]map[string]struct{}),
 		locationBuckets: make(map[time.Time]map[string]struct{}),
+		intervalBuckets: make(map[time.Time]map[string]struct{}),
 		objectBucket:    make(map[string]time.Time),
 		locationBucket:  make(map[string]time.Time),
+		intervalBucket:  make(map[string]time.Time),
 		recentErrors:    make([]ErrorRecord, recentErrorsBufferSize),
 		startTime:       now,
 		lastEviction:    now,
@@ -303,9 +321,46 @@ func (q *QueueStats) touchLocationLocked(location string, now time.Time) {
 	q.locationBucket[location] = bucket
 }
 
+// touchIntervalLocked updates the time bucket for an interval. Must be called with q.mu held.
+func (q *QueueStats) touchIntervalLocked(intervalID string, now time.Time) {
+	bucket := now.Truncate(time.Hour)
+	oldBucket, exists := q.intervalBucket[intervalID]
+
+	// If already in the current bucket, nothing to do
+	if exists && oldBucket == bucket {
+		return
+	}
+
+	// Remove from old bucket if exists
+	if exists {
+		if oldSet := q.intervalBuckets[oldBucket]; oldSet != nil {
+			delete(oldSet, intervalID)
+			if len(oldSet) == 0 {
+				delete(q.intervalBuckets, oldBucket)
+			}
+		}
+	}
+
+	// Add to new bucket
+	newSet := q.intervalBuckets[bucket]
+	if newSet == nil {
+		newSet = make(map[string]struct{})
+		q.intervalBuckets[bucket] = newSet
+	}
+	newSet[intervalID] = struct{}{}
+	q.intervalBucket[intervalID] = bucket
+}
+
+// IntervalInfo contains interval metadata for error recording.
+type IntervalInfo struct {
+	IntervalID string
+	EventName  string
+}
+
 // RecordError records a failed event execution for an object.
 // This should be called when an event execution fails, after RecordEvent was called.
-func (q *QueueStats) RecordError(objectID string, err error) {
+// intervalInfo is optional interval metadata (nil for non-interval events).
+func (q *QueueStats) RecordError(objectID string, err error, intervalInfo *IntervalInfo) {
 	category, location, message := classifyError(err)
 
 	q.mu.Lock()
@@ -314,6 +369,13 @@ func (q *QueueStats) RecordError(objectID string, err error) {
 	q.totalErrors++
 	now := time.Now()
 	locStr := location.String()
+
+	// Extract interval info if provided
+	var intervalID, eventName string
+	if intervalInfo != nil {
+		intervalID = intervalInfo.IntervalID
+		eventName = intervalInfo.EventName
+	}
 
 	// Update per-object stats
 	s := q.objects[objectID]
@@ -325,6 +387,9 @@ func (q *QueueStats) RecordError(objectID string, err error) {
 	s.LastError = now
 	s.ByCategory[category]++
 	s.ByLocation[locStr]++
+	if intervalID != "" {
+		s.ByInterval[intervalID]++
+	}
 
 	// Update time buckets for efficient eviction
 	q.touchObjectLocked(objectID, now)
@@ -348,13 +413,30 @@ func (q *QueueStats) RecordError(objectID string, err error) {
 	ls.Count++
 	ls.LastSeen = now
 
+	// Update global interval stats (if this is an interval event)
+	if intervalID != "" {
+		is := q.byInterval[intervalID]
+		if is == nil {
+			is = &IntervalErrorStats{
+				ObjectID:  objectID,
+				EventName: eventName,
+				FirstSeen: now,
+			}
+			q.byInterval[intervalID] = is
+		}
+		is.Count++
+		is.LastSeen = now
+		q.touchIntervalLocked(intervalID, now)
+	}
+
 	// Add to recent errors buffer
 	q.recentErrors[q.recentIndex] = ErrorRecord{
-		Timestamp: now,
-		ObjectID:  objectID,
-		Category:  category,
-		Location:  location,
-		Message:   truncateMessage(message),
+		Timestamp:  now,
+		ObjectID:   objectID,
+		IntervalID: intervalID,
+		Category:   category,
+		Location:   location,
+		Message:    truncateMessage(message),
 	}
 	q.recentIndex = (q.recentIndex + 1) % recentErrorsBufferSize
 }
@@ -420,6 +502,17 @@ func (q *QueueStats) evictStaleLocked(now time.Time) {
 		}
 	}
 
+	// Evict stale interval buckets
+	for bucket, intervals := range q.intervalBuckets {
+		if bucket.Before(cutoff) {
+			for intervalID := range intervals {
+				delete(q.byInterval, intervalID)
+				delete(q.intervalBucket, intervalID)
+			}
+			delete(q.intervalBuckets, bucket)
+		}
+	}
+
 	// Note: byCategory is not evicted since there are only 5 categories
 	// and they represent useful historical data
 }
@@ -460,6 +553,16 @@ type LocationSnapshot struct {
 	LastSeen  time.Time
 }
 
+// IntervalSnapshot contains stats for one interval's errors.
+type IntervalSnapshot struct {
+	IntervalID string
+	ObjectID   string
+	EventName  string
+	Count      uint64
+	FirstSeen  time.Time
+	LastSeen   time.Time
+}
+
 // ObjectSnapshot contains stats for one object.
 type ObjectSnapshot struct {
 	ObjectID   string
@@ -470,6 +573,7 @@ type ObjectSnapshot struct {
 	LastError  time.Time
 	ByCategory map[ErrorCategory]uint64
 	ByLocation map[string]uint64
+	ByInterval map[string]uint64 // intervalID -> error count
 	EventRates RateSnapshot
 	ErrorRates RateSnapshot
 }
@@ -547,6 +651,31 @@ func (q *QueueStats) TopLocations(n int) []LocationSnapshot {
 	return result
 }
 
+// TopIntervals returns the top n intervals by error count.
+func (q *QueueStats) TopIntervals(n int) []IntervalSnapshot {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	result := make([]IntervalSnapshot, 0, len(q.byInterval))
+	for intervalID, stats := range q.byInterval {
+		result = append(result, IntervalSnapshot{
+			IntervalID: intervalID,
+			ObjectID:   stats.ObjectID,
+			EventName:  stats.EventName,
+			Count:      stats.Count,
+			FirstSeen:  stats.FirstSeen,
+			LastSeen:   stats.LastSeen,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Count > result[j].Count
+	})
+	if n > 0 && len(result) > n {
+		result = result[:n]
+	}
+	return result
+}
+
 // ObjectSnapshot returns stats for a specific object, or nil if not found.
 func (q *QueueStats) ObjectSnapshot(objectID string) *ObjectSnapshot {
 	q.mu.RLock()
@@ -573,6 +702,10 @@ func (q *QueueStats) objectSnapshotLocked(objectID string, s *ObjectStats) *Obje
 	for k, v := range s.ByLocation {
 		byLocation[k] = v
 	}
+	byInterval := make(map[string]uint64, len(s.ByInterval))
+	for k, v := range s.ByInterval {
+		byInterval[k] = v
+	}
 
 	return &ObjectSnapshot{
 		ObjectID:   objectID,
@@ -583,6 +716,7 @@ func (q *QueueStats) objectSnapshotLocked(objectID string, s *ObjectStats) *Obje
 		LastError:  s.LastError,
 		ByCategory: byCategory,
 		ByLocation: byLocation,
+		ByInterval: byInterval,
 		EventRates: RateSnapshot{
 			PerSecond: s.eventRate.SecondRate,
 			PerMinute: s.eventRate.MinuteRate * 60,
@@ -702,10 +836,13 @@ func (q *QueueStats) Reset() {
 	q.objects = make(map[string]*ObjectStats)
 	q.byCategory = make(map[ErrorCategory]*ErrorStats)
 	q.byLocation = make(map[string]*ErrorStats)
+	q.byInterval = make(map[string]*IntervalErrorStats)
 	q.objectBuckets = make(map[time.Time]map[string]struct{})
 	q.locationBuckets = make(map[time.Time]map[string]struct{})
+	q.intervalBuckets = make(map[time.Time]map[string]struct{})
 	q.objectBucket = make(map[string]time.Time)
 	q.locationBucket = make(map[string]time.Time)
+	q.intervalBucket = make(map[string]time.Time)
 	q.recentErrors = make([]ErrorRecord, recentErrorsBufferSize)
 	q.recentIndex = 0
 	q.totalEvents = 0

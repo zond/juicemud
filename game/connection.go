@@ -646,7 +646,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 			"name": name,
 			"line": line,
 		},
-	})
+	}, nil)
 	if err != nil {
 		return false, juicemud.WithStack(err)
 	} else if found {
@@ -662,7 +662,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		},
 	}
 
-	loc, found, err := c.game.loadRun(c.ctx, obj.GetLocation(), actionCall)
+	loc, found, err := c.game.loadRun(c.ctx, obj.GetLocation(), actionCall, nil)
 	if found || err != nil {
 		return found, err
 	}
@@ -717,7 +717,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 	cont := loc.GetContent()
 	delete(cont, o.id)
 	for sibID := range cont {
-		_, found, err = c.game.loadRun(c.ctx, sibID, actionCall)
+		_, found, err = c.game.loadRun(c.ctx, sibID, actionCall, nil)
 		if found || err != nil {
 			return found, err
 		}
@@ -875,7 +875,7 @@ func (c *Connection) loginUser() error {
 			"object":   c.user.Object,
 			"cause":    "login",
 		},
-	}); err != nil {
+	}, nil); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return nil
@@ -963,7 +963,7 @@ func (c *Connection) createUser() error {
 			"object":   c.user.Object,
 			"cause":    "create",
 		},
-	}); err != nil {
+	}, nil); err != nil {
 		return juicemud.WithStack(err)
 	}
 	c.ctx = storage.AuthenticateUser(c.ctx, c.user)

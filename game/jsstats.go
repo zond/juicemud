@@ -23,6 +23,8 @@ const (
 	maxScripts = 1000
 	// maxObjects is the maximum number of objects to track.
 	maxObjects = 50000
+	// maxIntervals is the maximum number of intervals to track.
+	maxIntervals = 10000
 )
 
 // SlowExecutionRecord captures a single slow execution for debugging.
@@ -129,6 +131,28 @@ func newObjectExecStats() *ObjectExecStats {
 	return &ObjectExecStats{}
 }
 
+// IntervalExecStats tracks per-interval execution statistics.
+type IntervalExecStats struct {
+	Executions    uint64    // Total execution count
+	TotalTimeNs   uint64    // Total execution time in nanoseconds
+	MinTimeNs     uint64    // Minimum execution time (valid only if Executions > 0)
+	MaxTimeNs     uint64    // Maximum execution time
+	SlowCount     uint64    // Executions exceeding threshold
+	LastExecution time.Time // Last execution timestamp
+	ObjectID      string    // Owner object ID
+	EventName     string    // Event name for this interval
+
+	execRate RateStats
+	timeRate TimeRateStats
+
+	prevExecs  uint64
+	prevTimeNs uint64
+}
+
+func newIntervalExecStats() *IntervalExecStats {
+	return &IntervalExecStats{}
+}
+
 // JSStats tracks JavaScript execution performance statistics.
 // It monitors execution times per-script and per-object, identifies slow executions,
 // and provides EMA-based rate tracking similar to QueueStats.
@@ -141,11 +165,16 @@ type JSStats struct {
 	// Per-object statistics
 	objects map[string]*ObjectExecStats
 
+	// Per-interval statistics
+	intervals map[string]*IntervalExecStats
+
 	// Time-bucketed tracking for efficient eviction
-	scriptBuckets map[time.Time]map[string]struct{}
-	objectBuckets map[time.Time]map[string]struct{}
-	scriptBucket  map[string]time.Time
-	objectBucket  map[string]time.Time
+	scriptBuckets   map[time.Time]map[string]struct{}
+	objectBuckets   map[time.Time]map[string]struct{}
+	intervalBuckets map[time.Time]map[string]struct{}
+	scriptBucket    map[string]time.Time
+	objectBucket    map[string]time.Time
+	intervalBucket  map[string]time.Time
 
 	// Recent slow executions circular buffer
 	recentSlow []SlowExecutionRecord
@@ -175,16 +204,19 @@ type JSStats struct {
 func NewJSStats(ctx context.Context, resolver *imports.Resolver) *JSStats {
 	now := time.Now()
 	s := &JSStats{
-		scripts:       make(map[string]*ScriptStats),
-		objects:       make(map[string]*ObjectExecStats),
-		scriptBuckets: make(map[time.Time]map[string]struct{}),
-		objectBuckets: make(map[time.Time]map[string]struct{}),
-		scriptBucket:  make(map[string]time.Time),
-		objectBucket:  make(map[string]time.Time),
-		recentSlow:    make([]SlowExecutionRecord, recentSlowBufferSize),
-		startTime:     now,
-		lastEviction:  now,
-		resolver:      resolver,
+		scripts:         make(map[string]*ScriptStats),
+		objects:         make(map[string]*ObjectExecStats),
+		intervals:       make(map[string]*IntervalExecStats),
+		scriptBuckets:   make(map[time.Time]map[string]struct{}),
+		objectBuckets:   make(map[time.Time]map[string]struct{}),
+		intervalBuckets: make(map[time.Time]map[string]struct{}),
+		scriptBucket:    make(map[string]time.Time),
+		objectBucket:    make(map[string]time.Time),
+		intervalBucket:  make(map[string]time.Time),
+		recentSlow:      make([]SlowExecutionRecord, recentSlowBufferSize),
+		startTime:       now,
+		lastEviction:    now,
+		resolver:        resolver,
 	}
 	go s.runUpdateLoop(ctx)
 	return s
@@ -204,11 +236,18 @@ func (s *JSStats) runUpdateLoop(ctx context.Context) {
 	}
 }
 
+// IntervalExecInfo contains interval metadata for execution recording.
+type IntervalExecInfo struct {
+	IntervalID string
+	EventName  string
+}
+
 // RecordExecution records a JavaScript execution with its duration.
 // sourcePath is the source file path (e.g., "/user.js").
 // objectID is the object that executed the script.
 // duration is the execution time.
-func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Duration) {
+// intervalInfo is optional interval metadata (nil for non-interval events).
+func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Duration, intervalInfo *IntervalExecInfo) {
 	// Handle edge cases
 	if sourcePath == "" {
 		sourcePath = "(no source)"
@@ -280,6 +319,35 @@ func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Dur
 		obj.SlowCount++
 	}
 	s.touchObjectLocked(objectID, now)
+
+	// Update per-interval stats if this is an interval execution
+	if intervalInfo != nil && intervalInfo.IntervalID != "" {
+		intervalID := intervalInfo.IntervalID
+		interval := s.intervals[intervalID]
+		if interval == nil {
+			// Check memory limit
+			if len(s.intervals) >= maxIntervals {
+				s.evictOldestIntervalLocked()
+			}
+			interval = newIntervalExecStats()
+			s.intervals[intervalID] = interval
+		}
+		interval.Executions++
+		interval.TotalTimeNs += durationNs
+		interval.LastExecution = now
+		interval.ObjectID = objectID
+		interval.EventName = intervalInfo.EventName
+		if interval.Executions == 1 || durationNs < interval.MinTimeNs {
+			interval.MinTimeNs = durationNs
+		}
+		if durationNs > interval.MaxTimeNs {
+			interval.MaxTimeNs = durationNs
+		}
+		if isSlow {
+			interval.SlowCount++
+		}
+		s.touchIntervalLocked(intervalID, now)
+	}
 
 	// Record slow execution with import chain
 	if isSlow {
@@ -356,6 +424,33 @@ func (s *JSStats) touchObjectLocked(objectID string, now time.Time) {
 	s.objectBucket[objectID] = bucket
 }
 
+// touchIntervalLocked updates the time bucket for an interval. Must be called with s.mu held.
+func (s *JSStats) touchIntervalLocked(intervalID string, now time.Time) {
+	bucket := now.Truncate(time.Hour)
+	oldBucket, exists := s.intervalBucket[intervalID]
+
+	if exists && oldBucket == bucket {
+		return
+	}
+
+	if exists {
+		if oldSet := s.intervalBuckets[oldBucket]; oldSet != nil {
+			delete(oldSet, intervalID)
+			if len(oldSet) == 0 {
+				delete(s.intervalBuckets, oldBucket)
+			}
+		}
+	}
+
+	newSet := s.intervalBuckets[bucket]
+	if newSet == nil {
+		newSet = make(map[string]struct{})
+		s.intervalBuckets[bucket] = newSet
+	}
+	newSet[intervalID] = struct{}{}
+	s.intervalBucket[intervalID] = bucket
+}
+
 // evictOldestScriptLocked removes the oldest script entry. Must be called with s.mu held.
 func (s *JSStats) evictOldestScriptLocked() {
 	var oldestBucket time.Time
@@ -402,6 +497,29 @@ func (s *JSStats) evictOldestObjectLocked() {
 	}
 }
 
+// evictOldestIntervalLocked removes the oldest interval entry. Must be called with s.mu held.
+func (s *JSStats) evictOldestIntervalLocked() {
+	var oldestBucket time.Time
+	for bucket := range s.intervalBuckets {
+		if oldestBucket.IsZero() || bucket.Before(oldestBucket) {
+			oldestBucket = bucket
+		}
+	}
+	if !oldestBucket.IsZero() {
+		if ids := s.intervalBuckets[oldestBucket]; ids != nil {
+			for id := range ids {
+				delete(s.intervals, id)
+				delete(s.intervalBucket, id)
+				delete(ids, id)
+				if len(ids) == 0 {
+					delete(s.intervalBuckets, oldestBucket)
+				}
+				break // Just remove one
+			}
+		}
+	}
+}
+
 // UpdateRates should be called periodically to update EMA rate calculations.
 // It also triggers eviction of stale entries if enough time has passed.
 func (s *JSStats) UpdateRates() {
@@ -435,6 +553,15 @@ func (s *JSStats) UpdateRates() {
 		obj.prevTimeNs = obj.TotalTimeNs
 	}
 
+	// Update per-interval rates
+	for _, interval := range s.intervals {
+		execDelta := interval.Executions - interval.prevExecs
+		interval.execRate.update(execDelta)
+		interval.timeRate.update(interval.TotalTimeNs)
+		interval.prevExecs = interval.Executions
+		interval.prevTimeNs = interval.TotalTimeNs
+	}
+
 	// Run eviction periodically
 	if now.Sub(s.lastEviction) >= jsStatsEvictionInterval {
 		s.evictStaleLocked(now)
@@ -466,6 +593,17 @@ func (s *JSStats) evictStaleLocked(now time.Time) {
 				delete(s.objectBucket, id)
 			}
 			delete(s.objectBuckets, bucket)
+		}
+	}
+
+	// Evict stale interval buckets
+	for bucket, ids := range s.intervalBuckets {
+		if bucket.Before(cutoff) {
+			for id := range ids {
+				delete(s.intervals, id)
+				delete(s.intervalBucket, id)
+			}
+			delete(s.intervalBuckets, bucket)
 		}
 	}
 }
@@ -511,6 +649,22 @@ type ScriptSnapshot struct {
 type ObjectExecSnapshot struct {
 	ObjectID      string
 	SourcePath    string
+	Executions    uint64
+	AvgTimeMs     float64
+	MinTimeMs     float64
+	MaxTimeMs     float64
+	SlowCount     uint64
+	SlowPercent   float64
+	LastExecution time.Time
+	ExecRates     RateSnapshot
+	TimeRates     TimeRateSnapshot
+}
+
+// IntervalExecSnapshot contains execution stats for one interval.
+type IntervalExecSnapshot struct {
+	IntervalID    string
+	ObjectID      string
+	EventName     string
 	Executions    uint64
 	AvgTimeMs     float64
 	MinTimeMs     float64
@@ -738,6 +892,81 @@ func (s *JSStats) ObjectExecSnapshot(objectID string) *ObjectExecSnapshot {
 	return &snap
 }
 
+// IntervalSortField specifies how to sort interval results.
+type IntervalSortField int
+
+const (
+	SortIntervalByTime IntervalSortField = iota
+	SortIntervalByExecs
+	SortIntervalBySlow
+)
+
+// TopIntervals returns the top n intervals sorted by the specified field.
+func (s *JSStats) TopIntervals(by IntervalSortField, n int) []IntervalExecSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]IntervalExecSnapshot, 0, len(s.intervals))
+	for id, interval := range s.intervals {
+		result = append(result, s.intervalSnapshotLocked(id, interval))
+	}
+
+	switch by {
+	case SortIntervalByTime:
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].AvgTimeMs*float64(result[i].Executions) >
+				result[j].AvgTimeMs*float64(result[j].Executions)
+		})
+	case SortIntervalByExecs:
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Executions > result[j].Executions
+		})
+	case SortIntervalBySlow:
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].SlowCount > result[j].SlowCount
+		})
+	}
+
+	if n > 0 && len(result) > n {
+		result = result[:n]
+	}
+	return result
+}
+
+func (s *JSStats) intervalSnapshotLocked(id string, interval *IntervalExecStats) IntervalExecSnapshot {
+	var avgTimeMs, minTimeMs, slowPercent float64
+	if interval.Executions > 0 {
+		avgTimeMs = float64(interval.TotalTimeNs) / float64(interval.Executions) / 1e6
+		minTimeMs = float64(interval.MinTimeNs) / 1e6
+		slowPercent = float64(interval.SlowCount) / float64(interval.Executions) * 100
+	}
+
+	return IntervalExecSnapshot{
+		IntervalID:    id,
+		ObjectID:      interval.ObjectID,
+		EventName:     interval.EventName,
+		Executions:    interval.Executions,
+		AvgTimeMs:     avgTimeMs,
+		MinTimeMs:     minTimeMs,
+		MaxTimeMs:     float64(interval.MaxTimeNs) / 1e6,
+		SlowCount:     interval.SlowCount,
+		SlowPercent:   slowPercent,
+		LastExecution: interval.LastExecution,
+		ExecRates: RateSnapshot{
+			PerSecond: interval.execRate.SecondRate,
+			PerMinute: interval.execRate.MinuteRate * 60,
+			PerHour:   interval.execRate.HourRate * 3600,
+			PerDay:    interval.execRate.DayRate * 86400,
+		},
+		TimeRates: TimeRateSnapshot{
+			PerSecond: interval.timeRate.SecondRate,
+			PerMinute: interval.timeRate.MinuteRate * 60,
+			PerHour:   interval.timeRate.HourRate * 3600,
+			PerDay:    interval.timeRate.DayRate * 86400,
+		},
+	}
+}
+
 // RecentSlowExecutions returns the n most recent slow executions, newest first.
 func (s *JSStats) RecentSlowExecutions(n int) []SlowExecutionRecord {
 	s.mu.RLock()
@@ -763,10 +992,13 @@ func (s *JSStats) Reset() {
 	now := time.Now()
 	s.scripts = make(map[string]*ScriptStats)
 	s.objects = make(map[string]*ObjectExecStats)
+	s.intervals = make(map[string]*IntervalExecStats)
 	s.scriptBuckets = make(map[time.Time]map[string]struct{})
 	s.objectBuckets = make(map[time.Time]map[string]struct{})
+	s.intervalBuckets = make(map[time.Time]map[string]struct{})
 	s.scriptBucket = make(map[string]time.Time)
 	s.objectBucket = make(map[string]time.Time)
+	s.intervalBucket = make(map[string]time.Time)
 	s.recentSlow = make([]SlowExecutionRecord, recentSlowBufferSize)
 	s.slowIndex = 0
 	s.totalExecs = 0

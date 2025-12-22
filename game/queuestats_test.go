@@ -82,8 +82,8 @@ func TestRecordError(t *testing.T) {
 	qs := NewQueueStats(ctx)
 
 	err := errors.New("test error")
-	qs.RecordError("obj1", err)
-	qs.RecordError("obj1", err)
+	qs.RecordError("obj1", err, nil)
+	qs.RecordError("obj1", err, nil)
 
 	if qs.totalErrors != 2 {
 		t.Errorf("totalErrors should be 2, got %d", qs.totalErrors)
@@ -146,7 +146,7 @@ func TestRecentErrors(t *testing.T) {
 
 	// Record some errors
 	for i := 0; i < 5; i++ {
-		qs.RecordError(fmt.Sprintf("obj%d", i), errors.New(fmt.Sprintf("error %d", i)))
+		qs.RecordError(fmt.Sprintf("obj%d", i), errors.New(fmt.Sprintf("error %d", i)), nil)
 	}
 
 	recent := qs.RecentErrors(3)
@@ -168,10 +168,10 @@ func TestRecentErrorsForObject(t *testing.T) {
 	defer cancel()
 	qs := NewQueueStats(ctx)
 
-	qs.RecordError("obj1", errors.New("err1"))
-	qs.RecordError("obj2", errors.New("err2"))
-	qs.RecordError("obj1", errors.New("err3"))
-	qs.RecordError("obj2", errors.New("err4"))
+	qs.RecordError("obj1", errors.New("err1"), nil)
+	qs.RecordError("obj2", errors.New("err2"), nil)
+	qs.RecordError("obj1", errors.New("err3"), nil)
+	qs.RecordError("obj2", errors.New("err4"), nil)
 
 	recent := qs.RecentErrorsForObject("obj1", 10)
 	if len(recent) != 2 {
@@ -191,7 +191,7 @@ func TestRecentErrorsCircularBuffer(t *testing.T) {
 
 	// Fill the buffer and overflow
 	for i := 0; i < recentErrorsBufferSize+100; i++ {
-		qs.RecordError("obj", errors.New(fmt.Sprintf("error %d", i)))
+		qs.RecordError("obj", errors.New(fmt.Sprintf("error %d", i)), nil)
 	}
 
 	recent := qs.RecentErrors(10)
@@ -214,7 +214,7 @@ func TestGlobalSnapshot(t *testing.T) {
 
 	qs.RecordEvent("obj1")
 	qs.RecordEvent("obj1")
-	qs.RecordError("obj1", errors.New("err"))
+	qs.RecordError("obj1", errors.New("err"), nil)
 
 	snap := qs.GlobalSnapshot()
 
@@ -239,7 +239,7 @@ func TestObjectSnapshot(t *testing.T) {
 
 	qs.RecordEvent("obj1")
 	qs.RecordEvent("obj1")
-	qs.RecordError("obj1", errors.New("err"))
+	qs.RecordError("obj1", errors.New("err"), nil)
 
 	snap := qs.ObjectSnapshot("obj1")
 	if snap == nil {
@@ -267,9 +267,9 @@ func TestTopCategories(t *testing.T) {
 	defer cancel()
 	qs := NewQueueStats(ctx)
 
-	qs.RecordError("obj", errors.New("generic1"))
-	qs.RecordError("obj", errors.New("generic2"))
-	qs.RecordError("obj", context.DeadlineExceeded)
+	qs.RecordError("obj", errors.New("generic1"), nil)
+	qs.RecordError("obj", errors.New("generic2"), nil)
+	qs.RecordError("obj", context.DeadlineExceeded, nil)
 
 	cats := qs.TopCategories()
 	if len(cats) != 2 {
@@ -294,7 +294,7 @@ func TestTopLocations(t *testing.T) {
 
 	// Record errors - they'll all be at "(unknown)" location since we're using simple errors
 	for i := 0; i < 5; i++ {
-		qs.RecordError("obj", errors.New("err"))
+		qs.RecordError("obj", errors.New("err"), nil)
 	}
 
 	locs := qs.TopLocations(10)
@@ -315,15 +315,15 @@ func TestTopObjects(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		qs.RecordEvent("obj1")
 	}
-	qs.RecordError("obj1", errors.New("err"))
-	qs.RecordError("obj1", errors.New("err"))
+	qs.RecordError("obj1", errors.New("err"), nil)
+	qs.RecordError("obj1", errors.New("err"), nil)
 
 	// obj2: 5 events, 3 errors (60% error rate)
 	for i := 0; i < 5; i++ {
 		qs.RecordEvent("obj2")
 	}
 	for i := 0; i < 3; i++ {
-		qs.RecordError("obj2", errors.New("err"))
+		qs.RecordError("obj2", errors.New("err"), nil)
 	}
 
 	// Sort by errors
@@ -379,9 +379,9 @@ func TestObjectsAtLocation(t *testing.T) {
 	err2 := createTestError("err2")
 	err3 := createTestError("err3")
 
-	qs.RecordError("obj1", err1)
-	qs.RecordError("obj1", err2)
-	qs.RecordError("obj2", err3)
+	qs.RecordError("obj1", err1, nil)
+	qs.RecordError("obj1", err2, nil)
+	qs.RecordError("obj2", err3, nil)
 
 	// Find the common location from obj1's ByLocation map
 	snap1 := qs.ObjectSnapshot("obj1")
@@ -411,7 +411,7 @@ func TestReset(t *testing.T) {
 	qs := NewQueueStats(ctx)
 
 	qs.RecordEvent("obj1")
-	qs.RecordError("obj1", errors.New("err"))
+	qs.RecordError("obj1", errors.New("err"), nil)
 
 	qs.Reset()
 
@@ -513,7 +513,7 @@ func TestLocationBucketTracking(t *testing.T) {
 	defer cancel()
 	qs := NewQueueStats(ctx)
 
-	qs.RecordError("obj1", errors.New("test error"))
+	qs.RecordError("obj1", errors.New("test error"), nil)
 
 	// Check location bucket tracking
 	if len(qs.locationBuckets) != 1 {
@@ -570,7 +570,7 @@ func TestEvictStaleLocked(t *testing.T) {
 
 	// Add an object
 	qs.RecordEvent("obj1")
-	qs.RecordError("obj1", errors.New("err"))
+	qs.RecordError("obj1", errors.New("err"), nil)
 
 	// Manually set the bucket to a very old time
 	oldBucket := time.Now().Add(-statsTTL - time.Hour).Truncate(time.Hour)
@@ -627,7 +627,7 @@ func TestEvictionPreservesCategories(t *testing.T) {
 	defer cancel()
 	qs := NewQueueStats(ctx)
 
-	qs.RecordError("obj1", errors.New("err"))
+	qs.RecordError("obj1", errors.New("err"), nil)
 
 	// Force eviction
 	qs.evictStaleLocked(time.Now().Add(statsTTL + time.Hour))
@@ -659,7 +659,7 @@ func TestConcurrentAccess(t *testing.T) {
 	go func() {
 		for i := 0; i < 100; i++ {
 			qs.RecordEvent(fmt.Sprintf("obj%d", i%10))
-			qs.RecordError(fmt.Sprintf("obj%d", i%10), errors.New("err"))
+			qs.RecordError(fmt.Sprintf("obj%d", i%10), errors.New("err"), nil)
 		}
 		done <- true
 	}()
@@ -868,7 +868,7 @@ func TestSnapshotCopiesData(t *testing.T) {
 	qs := NewQueueStats(ctx)
 
 	qs.RecordEvent("obj1")
-	qs.RecordError("obj1", errors.New("err"))
+	qs.RecordError("obj1", errors.New("err"), nil)
 
 	snap := qs.ObjectSnapshot("obj1")
 
@@ -907,7 +907,7 @@ func BenchmarkRecordError(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		qs.RecordError("obj1", err)
+		qs.RecordError("obj1", err, nil)
 	}
 }
 
@@ -935,7 +935,7 @@ func BenchmarkTopObjects(b *testing.B) {
 	// Pre-populate with some data
 	for i := 0; i < 1000; i++ {
 		qs.RecordEvent(fmt.Sprintf("obj%d", i))
-		qs.RecordError(fmt.Sprintf("obj%d", i), errors.New("err"))
+		qs.RecordError(fmt.Sprintf("obj%d", i), errors.New("err"), nil)
 	}
 
 	b.ResetTimer()
