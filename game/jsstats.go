@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	cache "github.com/go-pkgz/expirable-cache/v3"
 	"github.com/pkg/errors"
 	"github.com/zond/juicemud/js"
 	"github.com/zond/juicemud/js/imports"
@@ -26,8 +27,6 @@ const (
 	recentBufferSize = 10000
 	// jsStatsTTL is how long to keep stats for inactive scripts/objects before eviction.
 	jsStatsTTL = 7 * 24 * time.Hour
-	// jsStatsEvictionInterval is how often to run the eviction check.
-	jsStatsEvictionInterval = time.Hour
 	// maxScripts is the maximum number of scripts to track.
 	maxScripts = 1000
 	// maxObjects is the maximum number of objects to track.
@@ -36,6 +35,8 @@ const (
 	maxIntervals = 10000
 	// maxLocations is the maximum number of error locations to track.
 	maxLocations = 5000
+	// maxLocationsPerEntity is the maximum error locations tracked per script/object/interval.
+	maxLocationsPerEntity = 100
 	// maxErrorMessageLength is the maximum length of error messages stored.
 	maxErrorMessageLength = 128
 )
@@ -285,33 +286,41 @@ func newIntervalExecStats() *IntervalExecStats {
 	}
 }
 
+// limitCountMap ensures a count map doesn't exceed maxSize by evicting the lowest-count entry.
+// This keeps the most significant (highest count) entries.
+func limitCountMap(m map[string]uint64, maxSize int) {
+	if len(m) < maxSize {
+		return
+	}
+	var minKey string
+	var minCount uint64 = math.MaxUint64
+	for k, v := range m {
+		if v < minCount {
+			minKey, minCount = k, v
+		}
+	}
+	if minKey != "" {
+		delete(m, minKey)
+	}
+}
+
 // JSStats tracks JavaScript execution and error statistics.
 // It monitors execution times, errors per-script/object/interval, identifies slow executions,
 // and provides EMA-based rate tracking.
 type JSStats struct {
 	mu sync.RWMutex
 
-	// Per-script (source path) statistics
-	scripts map[string]*ScriptStats
+	// Per-script (source path) statistics - LRU cache with TTL
+	scripts cache.Cache[string, *ScriptStats]
 
-	// Per-object statistics
-	objects map[string]*ObjectExecStats
+	// Per-object statistics - LRU cache with TTL
+	objects cache.Cache[string, *ObjectExecStats]
 
-	// Per-interval statistics
-	intervals map[string]*IntervalExecStats
+	// Per-interval statistics - LRU cache with TTL
+	intervals cache.Cache[string, *IntervalExecStats]
 
-	// Per-location error statistics
-	locations map[string]*LocationStats
-
-	// Time-bucketed tracking for efficient eviction
-	scriptBuckets   map[time.Time]map[string]struct{}
-	objectBuckets   map[time.Time]map[string]struct{}
-	intervalBuckets map[time.Time]map[string]struct{}
-	locationBuckets map[time.Time]map[string]struct{}
-	scriptBucket    map[string]time.Time
-	objectBucket    map[string]time.Time
-	intervalBucket  map[string]time.Time
-	locationBucket  map[string]time.Time
+	// Per-location error statistics - LRU cache with TTL
+	locations cache.Cache[string, *LocationStats]
 
 	// Recent notable executions circular buffer (errors + slow)
 	recentRecords []ExecutionRecord
@@ -334,9 +343,6 @@ type JSStats struct {
 	prevExecs  uint64
 	prevErrors uint64
 
-	// Eviction tracking
-	lastEviction time.Time
-
 	// Reference to imports resolver for import chains
 	resolver *imports.Resolver
 }
@@ -349,28 +355,23 @@ type LocationStats struct {
 	LastSeen  time.Time // Most recent error at this location
 }
 
+// newStatsCache creates a new LRU cache with TTL for stats tracking.
+func newStatsCache[V any](maxKeys int) cache.Cache[string, V] {
+	return cache.NewCache[string, V]().WithMaxKeys(maxKeys).WithTTL(jsStatsTTL).WithLRU()
+}
+
 // NewJSStats creates a new JSStats tracker and starts the periodic
 // rate update loop. The loop runs until the context is cancelled.
 func NewJSStats(ctx context.Context, resolver *imports.Resolver) *JSStats {
-	now := time.Now()
 	s := &JSStats{
-		scripts:         make(map[string]*ScriptStats),
-		objects:         make(map[string]*ObjectExecStats),
-		intervals:       make(map[string]*IntervalExecStats),
-		locations:       make(map[string]*LocationStats),
-		scriptBuckets:   make(map[time.Time]map[string]struct{}),
-		objectBuckets:   make(map[time.Time]map[string]struct{}),
-		intervalBuckets: make(map[time.Time]map[string]struct{}),
-		locationBuckets: make(map[time.Time]map[string]struct{}),
-		scriptBucket:    make(map[string]time.Time),
-		objectBucket:    make(map[string]time.Time),
-		intervalBucket:  make(map[string]time.Time),
-		locationBucket:  make(map[string]time.Time),
-		recentRecords:   make([]ExecutionRecord, recentBufferSize),
-		byCategory:      make(map[ErrorCategory]uint64),
-		startTime:       now,
-		lastEviction:    now,
-		resolver:        resolver,
+		scripts:       newStatsCache[*ScriptStats](maxScripts),
+		objects:       newStatsCache[*ObjectExecStats](maxObjects),
+		intervals:     newStatsCache[*IntervalExecStats](maxIntervals),
+		locations:     newStatsCache[*LocationStats](maxLocations),
+		recentRecords: make([]ExecutionRecord, recentBufferSize),
+		byCategory:    make(map[ErrorCategory]uint64),
+		startTime:     time.Now(),
+		resolver:      resolver,
 	}
 	go s.runUpdateLoop(ctx)
 	return s
@@ -426,14 +427,9 @@ func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Dur
 	}
 
 	// Update per-script stats
-	script := s.scripts[sourcePath]
+	script, _ := s.scripts.Get(sourcePath)
 	if script == nil {
-		// Check memory limit
-		if len(s.scripts) >= maxScripts {
-			s.evictOldestScriptLocked()
-		}
 		script = newScriptStats()
-		s.scripts[sourcePath] = script
 	}
 	script.Executions++
 	script.TotalTimeNs += durationNs
@@ -447,17 +443,12 @@ func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Dur
 	if isSlow {
 		script.SlowCount++
 	}
-	s.touchScriptLocked(sourcePath, now)
+	s.scripts.Set(sourcePath, script, 0) // 0 = use cache default TTL
 
 	// Update per-object stats
-	obj := s.objects[objectID]
+	obj, _ := s.objects.Get(objectID)
 	if obj == nil {
-		// Check memory limit
-		if len(s.objects) >= maxObjects {
-			s.evictOldestObjectLocked()
-		}
 		obj = newObjectExecStats()
-		s.objects[objectID] = obj
 	}
 	obj.Executions++
 	obj.TotalTimeNs += durationNs
@@ -472,19 +463,14 @@ func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Dur
 	if isSlow {
 		obj.SlowCount++
 	}
-	s.touchObjectLocked(objectID, now)
+	s.objects.Set(objectID, obj, 0)
 
 	// Update per-interval stats if this is an interval execution
 	if intervalInfo != nil && intervalInfo.IntervalID != "" {
 		intervalID := intervalInfo.IntervalID
-		interval := s.intervals[intervalID]
+		interval, _ := s.intervals.Get(intervalID)
 		if interval == nil {
-			// Check memory limit
-			if len(s.intervals) >= maxIntervals {
-				s.evictOldestIntervalLocked()
-			}
 			interval = newIntervalExecStats()
-			s.intervals[intervalID] = interval
 		}
 		interval.Executions++
 		interval.TotalTimeNs += durationNs
@@ -500,7 +486,7 @@ func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Dur
 		if isSlow {
 			interval.SlowCount++
 		}
-		s.touchIntervalLocked(intervalID, now)
+		s.intervals.Set(intervalID, interval, 0)
 	}
 
 	// Record slow execution with import chain
@@ -535,7 +521,7 @@ func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Dur
 // sourcePath is the source file path (e.g., "/user.js").
 // objectID is the object that executed the script.
 // err is the error that occurred.
-// duration is the execution time up until the error (0 if unknown).
+// duration is the execution time up until the error (0 if unknown, may be partial).
 // intervalInfo is optional interval metadata (nil for non-interval events).
 func (s *JSStats) RecordError(sourcePath, objectID string, err error, duration time.Duration, intervalInfo *IntervalExecInfo) {
 	if err == nil {
@@ -562,77 +548,61 @@ func (s *JSStats) RecordError(sourcePath, objectID string, err error, duration t
 	s.byCategory[category]++
 
 	// Update per-script stats
-	script := s.scripts[sourcePath]
+	script, _ := s.scripts.Get(sourcePath)
 	if script == nil {
-		// Check memory limit
-		if len(s.scripts) >= maxScripts {
-			s.evictOldestScriptLocked()
-		}
 		script = newScriptStats()
-		s.scripts[sourcePath] = script
 	}
 	script.Errors++
 	script.LastError = now
 	script.ByCategory[category]++
 	script.ByLocation[locStr]++
-	s.touchScriptLocked(sourcePath, now)
+	limitCountMap(script.ByLocation, maxLocationsPerEntity)
+	s.scripts.Set(sourcePath, script, 0)
 
 	// Update per-object stats
-	obj := s.objects[objectID]
+	obj, _ := s.objects.Get(objectID)
 	if obj == nil {
-		// Check memory limit
-		if len(s.objects) >= maxObjects {
-			s.evictOldestObjectLocked()
-		}
 		obj = newObjectExecStats()
-		s.objects[objectID] = obj
 	}
 	obj.Errors++
 	obj.LastError = now
 	obj.ByCategory[category]++
 	obj.ByLocation[locStr]++
+	limitCountMap(obj.ByLocation, maxLocationsPerEntity)
 	obj.ByScript[sourcePath]++
+	limitCountMap(obj.ByScript, maxLocationsPerEntity)
 	obj.SourcePath = sourcePath // Update current source
-	s.touchObjectLocked(objectID, now)
+	s.objects.Set(objectID, obj, 0)
 
 	// Update per-interval stats if this is an interval execution
 	var intervalID string
 	if intervalInfo != nil && intervalInfo.IntervalID != "" {
 		intervalID = intervalInfo.IntervalID
-		interval := s.intervals[intervalID]
+		interval, _ := s.intervals.Get(intervalID)
 		if interval == nil {
-			// Check memory limit
-			if len(s.intervals) >= maxIntervals {
-				s.evictOldestIntervalLocked()
-			}
 			interval = newIntervalExecStats()
-			s.intervals[intervalID] = interval
 		}
 		interval.Errors++
 		interval.LastError = now
 		interval.ByCategory[category]++
 		interval.ByLocation[locStr]++
+		limitCountMap(interval.ByLocation, maxLocationsPerEntity)
 		interval.ObjectID = objectID
 		interval.EventName = intervalInfo.EventName
-		s.touchIntervalLocked(intervalID, now)
+		s.intervals.Set(intervalID, interval, 0)
 	}
 
 	// Update per-location stats
-	loc := s.locations[locStr]
+	loc, _ := s.locations.Get(locStr)
 	if loc == nil {
-		// Check memory limit
-		if len(s.locations) >= maxLocations {
-			s.evictOldestLocationLocked()
-		}
 		loc = &LocationStats{
 			Location:  locStr,
 			FirstSeen: now,
 		}
-		s.locations[locStr] = loc
 	}
 	loc.Count++
 	loc.LastSeen = now
-	s.touchLocationLocked(locStr, now)
+	s.locations.Set(locStr, loc, 0)
 
 	// Add to recent records buffer
 	s.recentRecords[s.recordIndex] = ExecutionRecord{
@@ -673,35 +643,28 @@ func (s *JSStats) RecordLoadError(objectID string, err error) {
 	s.byCategory[category]++
 
 	// Update per-object stats (no script path for load errors)
-	obj := s.objects[objectID]
+	obj, _ := s.objects.Get(objectID)
 	if obj == nil {
-		if len(s.objects) >= maxObjects {
-			s.evictOldestObjectLocked()
-		}
 		obj = newObjectExecStats()
-		s.objects[objectID] = obj
 	}
 	obj.Errors++
 	obj.LastError = now
 	obj.ByCategory[category]++
+	limitCountMap(obj.ByLocation, maxLocationsPerEntity)
 	obj.ByLocation[locStr]++
-	s.touchObjectLocked(objectID, now)
+	s.objects.Set(objectID, obj, 0)
 
 	// Update per-location stats
-	loc := s.locations[locStr]
+	loc, _ := s.locations.Get(locStr)
 	if loc == nil {
-		if len(s.locations) >= maxLocations {
-			s.evictOldestLocationLocked()
-		}
 		loc = &LocationStats{
 			Location:  locStr,
 			FirstSeen: now,
 		}
-		s.locations[locStr] = loc
 	}
 	loc.Count++
 	loc.LastSeen = now
-	s.touchLocationLocked(locStr, now)
+	s.locations.Set(locStr, loc, 0)
 
 	// Add to recent records buffer
 	s.recentRecords[s.recordIndex] = ExecutionRecord{
@@ -743,35 +706,28 @@ func (s *JSStats) RecordBootError(err error) {
 	s.byCategory[category]++
 
 	// Update per-script stats for boot
-	script := s.scripts[bootSourcePath]
+	script, _ := s.scripts.Get(bootSourcePath)
 	if script == nil {
-		if len(s.scripts) >= maxScripts {
-			s.evictOldestScriptLocked()
-		}
 		script = newScriptStats()
-		s.scripts[bootSourcePath] = script
 	}
 	script.Errors++
 	script.LastError = now
 	script.ByCategory[category]++
+	limitCountMap(script.ByLocation, maxLocationsPerEntity)
 	script.ByLocation[locStr]++
-	s.touchScriptLocked(bootSourcePath, now)
+	s.scripts.Set(bootSourcePath, script, 0)
 
 	// Update per-location stats
-	loc := s.locations[locStr]
+	loc, _ := s.locations.Get(locStr)
 	if loc == nil {
-		if len(s.locations) >= maxLocations {
-			s.evictOldestLocationLocked()
-		}
 		loc = &LocationStats{
 			Location:  locStr,
 			FirstSeen: now,
 		}
-		s.locations[locStr] = loc
 	}
 	loc.Count++
 	loc.LastSeen = now
-	s.touchLocationLocked(locStr, now)
+	s.locations.Set(locStr, loc, 0)
 
 	// Add to recent records buffer
 	s.recentRecords[s.recordIndex] = ExecutionRecord{
@@ -814,53 +770,43 @@ func (s *JSStats) RecordRecoveryError(objectID, intervalID string, err error) {
 	s.byCategory[category]++
 
 	// Update per-object stats
-	obj := s.objects[objectID]
+	obj, _ := s.objects.Get(objectID)
 	if obj == nil {
-		if len(s.objects) >= maxObjects {
-			s.evictOldestObjectLocked()
-		}
 		obj = newObjectExecStats()
-		s.objects[objectID] = obj
 	}
 	obj.Errors++
 	obj.LastError = now
 	obj.ByCategory[category]++
+	limitCountMap(obj.ByLocation, maxLocationsPerEntity)
 	obj.ByLocation[locStr]++
-	s.touchObjectLocked(objectID, now)
+	s.objects.Set(objectID, obj, 0)
 
 	// Update per-interval stats
 	if intervalID != "" {
-		interval := s.intervals[intervalID]
+		interval, _ := s.intervals.Get(intervalID)
 		if interval == nil {
-			if len(s.intervals) >= maxIntervals {
-				s.evictOldestIntervalLocked()
-			}
 			interval = newIntervalExecStats()
-			s.intervals[intervalID] = interval
 		}
 		interval.Errors++
 		interval.LastError = now
 		interval.ByCategory[category]++
 		interval.ByLocation[locStr]++
+		limitCountMap(interval.ByLocation, maxLocationsPerEntity)
 		interval.ObjectID = objectID
-		s.touchIntervalLocked(intervalID, now)
+		s.intervals.Set(intervalID, interval, 0)
 	}
 
 	// Update per-location stats
-	loc := s.locations[locStr]
+	loc, _ := s.locations.Get(locStr)
 	if loc == nil {
-		if len(s.locations) >= maxLocations {
-			s.evictOldestLocationLocked()
-		}
 		loc = &LocationStats{
 			Location:  locStr,
 			FirstSeen: now,
 		}
-		s.locations[locStr] = loc
 	}
 	loc.Count++
 	loc.LastSeen = now
-	s.touchLocationLocked(locStr, now)
+	s.locations.Set(locStr, loc, 0)
 
 	// Add to recent records buffer
 	s.recentRecords[s.recordIndex] = ExecutionRecord{
@@ -877,116 +823,11 @@ func (s *JSStats) RecordRecoveryError(objectID, intervalID string, err error) {
 	s.recordIndex = (s.recordIndex + 1) % recentBufferSize
 }
 
-// touchBucket moves a key to the current time bucket. If the key is already in the
-// current bucket, this is a no-op. Must be called with s.mu held.
-func touchBucket(key string, now time.Time, buckets map[time.Time]map[string]struct{}, keyBucket map[string]time.Time) {
-	bucket := now.Truncate(time.Hour)
-	oldBucket, exists := keyBucket[key]
-
-	if exists && oldBucket == bucket {
-		return
-	}
-
-	if exists {
-		if oldSet := buckets[oldBucket]; oldSet != nil {
-			delete(oldSet, key)
-			if len(oldSet) == 0 {
-				delete(buckets, oldBucket)
-			}
-		}
-	}
-
-	newSet := buckets[bucket]
-	if newSet == nil {
-		newSet = make(map[string]struct{})
-		buckets[bucket] = newSet
-	}
-	newSet[key] = struct{}{}
-	keyBucket[key] = bucket
-}
-
-// touchScriptLocked updates the time bucket for a script. Must be called with s.mu held.
-func (s *JSStats) touchScriptLocked(sourcePath string, now time.Time) {
-	touchBucket(sourcePath, now, s.scriptBuckets, s.scriptBucket)
-}
-
-// touchObjectLocked updates the time bucket for an object. Must be called with s.mu held.
-func (s *JSStats) touchObjectLocked(objectID string, now time.Time) {
-	touchBucket(objectID, now, s.objectBuckets, s.objectBucket)
-}
-
-// touchIntervalLocked updates the time bucket for an interval. Must be called with s.mu held.
-func (s *JSStats) touchIntervalLocked(intervalID string, now time.Time) {
-	touchBucket(intervalID, now, s.intervalBuckets, s.intervalBucket)
-}
-
-// evictOldestFromBucket removes and returns the oldest key from the bucket system.
-// Returns empty string if no entries exist. Must be called with appropriate lock held.
-func evictOldestFromBucket(buckets map[time.Time]map[string]struct{}, keyBucket map[string]time.Time) string {
-	var oldestBucket time.Time
-	for bucket := range buckets {
-		if oldestBucket.IsZero() || bucket.Before(oldestBucket) {
-			oldestBucket = bucket
-		}
-	}
-	if oldestBucket.IsZero() {
-		return ""
-	}
-	keys := buckets[oldestBucket]
-	if keys == nil {
-		return ""
-	}
-	for key := range keys {
-		delete(keyBucket, key)
-		delete(keys, key)
-		if len(keys) == 0 {
-			delete(buckets, oldestBucket)
-		}
-		return key
-	}
-	return ""
-}
-
-// evictOldestScriptLocked removes the oldest script entry. Must be called with s.mu held.
-func (s *JSStats) evictOldestScriptLocked() {
-	if key := evictOldestFromBucket(s.scriptBuckets, s.scriptBucket); key != "" {
-		delete(s.scripts, key)
-	}
-}
-
-// evictOldestObjectLocked removes the oldest object entry. Must be called with s.mu held.
-func (s *JSStats) evictOldestObjectLocked() {
-	if key := evictOldestFromBucket(s.objectBuckets, s.objectBucket); key != "" {
-		delete(s.objects, key)
-	}
-}
-
-// evictOldestIntervalLocked removes the oldest interval entry. Must be called with s.mu held.
-func (s *JSStats) evictOldestIntervalLocked() {
-	if key := evictOldestFromBucket(s.intervalBuckets, s.intervalBucket); key != "" {
-		delete(s.intervals, key)
-	}
-}
-
-// touchLocationLocked updates the time bucket for an error location. Must be called with s.mu held.
-func (s *JSStats) touchLocationLocked(location string, now time.Time) {
-	touchBucket(location, now, s.locationBuckets, s.locationBucket)
-}
-
-// evictOldestLocationLocked removes the oldest location entry. Must be called with s.mu held.
-func (s *JSStats) evictOldestLocationLocked() {
-	if key := evictOldestFromBucket(s.locationBuckets, s.locationBucket); key != "" {
-		delete(s.locations, key)
-	}
-}
-
 // UpdateRates should be called periodically to update EMA rate calculations.
-// It also triggers eviction of stale entries if enough time has passed.
+// It also triggers cleanup of expired cache entries.
 func (s *JSStats) UpdateRates() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	now := time.Now()
 
 	// Update global rates
 	execDelta := s.totalExecs - s.prevExecs
@@ -998,7 +839,7 @@ func (s *JSStats) UpdateRates() {
 	s.prevErrors = s.totalErrors
 
 	// Update per-script rates
-	for _, script := range s.scripts {
+	for _, script := range s.scripts.Values() {
 		execDelta := script.Executions - script.prevExecs
 		script.execRate.update(execDelta)
 		script.timeRate.update(script.TotalTimeNs)
@@ -1009,7 +850,7 @@ func (s *JSStats) UpdateRates() {
 	}
 
 	// Update per-object rates
-	for _, obj := range s.objects {
+	for _, obj := range s.objects.Values() {
 		execDelta := obj.Executions - obj.prevExecs
 		obj.execRate.update(execDelta)
 		obj.timeRate.update(obj.TotalTimeNs)
@@ -1020,7 +861,7 @@ func (s *JSStats) UpdateRates() {
 	}
 
 	// Update per-interval rates
-	for _, interval := range s.intervals {
+	for _, interval := range s.intervals.Values() {
 		execDelta := interval.Executions - interval.prevExecs
 		interval.execRate.update(execDelta)
 		interval.timeRate.update(interval.TotalTimeNs)
@@ -1030,61 +871,12 @@ func (s *JSStats) UpdateRates() {
 		interval.prevErrors = interval.Errors
 	}
 
-	// Run eviction periodically
-	if now.Sub(s.lastEviction) >= jsStatsEvictionInterval {
-		s.evictStaleLocked(now)
-		s.lastEviction = now
-	}
-}
-
-// evictStaleLocked removes entries that haven't been updated within jsStatsTTL.
-// Must be called with s.mu held.
-func (s *JSStats) evictStaleLocked(now time.Time) {
-	cutoff := now.Add(-jsStatsTTL).Truncate(time.Hour)
-
-	// Evict stale script buckets
-	for bucket, paths := range s.scriptBuckets {
-		if bucket.Before(cutoff) {
-			for path := range paths {
-				delete(s.scripts, path)
-				delete(s.scriptBucket, path)
-			}
-			delete(s.scriptBuckets, bucket)
-		}
-	}
-
-	// Evict stale object buckets
-	for bucket, ids := range s.objectBuckets {
-		if bucket.Before(cutoff) {
-			for id := range ids {
-				delete(s.objects, id)
-				delete(s.objectBucket, id)
-			}
-			delete(s.objectBuckets, bucket)
-		}
-	}
-
-	// Evict stale interval buckets
-	for bucket, ids := range s.intervalBuckets {
-		if bucket.Before(cutoff) {
-			for id := range ids {
-				delete(s.intervals, id)
-				delete(s.intervalBucket, id)
-			}
-			delete(s.intervalBuckets, bucket)
-		}
-	}
-
-	// Evict stale location buckets
-	for bucket, locs := range s.locationBuckets {
-		if bucket.Before(cutoff) {
-			for loc := range locs {
-				delete(s.locations, loc)
-				delete(s.locationBucket, loc)
-			}
-			delete(s.locationBuckets, bucket)
-		}
-	}
+	// Clean up expired entries (recommended: run every 1/2 TTL, but we run every second
+	// which is fine - the cache handles it efficiently)
+	s.scripts.DeleteExpired()
+	s.objects.DeleteExpired()
+	s.intervals.DeleteExpired()
+	s.locations.DeleteExpired()
 }
 
 // Snapshot types for query results
@@ -1281,8 +1073,13 @@ func (s *JSStats) TopScripts(by ScriptSortField, n int) []ScriptSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]ScriptSnapshot, 0, len(s.scripts))
-	for path, script := range s.scripts {
+	keys := s.scripts.Keys()
+	result := make([]ScriptSnapshot, 0, len(keys))
+	for _, path := range keys {
+		script, ok := s.scripts.Peek(path) // Peek to avoid updating LRU order
+		if !ok {
+			continue
+		}
 		result = append(result, s.scriptSnapshotLocked(path, script))
 	}
 
@@ -1384,8 +1181,8 @@ func (s *JSStats) ScriptSnapshot(sourcePath string) *ScriptSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	script := s.scripts[sourcePath]
-	if script == nil {
+	script, ok := s.scripts.Peek(sourcePath)
+	if !ok {
 		return nil
 	}
 	snap := s.scriptSnapshotLocked(sourcePath, script)
@@ -1408,8 +1205,13 @@ func (s *JSStats) TopObjects(by ObjectSortField, n int) []ObjectExecSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]ObjectExecSnapshot, 0, len(s.objects))
-	for id, obj := range s.objects {
+	keys := s.objects.Keys()
+	result := make([]ObjectExecSnapshot, 0, len(keys))
+	for _, id := range keys {
+		obj, ok := s.objects.Peek(id)
+		if !ok {
+			continue
+		}
 		result = append(result, s.objectSnapshotLocked(id, obj))
 	}
 
@@ -1508,8 +1310,8 @@ func (s *JSStats) ObjectExecSnapshot(objectID string) *ObjectExecSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	obj := s.objects[objectID]
-	if obj == nil {
+	obj, ok := s.objects.Peek(objectID)
+	if !ok {
 		return nil
 	}
 	snap := s.objectSnapshotLocked(objectID, obj)
@@ -1532,8 +1334,13 @@ func (s *JSStats) TopIntervals(by IntervalSortField, n int) []IntervalExecSnapsh
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]IntervalExecSnapshot, 0, len(s.intervals))
-	for id, interval := range s.intervals {
+	keys := s.intervals.Keys()
+	result := make([]IntervalExecSnapshot, 0, len(keys))
+	for _, id := range keys {
+		interval, ok := s.intervals.Peek(id)
+		if !ok {
+			continue
+		}
 		result = append(result, s.intervalSnapshotLocked(id, interval))
 	}
 
@@ -1628,8 +1435,13 @@ func (s *JSStats) TopLocations(n int) []LocationSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]LocationSnapshot, 0, len(s.locations))
-	for _, loc := range s.locations {
+	keys := s.locations.Keys()
+	result := make([]LocationSnapshot, 0, len(keys))
+	for _, key := range keys {
+		loc, ok := s.locations.Peek(key)
+		if !ok {
+			continue
+		}
 		result = append(result, LocationSnapshot{
 			Location:  loc.Location,
 			Count:     loc.Count,
@@ -1684,18 +1496,10 @@ func (s *JSStats) Reset() {
 	defer s.mu.Unlock()
 
 	now := time.Now()
-	s.scripts = make(map[string]*ScriptStats)
-	s.objects = make(map[string]*ObjectExecStats)
-	s.intervals = make(map[string]*IntervalExecStats)
-	s.locations = make(map[string]*LocationStats)
-	s.scriptBuckets = make(map[time.Time]map[string]struct{})
-	s.objectBuckets = make(map[time.Time]map[string]struct{})
-	s.intervalBuckets = make(map[time.Time]map[string]struct{})
-	s.locationBuckets = make(map[time.Time]map[string]struct{})
-	s.scriptBucket = make(map[string]time.Time)
-	s.objectBucket = make(map[string]time.Time)
-	s.intervalBucket = make(map[string]time.Time)
-	s.locationBucket = make(map[string]time.Time)
+	s.scripts.Purge()
+	s.objects.Purge()
+	s.intervals.Purge()
+	s.locations.Purge()
 	s.recentRecords = make([]ExecutionRecord, recentBufferSize)
 	s.recordIndex = 0
 	s.totalExecs = 0
@@ -1704,7 +1508,6 @@ func (s *JSStats) Reset() {
 	s.totalErrors = 0
 	s.byCategory = make(map[ErrorCategory]uint64)
 	s.startTime = now
-	s.lastEviction = now
 	s.execRate = RateStats{}
 	s.timeRate = TimeRateStats{}
 	s.errorRate = RateStats{}
