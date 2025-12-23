@@ -39,6 +39,9 @@ const (
 	maxLocationsPerEntity = 100
 	// maxErrorMessageLength is the maximum length of error messages stored.
 	maxErrorMessageLength = 128
+	// expiredCleanupInterval is how often to run DeleteExpired on caches.
+	// With a 7-day TTL, hourly cleanup is more than sufficient.
+	expiredCleanupInterval = time.Hour
 )
 
 // ErrorCategory classifies the source of an error.
@@ -307,6 +310,12 @@ func limitCountMap(m map[string]uint64, maxSize int) {
 // JSStats tracks JavaScript execution and error statistics.
 // It monitors execution times, errors per-script/object/interval, identifies slow executions,
 // and provides EMA-based rate tracking.
+//
+// Thread safety: While the underlying caches are internally thread-safe for individual
+// operations (Get, Set, etc.), we use an external mutex (mu) to ensure atomicity of
+// read-modify-write sequences. Without it, concurrent goroutines could both Get() returning
+// nil, both create new stat objects, and one would overwrite the other's modifications.
+// The external RLock is used for read-only snapshot operations with Peek().
 type JSStats struct {
 	mu sync.RWMutex
 
@@ -345,6 +354,9 @@ type JSStats struct {
 
 	// Reference to imports resolver for import chains
 	resolver *imports.Resolver
+
+	// Last time DeleteExpired was called on caches
+	lastExpiredCleanup time.Time
 }
 
 // LocationStats tracks error statistics for a code location (file:line:col).
@@ -356,18 +368,24 @@ type LocationStats struct {
 }
 
 // newStatsCache creates a new LRU cache with TTL for stats tracking.
-func newStatsCache[V any](maxKeys int) cache.Cache[string, V] {
-	return cache.NewCache[string, V]().WithMaxKeys(maxKeys).WithTTL(jsStatsTTL).WithLRU()
+func newStatsCache[V any](maxKeys int, ttl time.Duration) cache.Cache[string, V] {
+	return cache.NewCache[string, V]().WithMaxKeys(maxKeys).WithTTL(ttl).WithLRU()
 }
 
 // NewJSStats creates a new JSStats tracker and starts the periodic
 // rate update loop. The loop runs until the context is cancelled.
 func NewJSStats(ctx context.Context, resolver *imports.Resolver) *JSStats {
+	return NewJSStatsWithTTL(ctx, resolver, jsStatsTTL)
+}
+
+// NewJSStatsWithTTL creates a new JSStats tracker with a custom TTL.
+// This is useful for testing with shorter TTL values.
+func NewJSStatsWithTTL(ctx context.Context, resolver *imports.Resolver, ttl time.Duration) *JSStats {
 	s := &JSStats{
-		scripts:       newStatsCache[*ScriptStats](maxScripts),
-		objects:       newStatsCache[*ObjectExecStats](maxObjects),
-		intervals:     newStatsCache[*IntervalExecStats](maxIntervals),
-		locations:     newStatsCache[*LocationStats](maxLocations),
+		scripts:       newStatsCache[*ScriptStats](maxScripts, ttl),
+		objects:       newStatsCache[*ObjectExecStats](maxObjects, ttl),
+		intervals:     newStatsCache[*IntervalExecStats](maxIntervals, ttl),
+		locations:     newStatsCache[*LocationStats](maxLocations, ttl),
 		recentRecords: make([]ExecutionRecord, recentBufferSize),
 		byCategory:    make(map[ErrorCategory]uint64),
 		startTime:     time.Now(),
@@ -871,12 +889,14 @@ func (s *JSStats) UpdateRates() {
 		interval.prevErrors = interval.Errors
 	}
 
-	// Clean up expired entries (recommended: run every 1/2 TTL, but we run every second
-	// which is fine - the cache handles it efficiently)
-	s.scripts.DeleteExpired()
-	s.objects.DeleteExpired()
-	s.intervals.DeleteExpired()
-	s.locations.DeleteExpired()
+	// Periodically clean up expired cache entries
+	if time.Since(s.lastExpiredCleanup) >= expiredCleanupInterval {
+		s.scripts.DeleteExpired()
+		s.objects.DeleteExpired()
+		s.intervals.DeleteExpired()
+		s.locations.DeleteExpired()
+		s.lastExpiredCleanup = time.Now()
+	}
 }
 
 // Snapshot types for query results
