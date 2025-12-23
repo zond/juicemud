@@ -198,6 +198,139 @@ func TestLiveTypeHash(t *testing.T) {
 	})
 }
 
+func TestLiveTypeHashDel(t *testing.T) {
+	WithLiveTypeHash(t, func(lh *LiveTypeHash[Live, *Live]) {
+		// Create and flush an object
+		to := &Live{Unsafe: &LiveDO{}}
+		to.Unsafe.Id = "deltest"
+		to.Unsafe.S = "original"
+		if err := lh.Set(to); err != nil {
+			t.Fatal(err)
+		}
+		if err := lh.Flush(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify it exists
+		if !lh.Has("deltest") {
+			t.Error("expected Has to return true before Del")
+		}
+
+		// Delete it
+		if err := lh.Del("deltest"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Has should return false immediately (before Flush)
+		if lh.Has("deltest") {
+			t.Error("expected Has to return false after Del")
+		}
+
+		// Get should return error immediately (before Flush)
+		if _, err := lh.Get("deltest"); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("expected os.ErrNotExist after Del, got %v", err)
+		}
+
+		// Flush the delete to disk
+		if err := lh.Flush(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Should still not exist
+		if lh.Has("deltest") {
+			t.Error("expected Has to return false after Flush")
+		}
+	})
+}
+
+func TestLiveTypeHashDelNotFound(t *testing.T) {
+	WithLiveTypeHash(t, func(lh *LiveTypeHash[Live, *Live]) {
+		// Del on non-existent key should return error
+		if err := lh.Del("nonexistent"); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("expected os.ErrNotExist for Del on nonexistent key, got %v", err)
+		}
+	})
+}
+
+func TestLiveTypeHashProcDelete(t *testing.T) {
+	WithLiveTypeHash(t, func(lh *LiveTypeHash[Live, *Live]) {
+		// Create and flush an object
+		to := &Live{Unsafe: &LiveDO{}}
+		to.Unsafe.Id = "procdeltest"
+		if err := lh.Set(to); err != nil {
+			t.Fatal(err)
+		}
+		if err := lh.Flush(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Delete via Proc (returning nil)
+		if err := lh.Proc([]LProc[Live, *Live]{
+			lh.LProc("procdeltest", func(k string, v *Live) (*Live, error) {
+				return nil, nil // Delete
+			}),
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Should not exist after Proc
+		if lh.Has("procdeltest") {
+			t.Error("expected Has to return false after Proc delete")
+		}
+
+		// Flush to disk
+		if err := lh.Flush(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Should still not exist
+		if lh.Has("procdeltest") {
+			t.Error("expected Has to return false after Flush")
+		}
+	})
+}
+
+func TestLiveTypeHashDeletePreventsRewrite(t *testing.T) {
+	WithLiveTypeHash(t, func(lh *LiveTypeHash[Live, *Live]) {
+		// Create and flush an object
+		to := &Live{Unsafe: &LiveDO{}}
+		to.Unsafe.Id = "rewritetest"
+		to.Unsafe.S = "original"
+		if err := lh.Set(to); err != nil {
+			t.Fatal(err)
+		}
+		if err := lh.Flush(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Get a reference to the object
+		obj, err := lh.Get("rewritetest")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Delete it
+		if err := lh.Del("rewritetest"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Modify the in-memory object (simulates what run() does after JS)
+		obj.Lock()
+		obj.Unsafe.S = "modified"
+		obj.Unlock() // This triggers PostUnlock -> updated()
+
+		// Flush should delete, not rewrite the modified object
+		if err := lh.Flush(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Object should not exist
+		if lh.Has("rewritetest") {
+			t.Error("expected object to be deleted, not rewritten")
+		}
+	})
+}
+
 func TestGetStructMulti(t *testing.T) {
 	WithTypeHash(t, func(sh *TypeHash[Obj, *Obj]) {
 		want := map[string]*Obj{"s": {I: 1, S: "s"}, "s2": {I: 2, S: "s2"}}

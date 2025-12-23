@@ -163,18 +163,17 @@ func (h *FlushHealth) recordError(err error) time.Duration {
 // LiveTypeHash is an in-memory cache over a TypeHash that automatically flushes
 // dirty entries to disk every second. Objects are tracked for changes via PostUnlock.
 //
-// Lock ordering note: stageMutex and updatesMutex are never held simultaneously.
-// - Flush() acquires updatesMutex, releases it, then acquires stageMutex sequentially.
-// - The updated() callback acquires updatesMutex but is called from user code via
-//   PostUnlock (after the object's own mutex is released), outside any LiveTypeHash lock.
-// - All other methods use only one mutex at a time.
+// Lock ordering: stageMutex before updatesMutex. Methods that need both locks
+// must acquire stageMutex first to avoid deadlock. The updated() callback only
+// acquires updatesMutex and is called from user code via PostUnlock.
 type LiveTypeHash[T any, S structs.Snapshottable[T]] struct {
-	hash         *TypeHash[T, S]
-	stage        map[string]*T
-	stageMutex   sync.RWMutex
-	updates      map[string]bool
-	updatesMutex sync.RWMutex
-	done         chan struct{} // Closed when flush goroutine exits
+	hash       *TypeHash[T, S]  // Underlying persistent storage
+	stage      map[string]*T    // In-memory cache of loaded objects
+	stageMutex sync.RWMutex     // Protects stage
+	updates    map[string]bool  // Keys with dirty objects pending write to disk
+	deletes    map[string]bool  // Keys pending deletion, flushed to disk by Flush()
+	updatesMutex sync.RWMutex   // Protects updates and deletes
+	done       chan struct{}    // Closed when flush goroutine exits
 
 	// Flush health tracking (protected by updatesMutex)
 	flushHealth FlushHealth
@@ -187,36 +186,52 @@ func (l *LiveTypeHash[T, S]) FlushHealth() FlushHealth {
 	return l.flushHealth
 }
 
-// Flush writes all dirty entries to disk.
-// Note: updatesMutex is released before stageMutex is acquired to avoid deadlock.
-// On partial failure, remaining keys are re-added to updates to retry later.
+// Flush atomically writes all pending updates and deletes to disk.
+// All operations succeed or fail together using the underlying TypeHash.Proc.
 func (l *LiveTypeHash[T, S]) Flush() error {
-	toUpdate := []string{}
+	// Hold both locks to build proc slice and clear pending maps atomically.
+	// Lock order: stageMutex before updatesMutex (consistent with other methods).
+	l.stageMutex.RLock()
 	l.updatesMutex.Lock()
+
+	procs := make([]Proc, 0, len(l.updates)+len(l.deletes))
+
+	// Build update operations (skip keys pending deletion)
 	for key := range l.updates {
-		toUpdate = append(toUpdate, key)
-	}
-	l.updates = map[string]bool{}
-	l.updatesMutex.Unlock()
-	// updatesMutex released above before acquiring stageMutex below
-	for i, key := range toUpdate {
-		l.stageMutex.RLock()
+		if l.deletes[key] {
+			continue
+		}
 		obj, found := l.stage[key]
-		l.stageMutex.RUnlock()
 		if !found {
 			continue
 		}
-		if err := l.hash.Set(key, obj, true); err != nil {
-			// Re-add this key and all remaining keys back to updates
-			l.updatesMutex.Lock()
-			for _, remainingKey := range toUpdate[i:] {
-				l.updates[remainingKey] = true
-			}
-			l.updatesMutex.Unlock()
-			return juicemud.WithStack(err)
-		}
+		objCopy := S(obj).UnsafeShallowCopy()
+		procs = append(procs, l.hash.SProc(key, func(k string, v *T) (*T, error) {
+			return objCopy, nil
+		}))
 	}
-	return nil
+
+	// Build delete operations
+	for key := range l.deletes {
+		key := key // capture for closure
+		procs = append(procs, l.hash.SProc(key, func(k string, v *T) (*T, error) {
+			return nil, nil
+		}))
+	}
+
+	// Clear pending maps before releasing locks
+	l.updates = map[string]bool{}
+	l.deletes = map[string]bool{}
+
+	l.updatesMutex.Unlock()
+	l.stageMutex.RUnlock()
+
+	if len(procs) == 0 {
+		return nil
+	}
+
+	// Execute all operations atomically
+	return juicemud.WithStack(l.hash.Proc(procs, true))
 }
 
 // Close waits for the flush goroutine to stop, then flushes and closes the file.
@@ -351,14 +366,21 @@ func (l *LiveTypeHash[T, S]) LProc(key string, fun func(string, *T) (*T, error))
 	}
 }
 
-// Proc atomically applies multiple operations. Each LProc's function receives
-// the current value and returns the new value (or nil to delete).
-// Lock ordering: stageMutex is acquired before hash.mutex (via l.hash.Proc).
+// Proc atomically applies multiple operations to the in-memory stage.
+// Each LProc's function receives the current value and returns the new value
+// (or nil to delete). Changes are written to disk on the next Flush.
 func (l *LiveTypeHash[T, S]) Proc(procs []LProc[T, S]) error {
 	l.stageMutex.Lock()
 	defer l.stageMutex.Unlock()
 
-	postProcs := make([]Proc, len(procs))
+	// Collect all changes before applying any (for atomicity on error)
+	type change struct {
+		key    string
+		newVal *T
+		delete bool
+	}
+	changes := make([]change, len(procs))
+
 	for i, proc := range procs {
 		foundV, err := l.getNOLOCK(proc.K)
 		if errors.Is(err, os.ErrNotExist) {
@@ -370,21 +392,38 @@ func (l *LiveTypeHash[T, S]) Proc(procs []LProc[T, S]) error {
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		if newV == nil {
-			delete(l.stage, proc.K)
-		} else {
-			S(newV).SetPostUnlock(l.updated)
-			l.stage[proc.K] = newV
-			newV = S(newV).UnsafeShallowCopy()
-		}
-		postProcs[i] = l.hash.SProc(proc.K, func(k string, v *T) (*T, error) {
-			return newV, nil
-		})
+		changes[i] = change{key: proc.K, newVal: newV, delete: newV == nil}
 	}
-	return juicemud.WithStack(l.hash.Proc(postProcs, true))
+
+	// Apply all changes (none applied if any proc.F returned an error above)
+	l.updatesMutex.Lock()
+	defer l.updatesMutex.Unlock()
+
+	for _, c := range changes {
+		if c.delete {
+			delete(l.stage, c.key)
+			l.deletes[c.key] = true
+			delete(l.updates, c.key)
+		} else {
+			S(c.newVal).SetPostUnlock(l.updated)
+			l.stage[c.key] = c.newVal
+			l.updates[c.key] = true
+			delete(l.deletes, c.key) // In case it was previously marked for deletion
+		}
+	}
+
+	return nil
 }
 
 func (l *LiveTypeHash[T, S]) getNOLOCK(k string) (*T, error) {
+	// Check if pending delete
+	l.updatesMutex.RLock()
+	isDeleted := l.deletes[k]
+	l.updatesMutex.RUnlock()
+	if isDeleted {
+		return nil, juicemud.WithStack(fmt.Errorf("key %q: %w", k, os.ErrNotExist))
+	}
+
 	if res, found := l.stage[k]; found {
 		return res, nil
 	}
@@ -403,11 +442,43 @@ func (l *LiveTypeHash[T, S]) getNOLOCK(k string) (*T, error) {
 func (l *LiveTypeHash[T, S]) Has(k string) bool {
 	l.stageMutex.RLock()
 	defer l.stageMutex.RUnlock()
+	// Check if pending delete
+	l.updatesMutex.RLock()
+	isDeleted := l.deletes[k]
+	l.updatesMutex.RUnlock()
+	if isDeleted {
+		return false
+	}
 	if _, found := l.stage[k]; found {
 		return true
 	}
 	// Check hash while still holding lock to avoid race with Proc() deletions
 	return l.hash.Has(k)
+}
+
+// Del marks an object for deletion. The delete is written to disk on the next Flush.
+// Returns os.ErrNotExist if the key doesn't exist.
+func (l *LiveTypeHash[T, S]) Del(k string) error {
+	l.stageMutex.Lock()
+	defer l.stageMutex.Unlock()
+
+	// Check if key exists (in stage or on disk)
+	_, found := l.stage[k]
+	if !found && !l.hash.Has(k) {
+		return juicemud.WithStack(fmt.Errorf("key %q: %w", k, os.ErrNotExist))
+	}
+
+	// Remove from stage
+	delete(l.stage, k)
+
+	// Mark for deletion on disk
+	l.updatesMutex.Lock()
+	l.deletes[k] = true
+	// Remove from updates since we're deleting
+	delete(l.updates, k)
+	l.updatesMutex.Unlock()
+
+	return nil
 }
 
 // Get retrieves a typed value by key. Returns os.ErrNotExist if key doesn't exist.
@@ -998,6 +1069,7 @@ func OpenLiveTypeHash[T any, S structs.Snapshottable[T]](ctx context.Context, pa
 		hash:    &TypeHash[T, S]{h},
 		stage:   map[string]*T{},
 		updates: map[string]bool{},
+		deletes: map[string]bool{},
 		done:    make(chan struct{}),
 	}
 	go l.runFlushLoop(ctx)
