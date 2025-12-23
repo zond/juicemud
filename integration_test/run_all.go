@@ -2914,5 +2914,158 @@ addCallback('exitFailed', ['emit'], (msg) => {
 
 	fmt.Println("  exitFailed event: OK")
 
+	// === Test: setInterval/clearInterval ===
+	fmt.Println("Testing setInterval/clearInterval...")
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		return fmt.Errorf("/enter genesis for interval: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/enter genesis for interval did not complete")
+	}
+
+	// Create an object that uses setInterval to count ticks
+	// Minimum interval is 5000ms (5 seconds)
+	// IMPORTANT: Script runs EVERY time a callback is invoked, so we must
+	// check if already initialized to avoid resetting state on each tick.
+	intervalSource := `
+// Only initialize on first run (state.tickCount will be undefined)
+if (state.tickCount === undefined) {
+	state.tickCount = 0;
+	state.intervalId = setInterval(5000, 'tick', {});
+	setDescriptions([{Short: 'pulsing gem (0 pulses)'}]);
+}
+
+addCallback('tick', ['emit'], (msg) => {
+	state.tickCount = (state.tickCount || 0) + 1;
+	setDescriptions([{Short: 'pulsing gem (' + state.tickCount + ' pulses)'}]);
+});
+
+addCallback('halt', ['action'], (msg) => {
+	if (state.intervalId) {
+		clearInterval(state.intervalId);
+		state.intervalId = null;
+		setDescriptions([{Short: 'dormant gem (halted at ' + state.tickCount + ')'}]);
+	}
+});
+`
+	if err := ts.WriteSource("/pulsing_gem.js", intervalSource); err != nil {
+		return fmt.Errorf("failed to create /pulsing_gem.js: %w", err)
+	}
+
+	pulsingGemID, err := tc.createObject("/pulsing_gem.js")
+	if err != nil {
+		return fmt.Errorf("create pulsing_gem: %w", err)
+	}
+
+	// Verify object starts with 0 pulses
+	output, found = tc.waitForLookMatch("pulsing gem (0 pulses)", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("pulsing gem should start with 0 pulses: %q", output)
+	}
+
+	// Wait for the first tick (interval is 5000ms, need ~6s to see 1 pulse)
+	intervalWaitTimeout := 12 * time.Second
+	output, found = tc.waitForLookMatch("1 pulses", intervalWaitTimeout)
+	if !found {
+		return fmt.Errorf("interval should have fired at least once: %q", output)
+	}
+
+	// Halt the interval - just use the action name like other tests (poke, shake)
+	if err := tc.sendLine("halt"); err != nil {
+		return fmt.Errorf("halt command: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("halt command did not complete")
+	}
+
+	// Verify it shows dormant/halted
+	output, found = tc.waitForLookMatch("dormant gem (halted at", defaultWaitTimeout)
+	if !found {
+		return fmt.Errorf("gem should show halted: %q", output)
+	}
+
+	// Record the pulse count when halted
+	var haltedPulses int
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "halted at") {
+			// Parse "halted at N" to get N
+			parts := strings.Split(line, "halted at ")
+			if len(parts) > 1 {
+				numStr := strings.TrimSuffix(strings.TrimSpace(parts[1]), ")")
+				fmt.Sscanf(numStr, "%d", &haltedPulses)
+			}
+		}
+	}
+
+	// Wait longer than the interval period to verify no more pulses occurred.
+	// NOTE: A fixed sleep is unavoidable here because we're testing that an event
+	// does NOT fire - there's nothing to poll for or wait on.
+	time.Sleep(6 * time.Second)
+	output, ok = tc.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("look after halt did not complete")
+	}
+	// The description should still show the same halted pulse count
+	if !strings.Contains(output, fmt.Sprintf("halted at %d", haltedPulses)) {
+		return fmt.Errorf("interval should not fire after clearInterval: %q (expected halted at %d)", output, haltedPulses)
+	}
+
+	// Cleanup
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", pulsingGemID)); err != nil {
+		return fmt.Errorf("/remove pulsing_gem: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/remove pulsing_gem did not complete")
+	}
+
+	fmt.Println("  setInterval/clearInterval: OK")
+
+	// === Test: /intervals wizard command ===
+	fmt.Println("Testing /intervals wizard command...")
+
+	// Create a new interval object (minimum interval is 5000ms)
+	// Only set up interval on first run
+	intervalListSource := `
+setDescriptions([{Short: 'interval lister'}]);
+if (state.intervalId === undefined) {
+	state.intervalId = setInterval(5000, 'heartbeat', {type: 'beat'});
+}
+`
+	if err := ts.WriteSource("/interval_lister.js", intervalListSource); err != nil {
+		return fmt.Errorf("failed to create /interval_lister.js: %w", err)
+	}
+
+	intervalListerID, err := tc.createObject("/interval_lister.js")
+	if err != nil {
+		return fmt.Errorf("create interval_lister: %w", err)
+	}
+
+	// Check /intervals command shows the interval
+	output, ok = tc.sendCommand("/intervals", defaultWaitTimeout)
+	if !ok {
+		return fmt.Errorf("/intervals command did not complete")
+	}
+	if !strings.Contains(output, intervalListerID) {
+		return fmt.Errorf("/intervals should show object ID: %q", output)
+	}
+	if !strings.Contains(output, "heartbeat") {
+		return fmt.Errorf("/intervals should show event name 'heartbeat': %q", output)
+	}
+	if !strings.Contains(output, "5000") {
+		return fmt.Errorf("/intervals should show interval ms: %q", output)
+	}
+
+	// Cleanup
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", intervalListerID)); err != nil {
+		return fmt.Errorf("/remove interval_lister: %w", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		return fmt.Errorf("/remove interval_lister did not complete")
+	}
+
+	fmt.Println("  /intervals wizard command: OK")
+
 	return nil
 }

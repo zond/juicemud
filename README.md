@@ -137,6 +137,45 @@ Import behavior:
 - Diamond dependencies are handled correctly (each file included once)
 - Modifying any file in the import chain triggers a refresh
 
+**Script Execution Model**: Understanding how scripts run is crucial for writing correct object code:
+
+1. The **entire script** runs every time any callback is invoked (not just the callback function)
+2. Top-level code runs first, then the specific callback is invoked
+3. The `state` object persists between executions; local variables do not
+
+This means initialization code at the top level will run repeatedly. Use the `created` event for one-time initialization:
+
+```javascript
+// CORRECT: Use 'created' event for one-time initialization
+addCallback('created', ['emit'], (msg) => {
+    state.counter = 0;
+    state.intervalId = setInterval(5000, 'tick', {});
+    setDescriptions([{Short: 'my object (initialized)'}]);
+});
+
+addCallback('tick', ['emit'], (msg) => {
+    state.counter++;
+    setDescriptions([{Short: 'my object (' + state.counter + ' ticks)'}]);
+});
+```
+
+The `created` event is sent once when an object is first created via `/create`. If you can't use the `created` event (e.g., for objects that predate your code), guard your initialization:
+
+```javascript
+// ALTERNATIVE: Guard initialization with state check
+if (state.initialized === undefined) {
+    state.initialized = true;
+    state.counter = 0;
+    state.intervalId = setInterval(5000, 'tick', {});
+    setDescriptions([{Short: 'my object (initialized)'}]);
+}
+
+addCallback('tick', ['emit'], (msg) => {
+    state.counter++;
+    setDescriptions([{Short: 'my object (' + state.counter + ' ticks)'}]);
+});
+```
+
 **Event System**: Objects communicate through events. Objects register callbacks with `addCallback(eventType, tags, handler)`:
 
 ```javascript
@@ -306,7 +345,7 @@ clearInterval(heartbeatId);
 
 Key differences from `setTimeout`:
 - Intervals persist to storage and survive server restarts
-- Minimum interval is 1000ms (1 second)
+- Minimum interval is 5000ms (5 seconds)
 - Maximum 10 intervals per object
 - Use `/intervals` wizard command to view active intervals
 

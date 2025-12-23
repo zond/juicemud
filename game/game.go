@@ -248,6 +248,13 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 			for {
 				select {
 				case ev := <-g.workChan:
+					// For interval events, check if the interval still exists.
+					// If it was cleared (via clearInterval), skip running the handler.
+					// This handles the race where an event was already enqueued before clearInterval.
+					if ev.IntervalID != "" && !g.storage.Intervals().Has(ev.Object, ev.IntervalID) {
+						continue // Interval was cleared, skip this event
+					}
+
 					var call structs.Caller
 					if ev.Call.Name != "" {
 						call = &ev.Call

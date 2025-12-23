@@ -11,9 +11,9 @@ func TestIntegration(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Set a 60-second timeout for the entire integration test
-	// (increased from 30s to accommodate -race mode which is ~3-4x slower)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Set a 90-second timeout for the entire integration test
+	// (increased to accommodate -race mode and interval tests which need ~18s)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -33,6 +33,6 @@ func TestIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-ctx.Done():
-		t.Fatal("integration test timed out after 30 seconds")
+		t.Fatal("integration test timed out after 90 seconds")
 	}
 }
