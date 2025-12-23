@@ -232,6 +232,40 @@ var inventory = getContent();
 
 Note: `moveObject()` validates containment rules and prevents cycles (an object cannot contain itself directly or indirectly).
 
+**Object Creation and Removal**: Use `createObject(sourcePath, locationId)` and `removeObject(objectId)` to dynamically spawn and despawn objects:
+```javascript
+// Spawner creates a coin in the current room
+addCallback('spawn', ['action'], (msg) => {
+    var coinId = createObject('/items/coin.js', getLocation());
+    state.spawnedCoins.push(coinId);
+});
+
+// Cleanup spawned coins
+addCallback('cleanup', ['action'], (msg) => {
+    for (var id of state.spawnedCoins) {
+        removeObject(id);
+    }
+    state.spawnedCoins = [];
+});
+
+// Self-removing object (e.g., temporary effect)
+addCallback('expire', ['emit'], (msg) => {
+    removeObject(getId());  // Object removes itself
+});
+
+// New objects receive a 'created' event
+addCallback('created', ['emit'], (msg) => {
+    state.creatorId = msg.creatorId;
+    setDescriptions([{Short: 'newly spawned item'}]);
+});
+```
+
+Notes:
+- `createObject()` is rate-limited to 10 creations per minute per object to prevent abuse
+- `removeObject()` cannot remove non-empty containers (must remove contents first)
+- `removeObject()` cannot remove the calling object's current location
+- Objects can remove themselves (useful for expiring effects, consumed items, etc.)
+
 **Movement and Container Events**: When objects move between locations, two types of events are generated:
 
 1. **`movement`** events are sent to objects that successfully *detect* the moving object. These are subject to skill challenges - only objects passing perception checks receive them. Use for game/roleplay purposes where detection abilities matter:

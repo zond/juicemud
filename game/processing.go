@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"reflect"
 	"time"
 
@@ -796,6 +797,114 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	}
 	callbacks["getId"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		return rc.String(object.GetId())
+	}
+
+	// createObject(sourcePath, location) - creates a new object from a source file.
+	// Rate limited to prevent abuse (max 10/minute per object).
+	// Returns the new object's ID.
+	callbacks["createObject"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 2 || !args[0].IsString() || !args[1].IsString() {
+			return rc.Throw("createObject takes [string, string] arguments (sourcePath, location)")
+		}
+
+		sourcePath := args[0].String()
+		location := args[1].String()
+		creatorID := object.GetId()
+
+		// Rate limit check and record atomically (consume the slot upfront)
+		if !g.createLimiter.checkAndRecord(creatorID) {
+			return rc.Throw("createObject: rate limit exceeded (max %d/minute)", maxCreatesPerMinute)
+		}
+
+		// Validate and clean source path
+		sourcePath = filepath.Clean(sourcePath)
+		if sourcePath == "." || sourcePath == "/" {
+			return rc.Throw("createObject: invalid source path")
+		}
+		// Ensure path starts with /
+		if sourcePath[0] != '/' {
+			sourcePath = "/" + sourcePath
+		}
+
+		// Validate source exists
+		exists, err := g.storage.SourceExists(ctx, sourcePath)
+		if err != nil {
+			return rc.Throw("createObject: checking source: %v", err)
+		}
+		if !exists {
+			return rc.Throw("createObject: source %q not found", sourcePath)
+		}
+
+		// Validate location exists and is not empty (root container)
+		if location == "" {
+			return rc.Throw("createObject: location cannot be empty")
+		}
+		if _, err := g.storage.AccessObject(ctx, location, nil); err != nil {
+			return rc.Throw("createObject: location %q not found", location)
+		}
+
+		// Create the new object
+		newObj, err := structs.MakeObject(ctx)
+		if err != nil {
+			return rc.Throw("createObject: %v", err)
+		}
+		newObj.Unsafe.SourcePath = sourcePath
+		newObj.Unsafe.Location = location
+
+		if err := g.createObject(ctx, newObj); err != nil {
+			return rc.Throw("createObject: %v", err)
+		}
+
+		// Fire 'created' event with creator info (async via queue)
+		createdData := map[string]any{
+			"creatorId": creatorID,
+		}
+		createdJSON, err := goccy.Marshal(createdData)
+		if err != nil {
+			log.Printf("createObject: failed to marshal created event: %v", err)
+		} else if err := g.emitJSON(ctx, g.storage.Queue().After(0), newObj.GetId(), createdEventType, string(createdJSON)); err != nil {
+			// Log but don't fail - object was created successfully
+			log.Printf("createObject: failed to emit created event: %v", err)
+		}
+
+		return rc.String(newObj.GetId())
+	}
+
+	// removeObject(objectId) - removes an object by ID.
+	// Cannot remove caller's current location.
+	// Cannot remove non-empty objects (must remove contents first).
+	callbacks["removeObject"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 1 || !args[0].IsString() {
+			return rc.Throw("removeObject takes [string] argument (objectId)")
+		}
+
+		targetId := args[0].String()
+		callerId := object.GetId()
+
+		// Cannot remove current location (would leave caller in invalid state)
+		if targetId == object.GetLocation() {
+			return rc.Throw("removeObject: cannot remove current location")
+		}
+
+		// Load the target object
+		target, err := g.storage.AccessObject(ctx, targetId, nil)
+		if err != nil {
+			return rc.Throw("removeObject: object %q not found", targetId)
+		}
+
+		// Remove the object (storage.RemoveObject validates it's empty)
+		if err := g.removeObject(ctx, target); err != nil {
+			return rc.Throw("removeObject: %v", err)
+		}
+
+		// If removing self, log it for debugging
+		if targetId == callerId {
+			log.Printf("Object %q removed itself", callerId)
+		}
+
+		return nil
 	}
 }
 

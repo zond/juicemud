@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gliderlabs/ssh"
+	cache "github.com/go-pkgz/expirable-cache/v3"
 	goccy "github.com/goccy/go-json"
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/js"
@@ -77,7 +78,41 @@ const (
 	// This provides natural backpressure: if all workers are busy, the queue handler
 	// blocks until a worker is available to receive the event.
 	maxEventWorkers = 64
+
+	// maxCreatesPerMinute is the per-object creation rate limit for createObject().
+	// This prevents abuse from infinite spawning loops or resource exhaustion.
+	maxCreatesPerMinute = 10
 )
+
+// createRateLimiter tracks per-object creation counts with auto-expiring entries.
+// Uses expirable cache where entries expire after 1 minute, providing natural
+// rate limiting without explicit cleanup.
+type createRateLimiter struct {
+	mu sync.Mutex
+	// minuteCounts maps objectID -> count of creates in the current minute.
+	// Entries automatically expire after 1 minute.
+	minuteCounts cache.Cache[string, int]
+}
+
+// newCreateRateLimiter creates a new rate limiter for createObject calls.
+func newCreateRateLimiter() *createRateLimiter {
+	return &createRateLimiter{
+		minuteCounts: cache.NewCache[string, int]().WithTTL(time.Minute),
+	}
+}
+
+// checkAndRecord atomically checks if creation is allowed and records the attempt.
+// Returns true if allowed (and count incremented), false if rate limited.
+func (r *createRateLimiter) checkAndRecord(objectID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count, _ := r.minuteCounts.Get(objectID)
+	if count >= maxCreatesPerMinute {
+		return false
+	}
+	r.minuteCounts.Set(objectID, count+1, 0) // 0 = use default TTL
+	return true
+}
 
 var (
 	initialSources = map[string]string{
@@ -129,6 +164,7 @@ type Game struct {
 	storage          *storage.Storage
 	jsStats          *JSStats
 	loginRateLimiter *loginRateLimiter
+	createLimiter    *createRateLimiter  // Rate limiter for createObject() JS API
 	workChan         chan *structs.Event // Unbuffered channel for event handoff to workers
 	workerWG         sync.WaitGroup      // Tracks in-flight event workers
 }
@@ -237,6 +273,7 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 		storage:          s,
 		jsStats:          NewJSStats(ctx, s.ImportResolver()),
 		loginRateLimiter: newLoginRateLimiter(ctx),
+		createLimiter:    newCreateRateLimiter(),
 		workChan:         make(chan *structs.Event), // Unbuffered for synchronous handoff
 	}
 
