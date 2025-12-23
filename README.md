@@ -179,6 +179,20 @@ addCallback('ping', ['emit'], (msg) => {
 
 Challenge format uses PascalCase to match Go structs: `{Skill: string, Level: number, Message?: string}`. Challenge checks have side effects - recipient skills may improve or decay.
 
+**Object Manipulation**: Use `moveObject(objectId, destinationId)` to programmatically move objects:
+```javascript
+// Move an NPC to a new room
+moveObject(npcId, targetRoomId);
+
+// Get the current location of the running object
+var currentRoom = getLocation();
+
+// Get the content (child objects) of the running object
+var inventory = getContent();
+```
+
+Note: `moveObject()` validates containment rules and prevents cycles (an object cannot contain itself directly or indirectly).
+
 **Movement and Container Events**: When objects move between locations, two types of events are generated:
 
 1. **`movement`** events are sent to objects that successfully *detect* the moving object. These are subject to skill challenges - only objects passing perception checks receive them. Use for game/roleplay purposes where detection abilities matter:
@@ -263,7 +277,7 @@ addCallback('renderMovement', ['emit'], (msg) => {
 - **Indexed selection**: When multiple objects match, use `0.torch`, `1.torch` to select which one
 - **Wizard ID syntax**: Wizards can use `#objectid` to target by internal ID
 
-**Delayed Execution**: Use `setTimeout(ms, eventName, message)` to schedule an event to be delivered later:
+**Delayed Execution**: Use `setTimeout(ms, eventName, message)` to schedule a one-time event to be delivered later:
 ```javascript
 // Schedule a "tick" event to be delivered in 1000ms
 setTimeout(1000, 'tick', {count: 1});
@@ -275,6 +289,26 @@ addCallback('tick', ['emit'], (msg) => {
     setTimeout(1000, 'tick', {count: msg.count + 1});
 });
 ```
+
+**Recurring Execution**: Use `setInterval(ms, eventName, message)` for persistent recurring events that survive server restarts:
+```javascript
+// Start a heartbeat every 5 seconds (returns interval ID)
+var heartbeatId = setInterval(5000, 'heartbeat', {});
+
+// Handle the recurring event
+addCallback('heartbeat', ['emit'], (msg) => {
+    log('Heartbeat at ' + new Date().toISOString());
+});
+
+// Stop the interval when no longer needed
+clearInterval(heartbeatId);
+```
+
+Key differences from `setTimeout`:
+- Intervals persist to storage and survive server restarts
+- Minimum interval is 1000ms (1 second)
+- Maximum 10 intervals per object
+- Use `/intervals` wizard command to view active intervals
 
 **Debugging**: Wizards can attach to an object's console with `/debug #objectid` to see `log()` output, and detach with `/undebug #objectid`.
 
@@ -300,7 +334,7 @@ Objects only receive events they've registered callbacks for with the matching t
 - State management: `/setstate` (modify object state JSON)
 - Debugging: `/debug`, `/undebug`
 - Source files: `/ls`
-- Monitoring: `/queuestats`, `/jsstats`, `/flushstats`
+- Monitoring: `/stats`, `/intervals`, `/flushstats`
 - Admin: `/addwiz`, `/delwiz`
 
 **Inspecting Objects**:
