@@ -23,6 +23,8 @@ type Object struct {
 	Unsafe     *ObjectDO
 	PostUnlock PostUnlockObject `faker:"-" json:"-"`
 	mutex      sync.RWMutex
+	// jsMutex serializes JavaScript execution for this object.
+	jsMutex sync.Mutex
 }
 
 func (v *Object) UnsafeShallowCopy() *Object {
@@ -47,6 +49,12 @@ func (v *Object) RLock() {
 }
 func (v *Object) RUnlock() {
 	v.mutex.RUnlock()
+}
+func (v *Object) JSLock() {
+	v.jsMutex.Lock()
+}
+func (v *Object) JSUnlock() {
+	v.jsMutex.Unlock()
 }
 func (v *Object) Size() int {
 	v.RLock()

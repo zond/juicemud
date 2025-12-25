@@ -922,7 +922,13 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 // handling where we need to know if the event was "handled" by JavaScript.
 // intervalInfo is optional interval metadata for stats tracking (nil for non-interval events).
 func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller, intervalInfo *IntervalExecInfo) (bool, error) {
+	// Serialize JS execution for this object to prevent concurrent runs from
+	// producing "last writer wins" race conditions on state updates.
+	object.JSLock()
+	defer object.JSUnlock()
+
 	id := object.GetId()
+	sourcePath := object.GetSourcePath()
 
 	if caller != nil {
 		call, err := caller.Call()
@@ -939,7 +945,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 				}
 			}
 
-			t, err := g.storage.ResolvedSourceModTime(ctx, object.GetSourcePath())
+			t, err := g.storage.ResolvedSourceModTime(ctx, sourcePath)
 			if err != nil {
 				return false, juicemud.WithStack(err)
 			}
@@ -949,7 +955,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		}
 	}
 
-	source, modTime, err := g.storage.LoadResolvedSource(ctx, object.GetSourcePath())
+	source, modTime, err := g.storage.LoadResolvedSource(ctx, sourcePath)
 	if err != nil {
 		return false, juicemud.WithStack(err)
 	}
@@ -959,10 +965,10 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 	g.addObjectCallbacks(ctx, object, callbacks)
 	target := js.Target{
 		Source:    string(source),
-		Origin:    object.GetSourcePath(),
+		Origin:    sourcePath,
 		State:     object.GetState(),
 		Callbacks: callbacks,
-		Console:   consoleSwitchboard.Writer(object.GetId()),
+		Console:   consoleSwitchboard.Writer(id),
 	}
 
 	// Time JavaScript execution for stats tracking
@@ -976,15 +982,15 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 	}
 
 	// Record execution stats (always, even on error)
-	g.jsStats.RecordExecution(object.GetSourcePath(), object.GetId(), duration, intervalInfo)
+	g.jsStats.RecordExecution(sourcePath, id, duration, intervalInfo)
 
 	if err != nil {
 		// Record error to unified stats
-		g.jsStats.RecordError(object.GetSourcePath(), object.GetId(), err, duration, intervalInfo)
+		g.jsStats.RecordError(sourcePath, id, err, duration, intervalInfo)
 
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {
-			log.New(consoleSwitchboard.Writer(object.GetId()), "", 0).Printf("---- error in %s ----\n%s\n%s", jserr.Location, jserr.Message, jserr.StackTrace)
+			log.New(consoleSwitchboard.Writer(id), "", 0).Printf("---- error in %s ----\n%s\n%s", jserr.Location, jserr.Message, jserr.StackTrace)
 		}
 		return false, juicemud.WithStack(err)
 	}

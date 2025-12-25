@@ -75,6 +75,8 @@ func main() {
 					fields = append(fields, jen.Id("Unsafe").Op("*").Id(match[0]))
 					fields = append(fields, jen.Id("PostUnlock").Id(postUnlockTypeName).Tag(map[string]string{"json": "-", "faker": "-"}))
 					fields = append(fields, jen.Id("mutex").Qual("sync", "RWMutex"))
+					fields = append(fields, jen.Comment("jsMutex serializes JavaScript execution for this object."))
+					fields = append(fields, jen.Id("jsMutex").Qual("sync", "Mutex"))
 					f.Type().Id(backendName).Struct(fields...)
 					f.Func().Params(
 						jen.Id("v").Op("*").Id(backendName),
@@ -118,6 +120,16 @@ func main() {
 						jen.Id("v").Op("*").Id(backendName),
 					).Id("RUnlock").Params().Block(
 						jen.Id("v").Dot("mutex").Dot("RUnlock").Call(),
+					)
+					f.Func().Params(
+						jen.Id("v").Op("*").Id(backendName),
+					).Id("JSLock").Params().Block(
+						jen.Id("v").Dot("jsMutex").Dot("Lock").Call(),
+					)
+					f.Func().Params(
+						jen.Id("v").Op("*").Id(backendName),
+					).Id("JSUnlock").Params().Block(
+						jen.Id("v").Dot("jsMutex").Dot("Unlock").Call(),
 					)
 					f.Func().Params(
 						jen.Id("v").Op("*").Id(backendName),

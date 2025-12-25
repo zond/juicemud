@@ -1037,6 +1037,9 @@ func (c *Connection) wizCommands() commands {
 				}
 
 				target := targets[0]
+				// Serialize with JS execution to prevent race conditions on state updates
+				target.JSLock()
+				defer target.JSUnlock()
 				state := target.GetState()
 				if state == "" {
 					state = "{}"

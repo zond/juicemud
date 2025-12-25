@@ -23,6 +23,8 @@ type Live struct {
 	Unsafe     *LiveDO
 	PostUnlock PostUnlockLive `faker:"-" json:"-"`
 	mutex      sync.RWMutex
+	// jsMutex serializes JavaScript execution for this object.
+	jsMutex sync.Mutex
 }
 
 func (v *Live) UnsafeShallowCopy() *Live {
@@ -47,6 +49,12 @@ func (v *Live) RLock() {
 }
 func (v *Live) RUnlock() {
 	v.mutex.RUnlock()
+}
+func (v *Live) JSLock() {
+	v.jsMutex.Lock()
+}
+func (v *Live) JSUnlock() {
+	v.jsMutex.Unlock()
 }
 func (v *Live) Size() int {
 	v.RLock()
