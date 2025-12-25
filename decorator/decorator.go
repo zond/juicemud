@@ -76,6 +76,9 @@ func main() {
 					fields = append(fields, jen.Id("PostUnlock").Id(postUnlockTypeName).Tag(map[string]string{"json": "-", "faker": "-"}))
 					fields = append(fields, jen.Id("mutex").Qual("sync", "RWMutex"))
 					fields = append(fields, jen.Comment("jsMutex serializes JavaScript execution for this object."))
+					fields = append(fields, jen.Comment("IMPORTANT: Callbacks must NOT synchronously run JS on other objects"))
+					fields = append(fields, jen.Comment("while holding this lock, or deadlock could occur. Use emit() which"))
+					fields = append(fields, jen.Comment("enqueues events asynchronously via the queue."))
 					fields = append(fields, jen.Id("jsMutex").Qual("sync", "Mutex"))
 					f.Type().Id(backendName).Struct(fields...)
 					f.Func().Params(

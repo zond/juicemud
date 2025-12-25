@@ -70,9 +70,10 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 //
 // Lock ordering (must always be acquired in this order to prevent deadlocks):
 //  1. sourceObjectsMu (Storage-level)
-//  2. Object locks (via structs.WithLock, sorted by ID)
-//  3. LiveTypeHash.stageMutex
-//  4. Tree.mutex / Hash.mutex (tkrzw internal)
+//  2. Object.jsMutex (JS execution serialization)
+//  3. Object.mutex (field access via Lock/RLock, sorted by ID via structs.WithLock)
+//  4. LiveTypeHash.stageMutex
+//  5. Tree.mutex / Hash.mutex (tkrzw internal)
 type Storage struct {
 	queue           *queue.Queue
 	sql             *sqly.DB

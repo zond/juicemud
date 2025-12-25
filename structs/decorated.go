@@ -24,6 +24,9 @@ type Object struct {
 	PostUnlock PostUnlockObject `faker:"-" json:"-"`
 	mutex      sync.RWMutex
 	// jsMutex serializes JavaScript execution for this object.
+	// IMPORTANT: Callbacks must NOT synchronously run JS on other objects
+	// while holding this lock, or deadlock could occur. Use emit() which
+	// enqueues events asynchronously via the queue.
 	jsMutex sync.Mutex
 }
 
