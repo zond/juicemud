@@ -397,10 +397,6 @@ func (s *Storage) CreateObject(ctx context.Context, obj *structs.Object) error {
 	return nil
 }
 
-type withError[T any] struct {
-	T T
-	E error
-}
 
 func (s *Storage) CountSourceObjects(ctx context.Context, path string) (int, error) {
 	c := 0
@@ -693,13 +689,6 @@ func AuthenticateUser(ctx context.Context, u *User) context.Context {
 	return context.WithValue(ctx, authenticatedUser, u)
 }
 
-// callerRef returns an AuditRef for the authenticated user, or SystemRef if none.
-func (s *Storage) callerRef(ctx context.Context) AuditRef {
-	if caller, ok := AuthenticatedUser(ctx); ok {
-		return Ref(caller.Id, caller.Name)
-	}
-	return SystemRef()
-}
 
 func (s *Storage) LoadUser(ctx context.Context, name string) (*User, error) {
 	user := &User{}
