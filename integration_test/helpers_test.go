@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+const (
+	// defaultWaitTimeout is the default timeout for wait operations.
+	// This is intentionally generous to avoid flaky tests on slow systems.
+	// On fast systems, polling returns immediately when the condition is met.
+	defaultWaitTimeout = 5 * time.Second
+)
+
 // inspectResult holds the parsed JSON from /inspect command.
 // Only includes fields we need for testing.
 // Note: Object.MarshalJSON serializes the Unsafe fields directly (no wrapper).

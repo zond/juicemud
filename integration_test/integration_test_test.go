@@ -69,17 +69,6 @@ func uniqueSourcePath(base string) string {
 	return fmt.Sprintf("/%s_%d.js", base, n)
 }
 
-// TestAll runs all integration tests in sequence.
-func TestAll(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	if err := RunAll(testServer); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // TestSetTimeout tests setTimeout() delayed events.
 func TestSetTimeout(t *testing.T) {
 	if testing.Short() {

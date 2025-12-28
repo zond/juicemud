@@ -2,19 +2,6 @@
 
 Known issues and tasks to address.
 
-## Code Quality: Split Integration Tests
-
-**Location:** `integration_test/run_all_test.go` (~850 lines, down from 2400+)
-
-**Issue:** All integration tests in one file makes it hard to find specific tests.
-
-**Status:** COMPLETE - All tests have been extracted to individual `TestXxx` functions in `integration_test_test.go`.
-
-**Summary:** All integration tests from the monolithic `RunAll` function have been extracted into 38 individual test functions. Each test is self-contained with its own setup and teardown. `RunAll` now only contains minimal setup for `bin/integration_test` interactive testing compatibility.
-
-**Date identified:** 2025-12-25
-**Date completed:** 2025-12-29
-
 ## Code Quality: Inconsistent Error Wrapping
 
 **Location:** Multiple files
