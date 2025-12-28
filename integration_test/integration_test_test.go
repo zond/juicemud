@@ -708,3 +708,118 @@ setDescriptions([{
 		t.Fatalf("deep circular move should fail with error, got: %q", output)
 	}
 }
+
+// TestExitAtUniverseRoot tests that /exit at genesis fails gracefully.
+func TestExitAtUniverseRoot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+
+	// First, ensure we're in genesis (which has no parent location)
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Verify we're in genesis
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		t.Fatal("should be in genesis for exit test")
+	}
+
+	// Drain any stale notifications before the command
+	tc.readUntil(50*time.Millisecond, nil)
+
+	// Try to /exit from genesis - should fail with friendly message
+	if err := tc.sendLine("/exit"); err != nil {
+		t.Fatalf("/exit at genesis: %v", err)
+	}
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/exit at genesis did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Unable to leave the universe") {
+		t.Fatalf("/exit at genesis should fail: %q", output)
+	}
+
+	// Verify we're still in genesis (didn't move)
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		t.Fatal("should still be in genesis after failed /exit")
+	}
+}
+
+// TestRemoveCurrentLocation tests that /remove current location fails gracefully.
+func TestRemoveCurrentLocation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+
+	// Ensure we're in genesis first
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create a room to test with
+	removeTestRoomSource := `setDescriptions([{Short: 'remove test room', Long: 'A room for testing /remove edge case.'}]);
+setExits([{Name: 'out', Destination: 'genesis'}]);
+`
+	sourcePath := uniqueSourcePath("removetestroom")
+	if err := testServer.WriteSource(sourcePath, removeTestRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+
+	removeTestRoomID, err := tc.createObject(sourcePath)
+	if err != nil {
+		t.Fatalf("create removetestroom: %v", err)
+	}
+
+	// Enter the test room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", removeTestRoomID)); err != nil {
+		t.Fatalf("/enter removetestroom: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter removetestroom did not complete")
+	}
+
+	// Verify we're in the test room
+	if !tc.waitForLocation("", removeTestRoomID, defaultWaitTimeout) {
+		t.Fatal("should be in removetestroom")
+	}
+
+	// Drain any stale notifications before the command
+	tc.readUntil(50*time.Millisecond, nil)
+
+	// Try to /remove our current location - should fail
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", removeTestRoomID)); err != nil {
+		t.Fatalf("/remove current location: %v", err)
+	}
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/remove current location did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Can't remove current location") {
+		t.Fatalf("/remove current location should fail with 'Can't remove current location': %q", output)
+	}
+
+	// Verify the room still exists (wasn't removed)
+	_, err = tc.inspect(fmt.Sprintf("#%s", removeTestRoomID))
+	if err != nil {
+		t.Fatalf("room should still exist after failed /remove: %v", err)
+	}
+
+	// Return to genesis
+	if err := tc.sendLine("out"); err != nil {
+		t.Fatalf("out from removetestroom: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("out from removetestroom did not complete")
+	}
+}

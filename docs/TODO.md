@@ -4,7 +4,7 @@ Known issues and tasks to address.
 
 ## Code Quality: Split Integration Tests
 
-**Location:** `integration_test/run_all.go` (2700+ lines)
+**Location:** `integration_test/run_all.go` (2400+ lines)
 
 **Issue:** All integration tests in one file makes it hard to find specific tests.
 
@@ -15,8 +15,12 @@ Known issues and tasks to address.
 - `TestCreatedEvent` - 'created' event with creator info
 - `TestLookTarget` - look command with target
 - `TestRemoveCommand` - /remove wizard command
+- `TestEmitInterObject` - emit() inter-object communication
+- `TestCircularContainerPrevention` - circular container prevention
+- `TestExitAtUniverseRoot` - /exit at genesis edge case
+- `TestRemoveCurrentLocation` - /remove current location edge case
 
-**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~26 test sections remain in `RunAll`.
+**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~22 test sections remain in `RunAll`.
 
 **Priority:** Low - purely organizational improvement.
 
