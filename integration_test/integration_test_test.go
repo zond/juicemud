@@ -502,3 +502,209 @@ func TestRemoveCommand(t *testing.T) {
 		t.Fatalf("should still be logged in after failed self-removal: %q", output)
 	}
 }
+
+// TestEmitInterObject tests emit() for inter-object communication.
+func TestEmitInterObject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Receiver updates its description when it receives a pong
+	receiverSource := `setDescriptions([{Short: 'receiver orb (waiting)'}]);
+addCallback('pong', ['emit'], (msg) => {
+	setDescriptions([{Short: 'receiver orb (got: ' + msg.message + ')'}]);
+});
+`
+	receiverPath := uniqueSourcePath("receiver")
+	if err := testServer.WriteSource(receiverPath, receiverSource); err != nil {
+		t.Fatalf("failed to create %s: %v", receiverPath, err)
+	}
+
+	// Sender takes target ID from msg.line and emits to it
+	senderSource := `setDescriptions([{Short: 'sender orb'}]);
+addCallback('ping', ['action'], (msg) => {
+	const targetId = msg.line.replace(/^ping\s+/, '');
+	emit(targetId, 'pong', {message: 'hello'});
+	setDescriptions([{Short: 'sender orb (sent)'}]);
+});
+`
+	senderPath := uniqueSourcePath("sender")
+	if err := testServer.WriteSource(senderPath, senderSource); err != nil {
+		t.Fatalf("failed to create %s: %v", senderPath, err)
+	}
+
+	receiverID, err := tc.createObject(receiverPath)
+	if err != nil {
+		t.Fatalf("create receiver: %v", err)
+	}
+
+	if _, err := tc.createObject(senderPath); err != nil {
+		t.Fatalf("create sender: %v", err)
+	}
+
+	// Ping the sender with the receiver's ID as target
+	if err := tc.sendLine(fmt.Sprintf("ping %s", receiverID)); err != nil {
+		t.Fatalf("ping command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("ping receiver command did not complete")
+	}
+
+	// Poll with look until we see the receiver got the message (emit has ~100ms delay)
+	lookOutput, found := tc.waitForLookMatch("receiver orb (got: hello)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("receiver did not update description after receiving emit: %q", lookOutput)
+	}
+	if !strings.Contains(lookOutput, "sender orb (sent)") {
+		t.Fatalf("sender did not update description after emit: %q", lookOutput)
+	}
+}
+
+// TestCircularContainerPrevention tests that circular container relationships are prevented.
+func TestCircularContainerPrevention(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create two container objects with distinct names
+	containerASource := `// Container A
+setDescriptions([{
+	Short: 'outer box',
+	Long: 'The outer container.',
+}]);
+`
+	containerBSource := `// Container B
+setDescriptions([{
+	Short: 'inner box',
+	Long: 'The inner container.',
+}]);
+`
+	containerAPath := uniqueSourcePath("containerA")
+	containerBPath := uniqueSourcePath("containerB")
+	if err := testServer.WriteSource(containerAPath, containerASource); err != nil {
+		t.Fatalf("failed to create %s: %v", containerAPath, err)
+	}
+	if err := testServer.WriteSource(containerBPath, containerBSource); err != nil {
+		t.Fatalf("failed to create %s: %v", containerBPath, err)
+	}
+
+	// Create container A (outer box)
+	containerAID, err := tc.createObject(containerAPath)
+	if err != nil {
+		t.Fatalf("create container A: %v", err)
+	}
+
+	// Create container B (inner box)
+	containerBID, err := tc.createObject(containerBPath)
+	if err != nil {
+		t.Fatalf("create container B: %v", err)
+	}
+
+	// Get container A's original location before moving B into it
+	containerAOriginalLoc := tc.getLocation(fmt.Sprintf("#%s", containerAID))
+	if containerAOriginalLoc == "" {
+		t.Fatal("could not determine container A's location")
+	}
+
+	// Move B into A (should succeed)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerBID, containerAID)); err != nil {
+		t.Fatalf("/move B into A: %v", err)
+	}
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/move B into A did not complete: %q", output)
+	}
+	// Verify B is now inside A
+	if !tc.waitForLocation(fmt.Sprintf("#%s", containerBID), containerAID, defaultWaitTimeout) {
+		t.Fatal("container B did not move into A")
+	}
+
+	// Try to move A into B (should fail - circular)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerAID, containerBID)); err != nil {
+		t.Fatalf("/move A into B: %v", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/move A into B did not complete: %q", output)
+	}
+	// Should contain error about circular containment
+	if !strings.Contains(output, "cannot move object into itself") {
+		t.Fatalf("circular move should fail with error, got: %q", output)
+	}
+
+	// Verify A is still in its original location
+	if !tc.waitForLocation(fmt.Sprintf("#%s", containerAID), containerAOriginalLoc, defaultWaitTimeout) {
+		t.Fatalf("container A should still be in %s after failed circular move", containerAOriginalLoc)
+	}
+
+	// Test self-move: try to move A into A (should fail)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerAID, containerAID)); err != nil {
+		t.Fatalf("/move A into A: %v", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/move A into A did not complete: %q", output)
+	}
+	if !strings.Contains(output, "cannot move object into itself") {
+		t.Fatalf("self-move should fail with error, got: %q", output)
+	}
+
+	// Test deeper nesting: A contains B, B contains C, try to move A into C
+	containerCSource := `// Container C
+setDescriptions([{
+	Short: 'deep box',
+	Long: 'The deepest container.',
+}]);
+`
+	containerCPath := uniqueSourcePath("containerC")
+	if err := testServer.WriteSource(containerCPath, containerCSource); err != nil {
+		t.Fatalf("failed to create %s: %v", containerCPath, err)
+	}
+	containerCID, err := tc.createObject(containerCPath)
+	if err != nil {
+		t.Fatalf("create container C: %v", err)
+	}
+
+	// Move C into B (so now A > B > C)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerCID, containerBID)); err != nil {
+		t.Fatalf("/move C into B: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/move C into B did not complete")
+	}
+	if !tc.waitForLocation(fmt.Sprintf("#%s", containerCID), containerBID, defaultWaitTimeout) {
+		t.Fatal("container C did not move into B")
+	}
+
+	// Try to move A into C (should fail - C is inside B which is inside A)
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerAID, containerCID)); err != nil {
+		t.Fatalf("/move A into C: %v", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/move A into C did not complete: %q", output)
+	}
+	if !strings.Contains(output, "cannot move object into itself") {
+		t.Fatalf("deep circular move should fail with error, got: %q", output)
+	}
+}

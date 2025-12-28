@@ -581,67 +581,7 @@ addCallback('train', ['command'], (msg) => {
 
 	fmt.Println("  Challenge system: OK")
 
-	// === Test 9: emit() inter-object communication ===
-	fmt.Println("Testing emit() inter-object communication...")
-
-	// Ensure we're in genesis before creating objects
-	if err := tc.sendLine("/enter #genesis"); err != nil {
-		return fmt.Errorf("/enter genesis: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/enter genesis did not complete")
-	}
-
-	// Receiver updates its description when it receives a pong
-	receiverSource := `setDescriptions([{Short: 'receiver orb (waiting)'}]);
-addCallback('pong', ['emit'], (msg) => {
-	setDescriptions([{Short: 'receiver orb (got: ' + msg.message + ')'}]);
-});
-`
-	if err := ts.WriteSource("/receiver.js", receiverSource); err != nil {
-		return fmt.Errorf("failed to create /receiver.js: %w", err)
-	}
-
-	// Sender takes target ID from msg.line and emits to it
-	senderSource := `setDescriptions([{Short: 'sender orb'}]);
-addCallback('ping', ['action'], (msg) => {
-	const targetId = msg.line.replace(/^ping\s+/, '');
-	emit(targetId, 'pong', {message: 'hello'});
-	setDescriptions([{Short: 'sender orb (sent)'}]);
-});
-`
-	if err := ts.WriteSource("/sender.js", senderSource); err != nil {
-		return fmt.Errorf("failed to create /sender.js: %w", err)
-	}
-
-	receiverID, err := tc.createObject("/receiver.js")
-	if err != nil {
-		return fmt.Errorf("create receiver: %w", err)
-	}
-
-	if _, err := tc.createObject("/sender.js"); err != nil {
-		return fmt.Errorf("create sender: %w", err)
-	}
-
-	// Ping the sender with the receiver's ID as target
-	if err := tc.sendLine(fmt.Sprintf("ping %s", receiverID)); err != nil {
-		return fmt.Errorf("ping command: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("ping receiver command did not complete")
-	}
-
-	// Poll with look until we see the receiver got the message (emit has ~100ms delay)
-	lookOutput, found := tc.waitForLookMatch("receiver orb (got: hello)", defaultWaitTimeout)
-	if !found {
-		return fmt.Errorf("receiver did not update description after receiving emit: %q", lookOutput)
-	}
-	if !strings.Contains(lookOutput, "sender orb (sent)") {
-		return fmt.Errorf("sender did not update description after emit: %q", lookOutput)
-	}
-
-	fmt.Println("  emit() inter-object communication: OK")
-
+	// NOTE: Test 9 (emit inter-object communication) has been extracted to TestEmitInterObject
 	// NOTE: Test 10 (setTimeout) has been extracted to TestSetTimeout
 	// NOTE: Test 11 (/remove command) has been extracted to TestRemoveCommand
 
@@ -691,7 +631,7 @@ addCallback('movement', ['emit'], (msg) => {
 	}
 
 	// Poll with look until observer shows it saw the movement
-	output, found = tc.waitForLookMatch("watcher orb (saw: "+moveableID+")", defaultWaitTimeout)
+	output, found := tc.waitForLookMatch("watcher orb (saw: "+moveableID+")", defaultWaitTimeout)
 	if !found {
 		return fmt.Errorf("observer should have seen moveable in movement event: %q", output)
 	}
@@ -1396,129 +1336,7 @@ addCallback('mindspeak', ['action'], (msg) => {
 
 	fmt.Println("  /addwiz and /delwiz commands: OK")
 
-	// === Test 24: Circular container prevention ===
-	fmt.Println("Testing circular container prevention...")
-
-	// Create two container objects with distinct names
-	containerASource := `// Container A
-setDescriptions([{
-	Short: 'outer box',
-	Long: 'The outer container.',
-}]);
-`
-	containerBSource := `// Container B
-setDescriptions([{
-	Short: 'inner box',
-	Long: 'The inner container.',
-}]);
-`
-	if err := ts.WriteSource("/containerA.js", containerASource); err != nil {
-		return fmt.Errorf("failed to create /containerA.js: %w", err)
-	}
-	if err := ts.WriteSource("/containerB.js", containerBSource); err != nil {
-		return fmt.Errorf("failed to create /containerB.js: %w", err)
-	}
-
-	// Create container A (outer box)
-	containerAID, err := tc.createObject("/containerA.js")
-	if err != nil {
-		return fmt.Errorf("create container A: %w", err)
-	}
-
-	// Create container B (inner box)
-	containerBID, err := tc.createObject("/containerB.js")
-	if err != nil {
-		return fmt.Errorf("create container B: %w", err)
-	}
-
-	// Get container A's original location before moving B into it
-	containerAOriginalLoc := tc.getLocation(fmt.Sprintf("#%s", containerAID))
-	if containerAOriginalLoc == "" {
-		return fmt.Errorf("could not determine container A's location")
-	}
-
-	// Move B into A (should succeed)
-	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerBID, containerAID)); err != nil {
-		return fmt.Errorf("/move B into A: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/move B into A did not complete: %q", output)
-	}
-	// Verify B is now inside A
-	if !tc.waitForLocation(fmt.Sprintf("#%s", containerBID), containerAID, defaultWaitTimeout) {
-		return fmt.Errorf("container B did not move into A")
-	}
-
-	// Try to move A into B (should fail - circular)
-	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerAID, containerBID)); err != nil {
-		return fmt.Errorf("/move A into B: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/move A into B did not complete: %q", output)
-	}
-	// Should contain error about circular containment
-	if !strings.Contains(output, "cannot move object into itself") {
-		return fmt.Errorf("circular move should fail with error, got: %q", output)
-	}
-
-	// Verify A is still in its original location
-	if !tc.waitForLocation(fmt.Sprintf("#%s", containerAID), containerAOriginalLoc, defaultWaitTimeout) {
-		return fmt.Errorf("container A should still be in %s after failed circular move", containerAOriginalLoc)
-	}
-
-	// Test self-move: try to move A into A (should fail)
-	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerAID, containerAID)); err != nil {
-		return fmt.Errorf("/move A into A: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/move A into A did not complete: %q", output)
-	}
-	if !strings.Contains(output, "cannot move object into itself") {
-		return fmt.Errorf("self-move should fail with error, got: %q", output)
-	}
-
-	// Test deeper nesting: A contains B, B contains C, try to move A into C
-	containerCSource := `// Container C
-setDescriptions([{
-	Short: 'deep box',
-	Long: 'The deepest container.',
-}]);
-`
-	if err := ts.WriteSource("/containerC.js", containerCSource); err != nil {
-		return fmt.Errorf("failed to create /containerC.js: %w", err)
-	}
-	containerCID, err := tc.createObject("/containerC.js")
-	if err != nil {
-		return fmt.Errorf("create container C: %w", err)
-	}
-
-	// Move C into B (so now A > B > C)
-	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerCID, containerBID)); err != nil {
-		return fmt.Errorf("/move C into B: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/move C into B did not complete")
-	}
-	if !tc.waitForLocation(fmt.Sprintf("#%s", containerCID), containerBID, defaultWaitTimeout) {
-		return fmt.Errorf("container C did not move into B")
-	}
-
-	// Try to move A into C (should fail - C is inside B which is inside A)
-	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", containerAID, containerCID)); err != nil {
-		return fmt.Errorf("/move A into C: %w", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("/move A into C did not complete: %q", output)
-	}
-	if !strings.Contains(output, "cannot move object into itself") {
-		return fmt.Errorf("deep circular move should fail with error, got: %q", output)
-	}
-
-	fmt.Println("  Circular container prevention: OK")
+	// NOTE: Test 24 (Circular container prevention) has been extracted to TestCircularContainerPrevention
 
 	// === Test 25: getNeighbourhood() ===
 	fmt.Println("Testing getNeighbourhood()...")
