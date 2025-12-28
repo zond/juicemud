@@ -138,22 +138,36 @@ The RNG is seeded deterministically based on:
 ### Step 5: Compute Final Result
 
 ```
-if random < successChance:
-    result = -10 * log10(random / successChance)      // Success: 0 to +∞
-else:
-    result = 10 * log10((1-random) / (1-successChance))  // Failure: 0 to -∞
+result = -10 * log10(random / successChance)
 ```
 
 **Formula analysis:**
 - **Range**: Theoretically (-∞, +∞), practically around [-30, +30] for typical values
-- **Shape**: Piecewise logarithmic, symmetric around 0 for a 50% check
-- **Success case** (`random < successChance`): Measures how deep into the success region the roll landed. Rolling near 0 when you only needed to beat 0.5 = exceptional success.
-- **Failure case** (`random >= successChance`): Measures how deep into the failure region. Rolling near 1 when you only needed to beat 0.5 = catastrophic failure.
-- **At the boundary** (`random = successChance`): `result = 0` (marginal success/failure)
+- **Unified formula**: The same formula handles both success and failure cases:
+  - When `random < successChance`: ratio < 1, log is negative, result is **positive** (success)
+  - When `random > successChance`: ratio > 1, log is positive, result is **negative** (failure)
+  - When `random = successChance`: ratio = 1, result = **0** (boundary)
 - **Success probability**: Exactly equals `successChance`
-- **Why piecewise?** Ensures symmetric distribution. A 50% check produces equal probability of any positive or negative magnitude. This is crucial for multi-skill challenges: two 50% checks summed still yield 50% overall success.
+- **Difficulty affects magnitude**: Easy challenges (high successChance) produce high success scores but mild failure scores. Hard challenges (low successChance) produce mild success scores but severe failure scores.
+- **Why this matters**: When combining multiple skill checks, harder challenges contribute more negative scores on failure. This means a novice attempting something beyond their skill will be consistently penalized, while masters rarely suffer catastrophic failures on easy tasks.
 - **Why logarithm?** Converts multiplicative relationships to additive ones, and produces unbounded but increasingly rare extreme values.
 - **Why factor of 10?** Scales to human-friendly numbers. A "10" means you rolled an order of magnitude better than needed.
+
+**Examples with successChance = 0.9 (easy check):**
+| random | ratio | score |
+|--------|-------|-------|
+| 0.09 | 0.1 | +10 (great success) |
+| 0.45 | 0.5 | +3 (good success) |
+| 0.81 | 0.9 | +0.5 (marginal success) |
+| 0.99 | 1.1 | -0.5 (mild failure) |
+
+**Examples with successChance = 0.1 (hard check):**
+| random | ratio | score |
+|--------|-------|-------|
+| 0.01 | 0.1 | +10 (great success) |
+| 0.05 | 0.5 | +3 (good success) |
+| 0.50 | 5.0 | -7 (significant failure) |
+| 0.99 | 9.9 | -10 (severe failure) |
 
 ### Step 6: Update Skill State
 
@@ -182,24 +196,30 @@ func (c Challenges) Check(challenger *Object, targetID string) float64 {
 
 Overall success if `result > 0`.
 
-**Why summing works mathematically:**
+**How the unified formula affects multi-skill challenges:**
 
-The piecewise formula ensures each check's result is symmetrically distributed around 0 when `successChance = 0.5`. When you sum these:
-- Each term has expected value 0 at 50% success chance
-- Variance increases with more checks, making outcomes more extreme
-- A positive sum means overall success; negative means overall failure
-- Two 50% checks summed still yield 50% overall success
-- One 90% check + one 10% check balance out to ~50% overall
+With the unified formula, the score magnitude depends on the difficulty:
+- Easy challenges (high successChance) contribute positive expected scores
+- Hard challenges (low successChance) contribute negative expected scores
+- A single 50% check still yields 50% overall success
 
-**Why summing works for gameplay:**
+**Statistical properties:**
+| Combination | Success Rate | Reason |
+|-------------|-------------|--------|
+| Two 50% checks | ~60% | Slight positive bias when summed |
+| Easy (90%) + Hard (10%) | ~29% | Hard challenge penalty dominates |
+| Two easy (90% each) | ~98% | Both contribute positive scores |
+| Two hard (10% each) | ~5% | Both contribute negative scores |
 
-1. **Compensation**: Strong performance in one skill can offset weakness in another. A master lockpick with poor perception might still open a trapped lock if their dexterity check is excellent enough to compensate.
+**Why this design works for gameplay:**
 
-2. **Consistent statistics**: Two 50% checks summed still average to ~50% overall success, but with higher variance. This feels right - combining skills adds uncertainty.
+1. **Skill match matters**: Attempting tasks beyond your skill level consistently hurts your overall score. You can't rely on luck to overcome a fundamental skill gap.
 
-3. **Graceful scaling**: Adding more required skills increases variance and tends toward requiring competence across all skills, while still allowing exceptional performance to compensate for weakness.
+2. **Masters excel at easy tasks**: A highly skilled character almost never fails catastrophically at something within their ability. Even unlucky rolls produce mild failures.
 
-4. **Quality preservation**: The final sum indicates overall quality. A barely-positive sum suggests scraping by; a large positive sum indicates masterful execution across all skills.
+3. **Novices struggle with hard tasks**: Even lucky rolls don't fully compensate for attempting something far beyond your skill. The severe failure penalty on hard challenges ensures consistent underperformance.
+
+4. **Quality preservation**: The final sum still indicates overall quality. A barely-positive sum suggests scraping by; a large positive sum indicates masterful execution.
 
 ## Duration (Deterministic Windows)
 

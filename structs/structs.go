@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"hash/fnv"
 	"iter"
+	"log"
 	"math"
 	"path/filepath"
 	"regexp"
@@ -46,7 +47,6 @@ func Stamp(t time.Time) Timestamp {
 	return Timestamp(t.UnixNano())
 }
 
-
 type Serializable[T any] interface {
 	Marshal([]byte)
 	Unmarshal([]byte) error
@@ -65,7 +65,6 @@ type Snapshottable[T any] interface {
 	Describe() string
 	UnsafeShallowCopy() *T
 }
-
 
 func Clone[T any, S Serializable[T]](t *T) (*T, error) {
 	s := S(t)
@@ -218,6 +217,7 @@ func (c Challenges) CheckWithDetails(challenger *Object, targetID string) (float
 	worstScore := 0.0
 	for i := range c {
 		score := c[i].Check(challenger, targetID)
+		log.Printf("%+v.Check -> %v", c[i], score)
 		result += score
 		if score < worstScore {
 			worstScore = score
@@ -794,12 +794,11 @@ func (s skillUse) check(improve bool) float64 {
 	s.skill.LastUsedAt = stamp.Uint64()
 
 	random := s.rng().Float64()
-	if random < successChance {
-		// Success: how far into the success region? (0 to +∞)
-		return -10 * math.Log10(random/successChance)
-	}
-	// Failure: how far into the failure region? (0 to -∞)
-	return 10 * math.Log10((1-random)/(1-successChance))
+	// Unified formula: score is based on ratio of random to successChance.
+	// - Success (random < successChance): ratio < 1, log negative, score positive
+	// - Failure (random > successChance): ratio > 1, log positive, score negative
+	// This makes harder challenges (low successChance) produce worse failure scores.
+	return -10 * math.Log10(random/successChance)
 }
 
 // rng returns a deterministic RNG seeded by user, skill, target, and time window.

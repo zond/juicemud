@@ -2,25 +2,6 @@
 
 Known issues and tasks to address.
 
-## Flaky Test: TestCheckWithDetails
-
-**Location:** `structs/structs_test.go`
-
-**Test:** `TestCheckWithDetails/primary_failure_is_the_worst_scoring_challenge`
-
-**Symptom:** The test intermittently fails with "expected non-nil failure" (approximately 40% failure rate when run in a loop).
-
-**To reproduce:**
-```bash
-for i in 1 2 3 4 5; do go test -count=1 -run TestCheckWithDetails ./structs/ 2>&1 | tail -2; done
-```
-
-**Likely cause:** The test involves skill challenges which may have non-deterministic elements (random rolls, time-based decay, etc.). The test assumes a specific outcome but the challenge system may produce different results on different runs.
-
-**Priority:** Medium - does not affect production, but causes CI flakiness.
-
-**Date identified:** 2025-12-23
-
 ## Code Quality: Import Resolver Cache Double-Check
 
 **Location:** `js/imports/imports.go:81-122`
@@ -105,3 +86,25 @@ func (g *Game) makeEmitCallback(ctx context.Context, object *structs.Object) fun
 **Priority:** Low - only affects the loader tool startup time.
 
 **Date identified:** 2025-12-25
+
+## Feature: Concatenate Multiple Passing Descriptions
+
+**Location:** `structs/structs.go` (Detect), `game/connection.go` (rendering)
+
+**Current behavior:** `Descriptions.Detect()` returns the **first** description where challenges pass. Only one description is ever shown.
+
+**Proposed behavior:** Change `Descriptions.Detect()` to return `[]Description` containing all descriptions where there is no challenge, or the observer overcomes the challenge. Rendering concatenates all `Long` texts.
+
+**Benefits:**
+- Layered discovery: Objects reveal more detail as skills improve
+- Richer world-building: Same object can have base features + hidden aspects
+- Progressive revelation: Rewards skill investment with more information
+
+**Implementation:**
+1. Change `Descriptions.Detect()` return type from `*Description` to `[]Description`
+2. Update all callers (`Object.Filter()`, rendering code)
+3. Update integration tests
+
+**Priority:** Medium - significant feature improvement.
+
+**Date identified:** 2025-12-28
