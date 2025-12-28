@@ -2022,6 +2022,453 @@ addCallback('mindspeak', ['action'], (msg) => {
 	}
 }
 
+// TestMovementEvents tests movement event notifications.
+func TestMovementEvents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "movementEvents"); err != nil {
+		t.Fatalf("failed to enter isolated room: %v", err)
+	}
+
+	// Create a destination room for movement
+	destRoomPath := uniqueSourcePath("movement_dest")
+	destRoomSource := `setDescriptions([{Short: 'Movement Destination', Unique: true}]);
+setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
+`
+	if err := ts.WriteSource(destRoomPath, destRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", destRoomPath, err)
+	}
+	destRoomID, err := tc.createObject(destRoomPath)
+	if err != nil {
+		t.Fatalf("create dest room: %v", err)
+	}
+
+	// Observer updates its description when it sees movement
+	observerPath := uniqueSourcePath("observer")
+	observerSource := `setDescriptions([{Short: 'watcher orb (watching)'}]);
+addCallback('movement', ['emit'], (msg) => {
+	const id = msg.Object ? msg.Object.Id : 'unknown';
+	setDescriptions([{Short: 'watcher orb (saw: ' + id + ')'}]);
+});
+`
+	if err := ts.WriteSource(observerPath, observerSource); err != nil {
+		t.Fatalf("failed to create %s: %v", observerPath, err)
+	}
+
+	moveablePath := uniqueSourcePath("moveable")
+	moveableSource := `setDescriptions([{Short: 'moveable cube'}]);
+`
+	if err := ts.WriteSource(moveablePath, moveableSource); err != nil {
+		t.Fatalf("failed to create %s: %v", moveablePath, err)
+	}
+
+	if _, err := tc.createObject(observerPath); err != nil {
+		t.Fatalf("create observer: %v", err)
+	}
+
+	moveableID, err := tc.createObject(moveablePath)
+	if err != nil {
+		t.Fatalf("create moveable: %v", err)
+	}
+
+	// Move the moveable to the destination room
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", moveableID, destRoomID)); err != nil {
+		t.Fatalf("/move moveable to dest: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/move moveable to dest did not complete")
+	}
+
+	// Poll with look until observer shows it saw the movement
+	output, found := tc.waitForLookMatch("watcher orb (saw: "+moveableID+")", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("observer should have seen moveable in movement event: %q", output)
+	}
+}
+
+// TestCustomMovementVerb tests custom movement verbs.
+func TestCustomMovementVerb(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure wizard is in genesis first
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create two rooms with bidirectional exits so observer sees both source and destination
+	// Step 1: Create empty source files
+	roomAPath := uniqueSourcePath("scurry_roomA")
+	roomBPath := uniqueSourcePath("scurry_roomB")
+	if err := ts.WriteSource(roomAPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomAPath, err)
+	}
+	if err := ts.WriteSource(roomBPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomBPath, err)
+	}
+
+	// Step 2: Create the room objects
+	roomAID, err := tc.createObject(roomAPath)
+	if err != nil {
+		t.Fatalf("create room A: %v", err)
+	}
+	roomBID, err := tc.createObject(roomBPath)
+	if err != nil {
+		t.Fatalf("create room B: %v", err)
+	}
+
+	// Step 3: Update source files with exits referencing object IDs (no # prefix)
+	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Mouse Room A', Unique: true}]);
+setExits([{Descriptions: [{Short: 'north'}], Destination: '%s'}]);
+`, roomBID)
+	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomAPath, err)
+	}
+	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Mouse Room B', Unique: true}]);
+setExits([{Descriptions: [{Short: 'south'}], Destination: '%s'}]);
+`, roomAID)
+	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomBPath, err)
+	}
+
+	// Enter room A to create the object there
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A did not complete")
+	}
+
+	// Create an object with a custom movement verb "scurries" in room A
+	scurryPath := uniqueSourcePath("scurry")
+	scurrySource := `setDescriptions([{Short: 'tiny mouse'}]);
+setMovement({Active: true, Verb: 'scurries'});
+`
+	if err := ts.WriteSource(scurryPath, scurrySource); err != nil {
+		t.Fatalf("failed to create %s: %v", scurryPath, err)
+	}
+	scurryID, err := tc.createObject(scurryPath)
+	if err != nil {
+		t.Fatalf("create scurry object: %v", err)
+	}
+
+	// Move wizard to room B (destination) to observe movement
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomBID)); err != nil {
+		t.Fatalf("/enter room B: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room B did not complete")
+	}
+
+	// Move the scurry object from room A to room B
+	// Wizard should see "A tiny mouse scurries in from south."
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", scurryID, roomBID)); err != nil {
+		t.Fatalf("/move scurry: %v", err)
+	}
+	promptOutput, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/move scurry did not complete")
+	}
+	additionalOutput := tc.readUntil(500*time.Millisecond, func(s string) bool {
+		return strings.Contains(s, "scurries")
+	})
+	combined := promptOutput + additionalOutput
+	if !strings.Contains(combined, "scurries") {
+		t.Fatalf("movement message should contain custom verb 'scurries': %q", combined)
+	}
+}
+
+// TestJSMovementRendering tests JS-based movement rendering.
+func TestJSMovementRendering(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure wizard is in genesis first
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create two rooms with bidirectional exits so observer sees both source and destination
+	// Step 1: Create empty source files
+	roomAPath := uniqueSourcePath("jsorb_roomA")
+	roomBPath := uniqueSourcePath("jsorb_roomB")
+	if err := ts.WriteSource(roomAPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomAPath, err)
+	}
+	if err := ts.WriteSource(roomBPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomBPath, err)
+	}
+
+	// Step 2: Create the room objects
+	roomAID, err := tc.createObject(roomAPath)
+	if err != nil {
+		t.Fatalf("create room A: %v", err)
+	}
+	roomBID, err := tc.createObject(roomBPath)
+	if err != nil {
+		t.Fatalf("create room B: %v", err)
+	}
+
+	// Step 3: Update source files with exits referencing object IDs (no # prefix)
+	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Orb Room A', Unique: true}]);
+setExits([{Descriptions: [{Short: 'north'}], Destination: '%s'}]);
+`, roomBID)
+	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomAPath, err)
+	}
+	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Orb Room B', Unique: true}]);
+setExits([{Descriptions: [{Short: 'south'}], Destination: '%s'}]);
+`, roomAID)
+	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomBPath, err)
+	}
+
+	// Enter room A to create the object there
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A did not complete")
+	}
+
+	// Create an object that handles its own movement rendering via JS in room A
+	jsOrbPath := uniqueSourcePath("jsorb")
+	jsRenderSource := `setDescriptions([{Short: 'glowing orb'}]);
+setMovement({Active: false, Verb: ''});
+
+addCallback('renderMovement', ['emit'], (msg) => {
+	var text;
+	if (msg.Source && msg.Source.Here && msg.Destination && msg.Destination.Exit) {
+		text = 'The glowing orb floats away ' + msg.Destination.Exit + ' with an eerie hum.';
+	} else if (msg.Destination && msg.Destination.Here && msg.Source && msg.Source.Exit) {
+		text = 'A glowing orb drifts in from ' + msg.Source.Exit + ', humming softly.';
+	} else if (msg.Destination && msg.Destination.Here) {
+		text = 'A glowing orb materializes with a soft pop.';
+	} else if (msg.Source && msg.Source.Here) {
+		text = 'The glowing orb fades from existence.';
+	} else {
+		text = 'A glowing orb does something mysterious.';
+	}
+	emit(msg.Observer, 'movementRendered', {Message: text});
+});
+`
+	if err := ts.WriteSource(jsOrbPath, jsRenderSource); err != nil {
+		t.Fatalf("failed to create %s: %v", jsOrbPath, err)
+	}
+	jsOrbID, err := tc.createObject(jsOrbPath)
+	if err != nil {
+		t.Fatalf("create jsorb object: %v", err)
+	}
+
+	// Move wizard to room B (destination) to observe movement
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomBID)); err != nil {
+		t.Fatalf("/enter room B: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room B did not complete")
+	}
+
+	// Move the orb from room A to room B
+	// Wizard should see JS-rendered "A glowing orb drifts in from south, humming softly."
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", jsOrbID, roomBID)); err != nil {
+		t.Fatalf("/move jsorb: %v", err)
+	}
+	promptOutput, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/move jsorb did not complete")
+	}
+	additionalOutput := tc.readUntil(500*time.Millisecond, func(s string) bool {
+		return strings.Contains(s, "drifts in") || strings.Contains(s, "humming softly")
+	})
+	combined := promptOutput + additionalOutput
+	if !strings.Contains(combined, "drifts in") && !strings.Contains(combined, "humming softly") {
+		t.Fatalf("movement message should contain JS-rendered text: %q", combined)
+	}
+}
+
+// TestGetLocationAndMoveObject tests getLocation() and moveObject() JS APIs.
+func TestGetLocationAndMoveObject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "getLocMove"); err != nil {
+		t.Fatalf("failed to enter isolated room: %v", err)
+	}
+
+	// Create a destination room for the teleporter to move from
+	destRoomPath := uniqueSourcePath("teleport_dest")
+	destRoomSource := `setDescriptions([{Short: 'Teleport Destination', Unique: true}]);
+setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
+`
+	if err := ts.WriteSource(destRoomPath, destRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", destRoomPath, err)
+	}
+	destRoomID, err := tc.createObject(destRoomPath)
+	if err != nil {
+		t.Fatalf("create dest room: %v", err)
+	}
+
+	// Create a teleporter object that can report location and move itself
+	teleportPath := uniqueSourcePath("teleporter")
+	teleportSource := `setDescriptions([{Short: 'teleporter (ready)'}]);
+addCallback('report', ['action'], (msg) => {
+	const loc = getLocation();
+	setDescriptions([{Short: 'teleporter (at:' + loc.substring(0, 8) + ')'}]);
+});
+addCallback('teleport', ['action'], (msg) => {
+	// Move self to genesis using moveObject (safe, validated movement)
+	moveObject(getId(), 'genesis');
+	setDescriptions([{Short: 'teleporter (teleported)'}]);
+});
+`
+	if err := ts.WriteSource(teleportPath, teleportSource); err != nil {
+		t.Fatalf("failed to create %s: %v", teleportPath, err)
+	}
+	teleporterID, err := tc.createObject(teleportPath)
+	if err != nil {
+		t.Fatalf("create teleporter: %v", err)
+	}
+
+	// Test getLocation() - report current location
+	if err := tc.sendLine("report"); err != nil {
+		t.Fatalf("report command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("report command did not complete")
+	}
+	_, found := tc.waitForObject("*teleporter*at:*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("teleporter should report location")
+	}
+
+	// Move teleporter to the destination room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", destRoomID)); err != nil {
+		t.Fatalf("/enter dest room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter dest room did not complete")
+	}
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", teleporterID, destRoomID)); err != nil {
+		t.Fatalf("/move teleporter: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/move teleporter did not complete")
+	}
+
+	// Now teleport it back to genesis using moveObject from JS
+	if err := tc.sendLine("teleport"); err != nil {
+		t.Fatalf("teleport command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("teleport command did not complete")
+	}
+
+	// Verify it moved by checking its location via /inspect
+	if !tc.waitForLocation(fmt.Sprintf("#%s", teleporterID), "genesis", defaultWaitTimeout) {
+		t.Fatal("teleporter should be at genesis after moveObject")
+	}
+}
+
+// TestGetContent tests getContent() JS API.
+func TestGetContent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "getContent"); err != nil {
+		t.Fatalf("failed to enter isolated room: %v", err)
+	}
+
+	// Create a container that can report its content count
+	containerPath := uniqueSourcePath("content_container")
+	containerSource := `setDescriptions([{Short: 'content container (ready)'}]);
+addCallback('countitems', ['action'], (msg) => {
+	const content = getContent();
+	const count = content ? Object.keys(content).length : 0;
+	setDescriptions([{Short: 'content container (items:' + count + ')'}]);
+});
+`
+	if err := ts.WriteSource(containerPath, containerSource); err != nil {
+		t.Fatalf("failed to create %s: %v", containerPath, err)
+	}
+	containerID, err := tc.createObject(containerPath)
+	if err != nil {
+		t.Fatalf("create content_container: %v", err)
+	}
+
+	// Count items (should be 0)
+	if err := tc.sendLine("countitems"); err != nil {
+		t.Fatalf("countitems command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("countitems command did not complete")
+	}
+	_, found := tc.waitForObject("*content container*items:0*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("container should have 0 items initially")
+	}
+
+	// Create a small item and put it in the container
+	itemPath := uniqueSourcePath("tiny_item")
+	itemSource := `setDescriptions([{Short: 'tiny item'}]);`
+	if err := ts.WriteSource(itemPath, itemSource); err != nil {
+		t.Fatalf("failed to create %s: %v", itemPath, err)
+	}
+	itemID, err := tc.createObject(itemPath)
+	if err != nil {
+		t.Fatalf("create tiny_item: %v", err)
+	}
+
+	// Move item into container using /move command
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", itemID, containerID)); err != nil {
+		t.Fatalf("/move item into container: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/move item did not complete")
+	}
+
+	// Count items again (should be 1)
+	if err := tc.sendLine("countitems"); err != nil {
+		t.Fatalf("second countitems command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("second countitems command did not complete")
+	}
+	_, found = tc.waitForObject("*content container*items:1*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("container should have 1 item after move")
+	}
+}
+
 // TestAddDelWiz tests /addwiz and /delwiz commands.
 func TestAddDelWiz(t *testing.T) {
 	if testing.Short() {

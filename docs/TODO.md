@@ -35,8 +35,13 @@ Known issues and tasks to address.
 - `TestEmitWithChallenges` - emit() with skill challenges
 - `TestEmitToLocation` - emitToLocation() JS API
 - `TestEmitToLocationWithChallenges` - emitToLocation() with skill challenges
+- `TestMovementEvents` - Movement event notifications
+- `TestCustomMovementVerb` - Custom movement verbs
+- `TestJSMovementRendering` - JS-based movement rendering
+- `TestGetLocationAndMoveObject` - getLocation()/moveObject() JS APIs
+- `TestGetContent` - getContent() JS API
 
-**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~6 test sections remain in `RunAll` (Tests 3-8 core movement/wizard commands, Test 12 movement events, Tests 28-29 getLocation/getContent).
+**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~6 test sections remain in `RunAll` (Tests 3-8 core movement/wizard commands).
 
 **Priority:** Low - purely organizational improvement.
 
