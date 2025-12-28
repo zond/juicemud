@@ -43,99 +43,11 @@ const (
 // RunAll runs all integration tests in sequence on a single server.
 // Returns nil on success, or an error describing what failed.
 func RunAll(ts *TestServer) error {
+	// NOTE: User creation, wizard setup, and login are handled by TestMain.
+	// We use the package variables testServer, wizardClient, and wizardUser.
 	ctx := context.Background()
-
-	// === Test 1: User creation and login ===
-	fmt.Println("Testing user creation and login...")
-
-	// Create user and verify initial state
-	if err := func() error {
-		tc, err := createUser(ts.SSHAddr(), "testuser", "testpass123")
-		if err != nil {
-			return fmt.Errorf("createUser: %w", err)
-		}
-		defer tc.Close()
-
-		if err := tc.sendLine("look"); err != nil {
-			return fmt.Errorf("look command: %w", err)
-		}
-		// Verify "look" command produces output containing the genesis room description
-		if output, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-			return fmt.Errorf("look command did not complete: %q", output)
-		} else if !strings.Contains(output, "Black cosmos") {
-			return fmt.Errorf("look command did not show genesis room: %q", output)
-		}
-		return nil
-	}(); err != nil {
-		return err
-	}
-
-	// Verify user was persisted
-	user, err := ts.Storage().LoadUser(ctx, "testuser")
-	if err != nil {
-		return fmt.Errorf("user not persisted: %w", err)
-	}
-	if user.Object == "" {
-		return fmt.Errorf("user has no associated object")
-	}
-
-	// Verify object exists in genesis
-	obj, err := ts.Storage().AccessObject(ctx, user.Object, nil)
-	if err != nil {
-		return fmt.Errorf("user object not found: %w", err)
-	}
-	if obj.GetLocation() != "genesis" {
-		return fmt.Errorf("user object not in genesis: got %q", obj.GetLocation())
-	}
-
-	// Test reconnection - this specifically tests that login works after disconnect
-	if err := func() error {
-		tc, err := loginUser(ts.SSHAddr(), "testuser", "testpass123")
-		if err != nil {
-			return fmt.Errorf("loginUser: %w", err)
-		}
-		defer tc.Close()
-
-		if err := tc.sendLine("look"); err != nil {
-			return fmt.Errorf("look command on reconnect: %w", err)
-		}
-		if output, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-			return fmt.Errorf("look command on reconnect did not complete: %q", output)
-		} else if !strings.Contains(output, "Black cosmos") {
-			return fmt.Errorf("look command on reconnect did not show genesis room: %q", output)
-		}
-
-		// Verify same object
-		user2, err := ts.Storage().LoadUser(ctx, "testuser")
-		if err != nil {
-			return fmt.Errorf("user not found on reconnect: %w", err)
-		}
-		if user2.Object != user.Object {
-			return fmt.Errorf("user object changed: %s -> %s", user.Object, user2.Object)
-		}
-		return nil
-	}(); err != nil {
-		return err
-	}
-
-	fmt.Println("  User creation and login: OK")
-
-	// === Test 2: Wizard setup ===
-	fmt.Println("Setting up wizard access...")
-
-	// Make testuser an owner and wizard for subsequent tests
-	user.Owner = true
-	user.Wizard = true
-	if err := ts.Storage().StoreUser(ctx, user, true, ""); err != nil {
-		return fmt.Errorf("failed to make testuser owner/wizard: %w", err)
-	}
-
-	// Reconnect to pick up owner/wizard status
-	tc, err := loginUser(ts.SSHAddr(), "testuser", "testpass123")
-	if err != nil {
-		return fmt.Errorf("loginUser as wizard: %w", err)
-	}
-	defer tc.Close()
+	tc := wizardClient
+	user := wizardUser
 
 	// Verify we can read existing source file
 	content, err := ts.ReadSource("/user.js")
