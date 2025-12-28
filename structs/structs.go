@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"hash/fnv"
 	"iter"
-	"log"
 	"math"
 	"path/filepath"
 	"regexp"
@@ -217,7 +216,6 @@ func (c Challenges) CheckWithDetails(challenger *Object, targetID string) (float
 	worstScore := 0.0
 	for i := range c {
 		score := c[i].Check(challenger, targetID)
-		log.Printf("%+v.Check -> %v", c[i], score)
 		result += score
 		if score < worstScore {
 			worstScore = score
