@@ -2,21 +2,6 @@
 
 Known issues and tasks to address.
 
-## Code Quality: Inconsistent Error Wrapping
-
-**Location:** Multiple files
-
-**Issue:** Some places use `juicemud.WithStack(err)`, others use `errors.Wrapf`, some return raw errors.
-
-**Recommendation:** Standardize on:
-- `juicemud.WithStack(err)` for stack traces at error origin
-- `errors.Wrap(err, "context")` for adding context when propagating
-- Never return unwrapped errors from public functions
-
-**Priority:** Low - doesn't affect functionality.
-
-**Date identified:** 2025-12-25
-
 ## Code Quality: Loader Creates Full Game Instance
 
 **Location:** `loader/loader.go:43-46`

@@ -1160,7 +1160,7 @@ func setPath(data map[string]any, path string, value any) error {
 	}
 	parts := strings.Split(path, ".")
 	if len(parts) > maxPathDepth {
-		return fmt.Errorf("path too deep (max %d levels)", maxPathDepth)
+		return errors.Errorf("path too deep (max %d levels)", maxPathDepth)
 	}
 	current := data
 	for i, part := range parts[:len(parts)-1] {
@@ -1173,7 +1173,7 @@ func setPath(data map[string]any, path string, value any) error {
 		} else if m, ok := next.(map[string]any); ok {
 			current = m
 		} else {
-			return fmt.Errorf("path %q is not an object", strings.Join(parts[:i+1], "."))
+			return errors.Errorf("path %q is not an object", strings.Join(parts[:i+1], "."))
 		}
 	}
 	current[parts[len(parts)-1]] = value

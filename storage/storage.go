@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"iter"
 	"log"
 	"os"
@@ -143,7 +144,7 @@ func getSQL(ctx context.Context, db sqlx.QueryerContext, d any, query string, pa
 		if errors.Is(err, sql.ErrNoRows) {
 			return juicemud.WithStack(os.ErrNotExist)
 		}
-		return errors.Wrapf(err, "Executing %q(%+v):", query, params)
+		return juicemud.WithStack(fmt.Errorf("executing %q(%+v): %w", query, params, err))
 	}
 	return nil
 }
