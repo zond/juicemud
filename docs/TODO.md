@@ -8,12 +8,9 @@ Known issues and tasks to address.
 
 **Issue:** All integration tests in one file makes it hard to find specific tests.
 
-**Fix:** Split into sub-files organized by feature:
-- `auth_test.go` - login, user creation
-- `movement_test.go` - exits, rooms
-- `js_api_test.go` - emit, setTimeout, setInterval, createObject
-- `wizard_commands_test.go` - /create, /remove, /inspect
-- etc.
+**Progress:** Infrastructure is in place (TestMain handles setup, package variables for shared state, `uniqueSourcePath` helper for test isolation). Individual tests can now be incrementally extracted from `RunAll` into `TestXxx` functions.
+
+**Remaining work:** Extract test sections one at a time into individual `TestXxx` functions.
 
 **Priority:** Low - purely organizational improvement.
 
