@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	goccy "github.com/goccy/go-json"
 	"github.com/zond/juicemud/storage"
 )
 
@@ -1264,5 +1265,183 @@ if (state.intervalId === undefined) {
 	}
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		t.Fatal("/remove interval_lister did not complete")
+	}
+}
+
+// TestCreateRemoveObject tests createObject() and removeObject() JS APIs.
+func TestCreateRemoveObject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+	ctx := context.Background()
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create a coin source that records its creator
+	coinPath := uniqueSourcePath("test_coin")
+	coinSource := `
+setDescriptions([{Short: 'gold coin'}]);
+
+addCallback('created', ['emit'], (msg) => {
+	state.creatorId = msg.creatorId;
+});
+`
+	if err := ts.WriteSource(coinPath, coinSource); err != nil {
+		t.Fatalf("failed to create %s: %v", coinPath, err)
+	}
+
+	// Create a spawner that can create and remove coins
+	spawnerPath := uniqueSourcePath("coin_spawner")
+	spawnerSource := fmt.Sprintf(`
+setDescriptions([{Short: 'coin spawner'}]);
+
+addCallback('spawn', ['action'], (msg) => {
+	var coinId = createObject('%s', getLocation());
+	state.lastSpawned = coinId;
+	state.spawnCount = (state.spawnCount || 0) + 1;
+});
+
+addCallback('cleanup', ['action'], (msg) => {
+	if (state.lastSpawned) {
+		removeObject(state.lastSpawned);
+		state.lastSpawned = null;
+	}
+});
+`, coinPath)
+	if err := ts.WriteSource(spawnerPath, spawnerSource); err != nil {
+		t.Fatalf("failed to create %s: %v", spawnerPath, err)
+	}
+
+	// Create the spawner object (created in the current room as a sibling)
+	spawnerID, err := tc.createObject(spawnerPath)
+	if err != nil {
+		t.Fatalf("create coin_spawner: %v", err)
+	}
+
+	// Type "spawn" command - routed to sibling's action callback
+	if err := tc.sendLine("spawn"); err != nil {
+		t.Fatalf("spawn command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("spawn command did not complete")
+	}
+
+	// Wait for the coin to be created and verify it exists
+	var coinID string
+	if !waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
+		spawner, err := ts.Storage().AccessObject(ctx, spawnerID, nil)
+		if err != nil {
+			return false
+		}
+		var spawnerState map[string]any
+		if err := goccy.Unmarshal([]byte(spawner.GetState()), &spawnerState); err != nil {
+			return false
+		}
+		if id, ok := spawnerState["lastSpawned"].(string); ok && id != "" {
+			coinID = id
+			return true
+		}
+		return false
+	}) {
+		t.Fatal("coin not spawned within timeout")
+	}
+
+	// Verify the coin exists and has the creator set
+	coin, err := ts.Storage().AccessObject(ctx, coinID, nil)
+	if err != nil {
+		t.Fatalf("coin object not found: %v", err)
+	}
+	if coin.GetSourcePath() != coinPath {
+		t.Fatalf("coin has wrong source path: %q", coin.GetSourcePath())
+	}
+
+	// Look should show the coin
+	output, ok := tc.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("look command did not complete")
+	}
+	if !strings.Contains(output, "gold coin") {
+		t.Fatalf("look should show spawned coin: %q", output)
+	}
+
+	// Type "cleanup" command - routed to sibling's action callback
+	if err := tc.sendLine("cleanup"); err != nil {
+		t.Fatalf("cleanup command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("cleanup command did not complete")
+	}
+
+	// Wait for the coin to be removed
+	if !waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
+		_, err := ts.Storage().AccessObject(ctx, coinID, nil)
+		return err != nil // Object should not exist
+	}) {
+		t.Fatal("coin not removed within timeout")
+	}
+
+	// Look should no longer show the coin
+	output, ok = tc.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("look command did not complete")
+	}
+	if strings.Contains(output, "gold coin") {
+		t.Fatalf("look should not show removed coin: %q", output)
+	}
+
+	// Test self-removal: create an object that removes itself
+	selfRemovePath := uniqueSourcePath("self_remover")
+	selfRemoveSource := `
+setDescriptions([{Short: 'ephemeral object'}]);
+
+addCallback('vanish', ['action'], (msg) => {
+	removeObject(getId());
+});
+`
+	if err := ts.WriteSource(selfRemovePath, selfRemoveSource); err != nil {
+		t.Fatalf("failed to create %s: %v", selfRemovePath, err)
+	}
+
+	ephemeralID, err := tc.createObject(selfRemovePath)
+	if err != nil {
+		t.Fatalf("create self_remover: %v", err)
+	}
+
+	// Verify it exists
+	if _, err := ts.Storage().AccessObject(ctx, ephemeralID, nil); err != nil {
+		t.Fatalf("ephemeral object not found: %v", err)
+	}
+
+	// Type "vanish" command - routed to sibling's action callback, object removes itself
+	if err := tc.sendLine("vanish"); err != nil {
+		t.Fatalf("vanish command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("vanish command did not complete")
+	}
+
+	// Wait for self-removal
+	if !waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
+		_, err := ts.Storage().AccessObject(ctx, ephemeralID, nil)
+		return err != nil // Object should not exist
+	}) {
+		t.Fatal("self-removal failed within timeout")
+	}
+
+	// Cleanup spawner
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", spawnerID)); err != nil {
+		t.Fatalf("/remove spawner: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/remove spawner did not complete")
 	}
 }

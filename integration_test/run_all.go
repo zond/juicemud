@@ -25,12 +25,9 @@
 package integration_test
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
-
-	goccy "github.com/goccy/go-json"
 )
 
 const (
@@ -45,7 +42,6 @@ const (
 func RunAll(ts *TestServer) error {
 	// NOTE: User creation, wizard setup, and login are handled by TestMain.
 	// We use the package variables testServer, wizardClient, and wizardUser.
-	ctx := context.Background()
 	tc := wizardClient
 
 	// Verify we can read existing source file
@@ -1907,173 +1903,7 @@ addCallback('disablelearn', ['action'], (msg) => {
 	// NOTE: Test 35 (exitFailed event) has been extracted to TestExitFailedEvent
 	// NOTE: Test (setInterval/clearInterval) has been extracted to TestSetInterval
 	// NOTE: Test (/intervals wizard command) has been extracted to TestIntervalsCommand
-
-	// === Test: createObject() and removeObject() JS APIs ===
-	fmt.Println("Testing createObject() and removeObject() JS APIs...")
-
-	// Create a coin source that records its creator
-	coinSource := `
-setDescriptions([{Short: 'gold coin'}]);
-
-addCallback('created', ['emit'], (msg) => {
-	state.creatorId = msg.creatorId;
-});
-`
-	if err := ts.WriteSource("/test_coin.js", coinSource); err != nil {
-		return fmt.Errorf("failed to create /test_coin.js: %w", err)
-	}
-
-	// Create a spawner that can create and remove coins
-	spawnerSource := `
-setDescriptions([{Short: 'coin spawner'}]);
-
-addCallback('spawn', ['action'], (msg) => {
-	var coinId = createObject('/test_coin.js', getLocation());
-	state.lastSpawned = coinId;
-	state.spawnCount = (state.spawnCount || 0) + 1;
-});
-
-addCallback('cleanup', ['action'], (msg) => {
-	if (state.lastSpawned) {
-		removeObject(state.lastSpawned);
-		state.lastSpawned = null;
-	}
-});
-`
-	if err := ts.WriteSource("/coin_spawner.js", spawnerSource); err != nil {
-		return fmt.Errorf("failed to create /coin_spawner.js: %w", err)
-	}
-
-	// Create the spawner object (created in the current room as a sibling)
-	spawnerID, err := tc.createObject("/coin_spawner.js")
-	if err != nil {
-		return fmt.Errorf("create coin_spawner: %w", err)
-	}
-
-	// Type "spawn" command - routed to sibling's action callback
-	if err := tc.sendLine("spawn"); err != nil {
-		return fmt.Errorf("spawn command: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("spawn command did not complete")
-	}
-
-	// Wait for the coin to be created and verify it exists
-	var coinID string
-	if !waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
-		spawner, err := ts.Storage().AccessObject(ctx, spawnerID, nil)
-		if err != nil {
-			return false
-		}
-		var spawnerState map[string]any
-		if err := goccy.Unmarshal([]byte(spawner.GetState()), &spawnerState); err != nil {
-			return false
-		}
-		if id, ok := spawnerState["lastSpawned"].(string); ok && id != "" {
-			coinID = id
-			return true
-		}
-		return false
-	}) {
-		return fmt.Errorf("coin not spawned within timeout")
-	}
-
-	// Verify the coin exists and has the creator set
-	coin, err := ts.Storage().AccessObject(ctx, coinID, nil)
-	if err != nil {
-		return fmt.Errorf("coin object not found: %w", err)
-	}
-	if coin.GetSourcePath() != "/test_coin.js" {
-		return fmt.Errorf("coin has wrong source path: %q", coin.GetSourcePath())
-	}
-
-	// Look should show the coin
-	output, ok = tc.sendCommand("look", defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("look command did not complete")
-	}
-	if !strings.Contains(output, "gold coin") {
-		return fmt.Errorf("look should show spawned coin: %q", output)
-	}
-
-	fmt.Println("  createObject(): OK")
-
-	// Type "cleanup" command - routed to sibling's action callback
-	if err := tc.sendLine("cleanup"); err != nil {
-		return fmt.Errorf("cleanup command: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("cleanup command did not complete")
-	}
-
-	// Wait for the coin to be removed
-	if !waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
-		_, err := ts.Storage().AccessObject(ctx, coinID, nil)
-		return err != nil // Object should not exist
-	}) {
-		return fmt.Errorf("coin not removed within timeout")
-	}
-
-	// Look should no longer show the coin
-	output, ok = tc.sendCommand("look", defaultWaitTimeout)
-	if !ok {
-		return fmt.Errorf("look command did not complete")
-	}
-	if strings.Contains(output, "gold coin") {
-		return fmt.Errorf("look should not show removed coin: %q", output)
-	}
-
-	fmt.Println("  removeObject(): OK")
-
-	// Test self-removal: create an object that removes itself
-	selfRemoveSource := `
-setDescriptions([{Short: 'ephemeral object'}]);
-
-addCallback('vanish', ['action'], (msg) => {
-	removeObject(getId());
-});
-`
-	if err := ts.WriteSource("/self_remover.js", selfRemoveSource); err != nil {
-		return fmt.Errorf("failed to create /self_remover.js: %w", err)
-	}
-
-	ephemeralID, err := tc.createObject("/self_remover.js")
-	if err != nil {
-		return fmt.Errorf("create self_remover: %w", err)
-	}
-
-	// Verify it exists
-	if _, err := ts.Storage().AccessObject(ctx, ephemeralID, nil); err != nil {
-		return fmt.Errorf("ephemeral object not found: %w", err)
-	}
-
-	// Type "vanish" command - routed to sibling's action callback, object removes itself
-	if err := tc.sendLine("vanish"); err != nil {
-		return fmt.Errorf("vanish command: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("vanish command did not complete")
-	}
-
-	// Wait for self-removal
-	if !waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
-		_, err := ts.Storage().AccessObject(ctx, ephemeralID, nil)
-		return err != nil // Object should not exist
-	}) {
-		return fmt.Errorf("self-removal failed within timeout")
-	}
-
-	fmt.Println("  self-removal via removeObject(getId()): OK")
-
-	// Cleanup spawner
-	if err := tc.sendLine(fmt.Sprintf("/remove #%s", spawnerID)); err != nil {
-		return fmt.Errorf("/remove spawner: %w", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		return fmt.Errorf("/remove spawner did not complete")
-	}
-
-	fmt.Println("  createObject()/removeObject() JS APIs: OK")
+	// NOTE: Test (createObject/removeObject JS APIs) has been extracted to TestCreateRemoveObject
 
 	return nil
 }
