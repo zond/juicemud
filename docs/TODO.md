@@ -4,7 +4,7 @@ Known issues and tasks to address.
 
 ## Code Quality: Split Integration Tests
 
-**Location:** `integration_test/run_all_test.go` (~1100 lines, down from 2400+)
+**Location:** `integration_test/run_all_test.go` (~850 lines, down from 2400+)
 
 **Issue:** All integration tests in one file makes it hard to find specific tests.
 
@@ -32,8 +32,11 @@ Known issues and tasks to address.
 - `TestDebugLog` - /debug and log() functionality
 - `TestRoomAndSiblingActionHandlers` - Room and sibling action handlers
 - `TestAddDelWiz` - /addwiz and /delwiz commands
+- `TestEmitWithChallenges` - emit() with skill challenges
+- `TestEmitToLocation` - emitToLocation() JS API
+- `TestEmitToLocationWithChallenges` - emitToLocation() with skill challenges
 
-**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~9 test sections remain in `RunAll`.
+**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~6 test sections remain in `RunAll` (Tests 3-8 core movement/wizard commands, Test 12 movement events, Tests 28-29 getLocation/getContent).
 
 **Priority:** Low - purely organizational improvement.
 

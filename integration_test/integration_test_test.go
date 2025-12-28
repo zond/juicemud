@@ -1722,6 +1722,306 @@ addCallback('disablelearn', ['action'], (msg) => {
 	}
 }
 
+// TestEmitWithChallenges tests emit() with skill challenges.
+func TestEmitWithChallenges(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "emitChallenges"); err != nil {
+		t.Fatalf("failed to enter isolated room: %v", err)
+	}
+
+	// High-perception receiver - has 200 perception, should receive challenged emit
+	highPercPath := uniqueSourcePath("eaglereceiver")
+	highPercReceiverSource := `setDescriptions([{Short: 'eagle orb (waiting)'}]);
+setSkills({perception: {Practical: 200, Theoretical: 200}});
+addCallback('secret', ['emit'], (msg) => {
+	setDescriptions([{Short: 'eagle orb (got: ' + msg.secret + ')'}]);
+});
+`
+	if err := ts.WriteSource(highPercPath, highPercReceiverSource); err != nil {
+		t.Fatalf("failed to create %s: %v", highPercPath, err)
+	}
+
+	// Low-perception receiver - has 1 perception, should NOT receive challenged emit with level 50
+	lowPercPath := uniqueSourcePath("dimreceiver")
+	lowPercReceiverSource := `setDescriptions([{Short: 'dim orb (waiting)'}]);
+setSkills({perception: {Practical: 1, Theoretical: 1}});
+addCallback('secret', ['emit'], (msg) => {
+	setDescriptions([{Short: 'dim orb (got: ' + msg.secret + ')'}]);
+});
+`
+	if err := ts.WriteSource(lowPercPath, lowPercReceiverSource); err != nil {
+		t.Fatalf("failed to create %s: %v", lowPercPath, err)
+	}
+
+	// Sender emits with perception challenge at level 50
+	senderPath := uniqueSourcePath("challengesender")
+	challengeSenderSource := `setDescriptions([{Short: 'whisperer orb'}]);
+addCallback('whisper', ['action'], (msg) => {
+	const parts = msg.line.split(' ');
+	const targetId = parts[1];
+	emit(targetId, 'secret', {secret: 'hidden'}, [{Skill: 'perception', Level: 50}]);
+	setDescriptions([{Short: 'whisperer orb (sent)'}]);
+});
+`
+	if err := ts.WriteSource(senderPath, challengeSenderSource); err != nil {
+		t.Fatalf("failed to create %s: %v", senderPath, err)
+	}
+
+	// Create receivers
+	eagleID, err := tc.createObject(highPercPath)
+	if err != nil {
+		t.Fatalf("create eaglereceiver: %v", err)
+	}
+
+	dimID, err := tc.createObject(lowPercPath)
+	if err != nil {
+		t.Fatalf("create dimreceiver: %v", err)
+	}
+
+	// Create sender
+	if _, err := tc.createObject(senderPath); err != nil {
+		t.Fatalf("create challengesender: %v", err)
+	}
+
+	// Whisper to the high-perception receiver - should succeed
+	if err := tc.sendLine(fmt.Sprintf("whisper %s", eagleID)); err != nil {
+		t.Fatalf("whisper to eagle: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("whisper to eagle did not complete")
+	}
+
+	// Eagle should receive the secret
+	output, found := tc.waitForLookMatch("eagle orb (got: hidden)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("high-perception receiver should have received challenged emit: %q", output)
+	}
+
+	// Whisper to the low-perception receiver - should fail (no event received)
+	if err := tc.sendLine(fmt.Sprintf("whisper %s", dimID)); err != nil {
+		t.Fatalf("whisper to dim: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("whisper to dim did not complete")
+	}
+
+	// Dim should NOT have received the secret (should still be waiting)
+	tc.sendLine("look")
+	output, _ = tc.waitForPrompt(defaultWaitTimeout)
+	if strings.Contains(output, "dim orb (got:") {
+		t.Fatalf("low-perception receiver should NOT have received challenged emit: %q", output)
+	}
+	if !strings.Contains(output, "dim orb (waiting)") {
+		t.Fatalf("dim orb should still be waiting: %q", output)
+	}
+}
+
+// TestEmitToLocation tests emitToLocation() JS API.
+func TestEmitToLocation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "emitToLoc"); err != nil {
+		t.Fatalf("failed to enter isolated room: %v", err)
+	}
+
+	// Create a broadcast room
+	broadcastRoomPath := uniqueSourcePath("broadcastroom")
+	broadcastRoomSource := `setDescriptions([{Short: 'broadcast chamber', Long: 'A room for broadcasting.'}]);
+setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
+`
+	if err := ts.WriteSource(broadcastRoomPath, broadcastRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", broadcastRoomPath, err)
+	}
+	broadcastRoomID, err := tc.createObject(broadcastRoomPath)
+	if err != nil {
+		t.Fatalf("create broadcastroom: %v", err)
+	}
+
+	// Enter the broadcast room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", broadcastRoomID)); err != nil {
+		t.Fatalf("/enter broadcast room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter broadcast room did not complete")
+	}
+
+	// Listener 1 - receives broadcasts
+	listener1Path := uniqueSourcePath("listener1")
+	listener1Source := `setDescriptions([{Short: 'listener alpha (idle)'}]);
+addCallback('announce', ['emit'], (msg) => {
+	setDescriptions([{Short: 'listener alpha (heard: ' + msg.message + ')'}]);
+});
+`
+	if err := ts.WriteSource(listener1Path, listener1Source); err != nil {
+		t.Fatalf("failed to create %s: %v", listener1Path, err)
+	}
+	if _, err := tc.createObject(listener1Path); err != nil {
+		t.Fatalf("create listener1: %v", err)
+	}
+
+	// Listener 2 - also receives broadcasts
+	listener2Path := uniqueSourcePath("listener2")
+	listener2Source := `setDescriptions([{Short: 'listener beta (idle)'}]);
+addCallback('announce', ['emit'], (msg) => {
+	setDescriptions([{Short: 'listener beta (heard: ' + msg.message + ')'}]);
+});
+`
+	if err := ts.WriteSource(listener2Path, listener2Source); err != nil {
+		t.Fatalf("failed to create %s: %v", listener2Path, err)
+	}
+	if _, err := tc.createObject(listener2Path); err != nil {
+		t.Fatalf("create listener2: %v", err)
+	}
+
+	// Broadcaster - uses emitToLocation to broadcast to all in the room
+	broadcasterPath := uniqueSourcePath("broadcaster")
+	broadcasterSource := `setDescriptions([{Short: 'broadcaster orb'}]);
+addCallback('broadcast', ['action'], (msg) => {
+	emitToLocation(getLocation(), 'announce', {message: 'hello all'});
+	setDescriptions([{Short: 'broadcaster orb (sent)'}]);
+});
+`
+	if err := ts.WriteSource(broadcasterPath, broadcasterSource); err != nil {
+		t.Fatalf("failed to create %s: %v", broadcasterPath, err)
+	}
+	if _, err := tc.createObject(broadcasterPath); err != nil {
+		t.Fatalf("create broadcaster: %v", err)
+	}
+
+	// Issue the broadcast command
+	if err := tc.sendLine("broadcast"); err != nil {
+		t.Fatalf("broadcast command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("broadcast command did not complete")
+	}
+
+	// Both listeners should receive the broadcast
+	output, found := tc.waitForLookMatchFunc(func(s string) bool {
+		return strings.Contains(s, "listener alpha (heard: hello all)") &&
+			strings.Contains(s, "listener beta (heard: hello all)")
+	}, defaultWaitTimeout)
+	if !found {
+		t.Fatalf("both listeners should have received broadcast: %q", output)
+	}
+}
+
+// TestEmitToLocationWithChallenges tests emitToLocation() with skill challenges.
+func TestEmitToLocationWithChallenges(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "emitToLocChal"); err != nil {
+		t.Fatalf("failed to enter isolated room: %v", err)
+	}
+
+	// Create a broadcast room for this test
+	broadcastRoomPath := uniqueSourcePath("chalbroadcastroom")
+	broadcastRoomSource := `setDescriptions([{Short: 'telepathy chamber', Long: 'A room for telepathic broadcasts.'}]);
+setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
+`
+	if err := ts.WriteSource(broadcastRoomPath, broadcastRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", broadcastRoomPath, err)
+	}
+	broadcastRoomID, err := tc.createObject(broadcastRoomPath)
+	if err != nil {
+		t.Fatalf("create chalbroadcastroom: %v", err)
+	}
+
+	// Enter the broadcast room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", broadcastRoomID)); err != nil {
+		t.Fatalf("/enter broadcast room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter broadcast room did not complete")
+	}
+
+	// Sensitive ear - high telepathy, should receive
+	sensitiveEarPath := uniqueSourcePath("sensitiveear")
+	sensitiveEarSource := `setDescriptions([{Short: 'sensitive ear (idle)'}]);
+setSkills({telepathy: {Practical: 150, Theoretical: 150}});
+addCallback('mindcast', ['emit'], (msg) => {
+	setDescriptions([{Short: 'sensitive ear (heard: ' + msg.thought + ')'}]);
+});
+`
+	if err := ts.WriteSource(sensitiveEarPath, sensitiveEarSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sensitiveEarPath, err)
+	}
+	if _, err := tc.createObject(sensitiveEarPath); err != nil {
+		t.Fatalf("create sensitiveear: %v", err)
+	}
+
+	// Deaf ear - low telepathy, should NOT receive
+	deafEarPath := uniqueSourcePath("deafear")
+	deafEarSource := `setDescriptions([{Short: 'deaf ear (idle)'}]);
+setSkills({telepathy: {Practical: 5, Theoretical: 5}});
+addCallback('mindcast', ['emit'], (msg) => {
+	setDescriptions([{Short: 'deaf ear (heard: ' + msg.thought + ')'}]);
+});
+`
+	if err := ts.WriteSource(deafEarPath, deafEarSource); err != nil {
+		t.Fatalf("failed to create %s: %v", deafEarPath, err)
+	}
+	if _, err := tc.createObject(deafEarPath); err != nil {
+		t.Fatalf("create deafear: %v", err)
+	}
+
+	// Telepathic broadcaster - uses emitToLocation with telepathy challenge
+	telepathPath := uniqueSourcePath("telepath")
+	telepathSource := `setDescriptions([{Short: 'telepath orb'}]);
+addCallback('mindspeak', ['action'], (msg) => {
+	emitToLocation(getLocation(), 'mindcast', {thought: 'secret thought'}, [{Skill: 'telepathy', Level: 50}]);
+	setDescriptions([{Short: 'telepath orb (sent)'}]);
+});
+`
+	if err := ts.WriteSource(telepathPath, telepathSource); err != nil {
+		t.Fatalf("failed to create %s: %v", telepathPath, err)
+	}
+	if _, err := tc.createObject(telepathPath); err != nil {
+		t.Fatalf("create telepath: %v", err)
+	}
+
+	// Issue the telepathic broadcast
+	if err := tc.sendLine("mindspeak"); err != nil {
+		t.Fatalf("mindspeak command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("mindspeak command did not complete")
+	}
+
+	// Only the sensitive ear should receive the telepathic broadcast
+	output, found := tc.waitForLookMatch("sensitive ear (heard: secret thought)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("high-telepathy listener should have received challenged broadcast: %q", output)
+	}
+
+	// The deaf ear should NOT have received the broadcast (still idle)
+	if strings.Contains(output, "deaf ear (heard:") {
+		t.Fatalf("low-telepathy listener should NOT have received challenged broadcast: %q", output)
+	}
+	if !strings.Contains(output, "deaf ear (idle)") {
+		t.Fatalf("deaf ear should still be idle: %q", output)
+	}
+}
+
 // TestAddDelWiz tests /addwiz and /delwiz commands.
 func TestAddDelWiz(t *testing.T) {
 	if testing.Short() {
