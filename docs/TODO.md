@@ -24,8 +24,9 @@ Known issues and tasks to address.
 - `TestSetInterval` - setInterval()/clearInterval() periodic events
 - `TestIntervalsCommand` - /intervals wizard command
 - `TestCreateRemoveObject` - createObject()/removeObject() JS APIs
+- `TestRemoveCallback` - removeCallback() JS API
 
-**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~17 test sections remain in `RunAll`.
+**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~16 test sections remain in `RunAll`.
 
 **Priority:** Low - purely organizational improvement.
 

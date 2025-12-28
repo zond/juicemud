@@ -1445,3 +1445,111 @@ addCallback('vanish', ['action'], (msg) => {
 		t.Fatal("/remove spawner did not complete")
 	}
 }
+
+// TestRemoveCallback tests the removeCallback() JS API.
+func TestRemoveCallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions with other tests
+	if _, err := tc.enterIsolatedRoom(ts, "removeCallback"); err != nil {
+		t.Fatalf("failed to enter isolated room for removeCallback test: %v", err)
+	}
+
+	// Create an object that has a callback, then removes it
+	sourcePath := uniqueSourcePath("callback_test")
+	removeCallbackSource := `setDescriptions([{Short: 'callback test object (has callback) proof:0'}]);
+addCallback('ping', ['action'], (msg) => {
+	// This callback will be removed by 'disable'
+	setDescriptions([{Short: 'callback test object (ping received) proof:' + (state.proofCount || 0)}]);
+});
+addCallback('pingproof', ['action'], (msg) => {
+	// This callback is never removed, proves the action was dispatched
+	state.proofCount = (state.proofCount || 0) + 1;
+});
+addCallback('disable', ['action'], (msg) => {
+	removeCallback('ping');
+	setDescriptions([{Short: 'callback test object (ping disabled) proof:' + (state.proofCount || 0)}]);
+});
+addCallback('checkproof', ['action'], (msg) => {
+	// Used to verify proof count without triggering ping
+	setDescriptions([{Short: 'callback test object (checked) proof:' + (state.proofCount || 0)}]);
+});
+`
+	if err := ts.WriteSource(sourcePath, removeCallbackSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+	if _, err := tc.createObject(sourcePath); err != nil {
+		t.Fatalf("create callback_test: %v", err)
+	}
+
+	// First verify ping callback works - also triggers pingproof (proof:0->1)
+	if err := tc.sendLine("ping"); err != nil {
+		t.Fatalf("ping command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("ping command did not complete")
+	}
+	// Also trigger pingproof to update proof count
+	if err := tc.sendLine("pingproof"); err != nil {
+		t.Fatalf("pingproof command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("pingproof command did not complete")
+	}
+	// Check proof via checkproof action (should be 1 after pingproof)
+	if err := tc.sendLine("checkproof"); err != nil {
+		t.Fatalf("checkproof command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("checkproof command did not complete")
+	}
+	_, found := tc.waitForObject("*callback test*checked*proof:1*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("callback test object should show proof:1 after pingproof")
+	}
+
+	// Now disable the callback (removes 'ping' but not 'pingproof')
+	if err := tc.sendLine("disable"); err != nil {
+		t.Fatalf("disable command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("disable command did not complete")
+	}
+	_, found = tc.waitForObject("*callback test*ping disabled*proof:1*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("callback test object did not confirm ping disabled with proof:1")
+	}
+
+	// Ping again - should NOT change description since callback was removed
+	if err := tc.sendLine("ping"); err != nil {
+		t.Fatalf("second ping command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("second ping command did not complete")
+	}
+	// pingproof again to prove action was dispatched (proof:1->2)
+	if err := tc.sendLine("pingproof"); err != nil {
+		t.Fatalf("second pingproof command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("second pingproof command did not complete")
+	}
+	// Verify via checkproof: proof should be 2 AND description should still be "ping disabled"
+	if err := tc.sendLine("checkproof"); err != nil {
+		t.Fatalf("final checkproof command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("final checkproof command did not complete")
+	}
+	// proof:2 proves pingproof was called (action dispatched), but description shows "checked" not "ping received"
+	// which proves the 'ping' callback was removed
+	_, found = tc.waitForObject("*callback test*checked*proof:2*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("callback test object should show 'checked' with proof:2, proving ping action was dispatched but callback removed")
+	}
+}
