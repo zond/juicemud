@@ -1722,6 +1722,240 @@ addCallback('disablelearn', ['action'], (msg) => {
 	}
 }
 
+// TestAddDelWiz tests /addwiz and /delwiz commands.
+func TestAddDelWiz(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Create a unique second user to test granting/revoking wizard status
+	testUsername := fmt.Sprintf("wiztest_%d", sourceCounter.Add(1))
+	testPassword := "wizpass123"
+
+	tc2, err := createUser(ts.SSHAddr(), testUsername, testPassword)
+	if err != nil {
+		t.Fatalf("createUser %s: %v", testUsername, err)
+	}
+	defer tc2.Close()
+
+	// Verify new user is not a wizard (can't use /inspect)
+	if err := tc2.sendLine("/inspect"); err != nil {
+		t.Fatalf("/inspect as non-wizard: %v", err)
+	}
+	output, ok := tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/inspect did not complete: %q", output)
+	}
+	// Non-wizards should NOT see JSON output from /inspect (check for Id field in JSON)
+	if strings.Contains(output, "\"Id\":") {
+		t.Fatalf("non-wizard should not see /inspect output: %q", output)
+	}
+
+	// Grant wizard status using /addwiz (tc is the owner)
+	if err := tc.sendLine("/addwiz " + testUsername); err != nil {
+		t.Fatalf("/addwiz command: %v", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/addwiz command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Granted wizard privileges") {
+		t.Fatalf("/addwiz should confirm grant: %q", output)
+	}
+
+	// Reconnect as the test user to pick up wizard status
+	tc2.Close()
+	tc2, err = loginUser(ts.SSHAddr(), testUsername, testPassword)
+	if err != nil {
+		t.Fatalf("loginUser %s after /addwiz: %v", testUsername, err)
+	}
+	defer tc2.Close()
+
+	// Verify the test user can now use /inspect (wizard command)
+	if err := tc2.sendLine("/inspect"); err != nil {
+		t.Fatalf("/inspect as wizard: %v", err)
+	}
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/inspect as wizard did not complete: %q", output)
+	}
+	// Wizards should see JSON output from /inspect
+	if !strings.Contains(output, "\"Id\":") {
+		t.Fatalf("wizard should see /inspect output: %q", output)
+	}
+
+	// Revoke wizard status using /delwiz
+	if err := tc.sendLine("/delwiz " + testUsername); err != nil {
+		t.Fatalf("/delwiz command: %v", err)
+	}
+	output, ok = tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/delwiz command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Revoked wizard privileges") {
+		t.Fatalf("/delwiz should confirm revoke: %q", output)
+	}
+
+	// Reconnect to pick up revoked status
+	tc2.Close()
+	tc2, err = loginUser(ts.SSHAddr(), testUsername, testPassword)
+	if err != nil {
+		t.Fatalf("loginUser %s after /delwiz: %v", testUsername, err)
+	}
+	defer tc2.Close()
+
+	// Verify the test user can no longer use /inspect
+	if err := tc2.sendLine("/inspect"); err != nil {
+		t.Fatalf("/inspect after revoke: %v", err)
+	}
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/inspect after revoke did not complete: %q", output)
+	}
+	// Revoked user should NOT see JSON output from /inspect
+	if strings.Contains(output, "\"Id\":") {
+		t.Fatalf("revoked user should not see /inspect output: %q", output)
+	}
+
+	// Test that non-owner cannot use /addwiz
+	// Grant wizard back to test user (but not owner)
+	if err := tc.sendLine("/addwiz " + testUsername); err != nil {
+		t.Fatalf("/addwiz to restore: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/addwiz to restore did not complete")
+	}
+
+	// Reconnect test user as wizard
+	tc2.Close()
+	tc2, err = loginUser(ts.SSHAddr(), testUsername, testPassword)
+	if err != nil {
+		t.Fatalf("loginUser %s as wizard: %v", testUsername, err)
+	}
+	defer tc2.Close()
+
+	// Try to use /addwiz as non-owner wizard (trying to modify the main test user)
+	if err := tc2.sendLine("/addwiz testuser"); err != nil {
+		t.Fatalf("/addwiz as non-owner: %v", err)
+	}
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/addwiz as non-owner did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Only owners") {
+		t.Fatalf("non-owner should be denied /addwiz: %q", output)
+	}
+
+	// Try to use /delwiz as non-owner wizard
+	if err := tc2.sendLine("/delwiz testuser"); err != nil {
+		t.Fatalf("/delwiz as non-owner: %v", err)
+	}
+	output, ok = tc2.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/delwiz as non-owner did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Only owners") {
+		t.Fatalf("non-owner should be denied /delwiz: %q", output)
+	}
+}
+
+// TestRoomAndSiblingActionHandlers tests room and sibling action handlers.
+func TestRoomAndSiblingActionHandlers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "actionHandlers"); err != nil {
+		t.Fatalf("failed to enter isolated room: %v", err)
+	}
+
+	// Create a room that handles the "shake" action
+	actionRoomPath := uniqueSourcePath("actionroom")
+	actionRoomSource := `setDescriptions([{Short: 'shaky chamber', Long: 'A small room with unstable walls.'}]);
+setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
+addCallback('shake', ['action'], (msg) => {
+	setDescriptions([{Short: 'shaky chamber (shaken!)', Long: 'The walls have just been shaken!'}]);
+});
+`
+	if err := ts.WriteSource(actionRoomPath, actionRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", actionRoomPath, err)
+	}
+
+	// Create the room
+	actionRoomID, err := tc.createObject(actionRoomPath)
+	if err != nil {
+		t.Fatalf("create actionroom: %v", err)
+	}
+
+	// Enter the action room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", actionRoomID)); err != nil {
+		t.Fatalf("/enter actionroom: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter actionroom did not complete")
+	}
+
+	// Issue "shake" command - the room should handle this action
+	if err := tc.sendLine("shake"); err != nil {
+		t.Fatalf("shake command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("shake command did not complete")
+	}
+
+	// Wait for the room's description to update
+	output, found := tc.waitForLookMatch("shaky chamber (shaken!)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("room action handler should have updated description: %q", output)
+	}
+
+	// Now test sibling action handler
+	// Create an object that handles the "poke" action
+	pokeablePath := uniqueSourcePath("pokeable")
+	pokeableSource := `setDescriptions([{Short: 'pokeable orb'}]);
+addCallback('poke', ['action'], (msg) => {
+	setDescriptions([{Short: 'pokeable orb (poked!)'}]);
+});
+`
+	if err := ts.WriteSource(pokeablePath, pokeableSource); err != nil {
+		t.Fatalf("failed to create %s: %v", pokeablePath, err)
+	}
+
+	// Create the pokeable object (it will be created in our current room)
+	if _, err := tc.createObject(pokeablePath); err != nil {
+		t.Fatalf("create pokeable: %v", err)
+	}
+
+	// Issue "poke" command - the sibling object should handle this action
+	if err := tc.sendLine("poke"); err != nil {
+		t.Fatalf("poke command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("poke command did not complete")
+	}
+
+	// Wait for the sibling's description to update
+	output, found = tc.waitForLookMatch("pokeable orb (poked!)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("sibling action handler should have updated description: %q", output)
+	}
+
+	// Return to genesis
+	if err := tc.sendLine("out"); err != nil {
+		t.Fatalf("out command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("out command did not complete")
+	}
+}
+
 // TestGetNeighbourhood tests the getNeighbourhood() JS API.
 func TestGetNeighbourhood(t *testing.T) {
 	if testing.Short() {
