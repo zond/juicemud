@@ -2,23 +2,6 @@
 
 Known issues and tasks to address.
 
-## Code Quality: Large Function addObjectCallbacks
-
-**Location:** `game/processing.go:556-909`
-
-**Issue:** `addObjectCallbacks` is over 350 lines with deeply nested callback definitions. Hard to test and maintain.
-
-**Fix:** Extract each callback into its own method:
-```go
-func (g *Game) makeSetTimeoutCallback(ctx context.Context, object *structs.Object) func(...) *v8go.Value
-func (g *Game) makeEmitCallback(ctx context.Context, object *structs.Object) func(...) *v8go.Value
-// etc.
-```
-
-**Priority:** Low - purely organizational improvement.
-
-**Date identified:** 2025-12-25
-
 ## Code Quality: Split Integration Tests
 
 **Location:** `integration_test/run_all.go` (3000+ lines)

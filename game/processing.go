@@ -561,6 +561,7 @@ func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
 }
 
 func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, callbacks js.Callbacks) {
+	// --- Property getters/setters ---
 	// Location and Content are read-only - use moveObject() for safe modifications
 	addGetter("Location", &object.Unsafe.Location, object, callbacks)
 	addGetter("Content", &object.Unsafe.Content, object, callbacks)
@@ -574,6 +575,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	addGetSetPair("Learning", &object.Unsafe.Learning, object, callbacks)
 	addGetSetPair("Movement", &object.Unsafe.Movement, object, callbacks)
 
+	// --- Object movement ---
 	// moveObject(objectId, destinationId) - safely moves an object using storage.MoveObject
 	// which validates containment, prevents cycles, and atomically updates all references.
 	callbacks["moveObject"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
@@ -601,6 +603,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		return nil
 	}
 
+	// --- Timers ---
 	callbacks["setTimeout"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 3 || !args[1].IsString() {
@@ -693,6 +696,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		return nil
 	}
 
+	// --- Events ---
 	callbacks["emit"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		// Accept 3 or 4 arguments
@@ -791,6 +795,8 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 
 		return nil
 	}
+
+	// --- Object queries and lifecycle ---
 	callbacks["getNeighbourhood"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		_, neighbourhood, err := g.loadDeepNeighbourhoodOf(ctx, object.GetId())
 		if err != nil {
