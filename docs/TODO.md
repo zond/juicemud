@@ -19,8 +19,10 @@ Known issues and tasks to address.
 - `TestCircularContainerPrevention` - circular container prevention
 - `TestExitAtUniverseRoot` - /exit at genesis edge case
 - `TestRemoveCurrentLocation` - /remove current location edge case
+- `TestJavaScriptImports` - @import directive for JS modules
+- `TestExitFailedEvent` - exitFailed event on challenge failure
 
-**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~22 test sections remain in `RunAll`.
+**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~20 test sections remain in `RunAll`.
 
 **Priority:** Low - purely organizational improvement.
 

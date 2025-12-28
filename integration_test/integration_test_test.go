@@ -823,3 +823,277 @@ setExits([{Name: 'out', Destination: 'genesis'}]);
 		t.Fatal("out from removetestroom did not complete")
 	}
 }
+
+// TestJavaScriptImports tests the @import directive for JavaScript modules.
+func TestJavaScriptImports(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create a library file that exports a utility function
+	libPath := uniqueSourcePath("lib/greeter")
+	libSource := `// Library that provides greeting functionality
+var greeter = greeter || {};
+greeter.hello = function(name) {
+    return 'Hello, ' + name + '!';
+};
+`
+	if err := ts.WriteSource(libPath, libSource); err != nil {
+		t.Fatalf("failed to create %s: %v", libPath, err)
+	}
+
+	// Create an object that imports the library
+	importerPath := uniqueSourcePath("importer")
+	importerSource := fmt.Sprintf(`// @import %s
+
+addCallback('greet', ['action'], function(msg) {
+    // Use the imported greeter library
+    var greeting = greeter.hello('World');
+    setDescriptions([{Short: 'greeter (' + greeting + ')'}]);
+    log('Greeting result: ' + greeting);
+    return true;
+});
+
+setDescriptions([{Short: 'greeter (idle)'}]);
+`, libPath)
+	if err := ts.WriteSource(importerPath, importerSource); err != nil {
+		t.Fatalf("failed to create %s: %v", importerPath, err)
+	}
+
+	// Create an object using the importer source
+	importerID, err := tc.createObject(importerPath)
+	if err != nil {
+		t.Fatalf("create importer object: %v", err)
+	}
+
+	// Verify the object was created with initial description
+	output, ok := tc.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("look for importer did not complete")
+	}
+	if !strings.Contains(output, "greeter (idle)") {
+		t.Fatalf("importer should show initial 'greeter (idle)' description: %q", output)
+	}
+
+	// Invoke the greet command which uses the imported library
+	output, ok = tc.sendCommand("greet", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("greet command did not complete")
+	}
+
+	// Verify the command worked by checking the updated description
+	greetLookOutput, ok := tc.waitForLookMatch("greeter (Hello, World!)", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("greet command should update description to show greeting, got: %q", greetLookOutput)
+	}
+
+	// Test relative imports - create a chain of imports
+	mobsBasePath := uniqueSourcePath("mobs/base")
+	baseSource := `// Base functionality for mobs
+var mobBase = mobBase || {};
+mobBase.species = 'unknown';
+mobBase.describe = function() {
+    return 'A ' + this.species + ' creature';
+};
+`
+	if err := ts.WriteSource(mobsBasePath, baseSource); err != nil {
+		t.Fatalf("failed to create %s: %v", mobsBasePath, err)
+	}
+
+	// Dog uses relative import to base - need to compute relative path
+	// Since both are in unique paths, we'll use absolute path for simplicity
+	dogPath := uniqueSourcePath("mobs/dog")
+	dogSource := fmt.Sprintf(`// @import %s
+
+// Override species
+mobBase.species = 'canine';
+
+addCallback('bark', ['action'], (msg) => {
+    setDescriptions([{Short: 'dog (' + mobBase.describe() + ')'}]);
+    return true;
+});
+
+setDescriptions([{Short: 'dog (sleeping)'}]);
+`, mobsBasePath)
+	if err := ts.WriteSource(dogPath, dogSource); err != nil {
+		t.Fatalf("failed to create %s: %v", dogPath, err)
+	}
+
+	// Create a dog object
+	dogID, err := tc.createObject(dogPath)
+	if err != nil {
+		t.Fatalf("create dog object: %v", err)
+	}
+
+	// Verify initial state
+	output, ok = tc.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("look for dog did not complete")
+	}
+	if !strings.Contains(output, "dog (sleeping)") {
+		t.Fatalf("dog should show initial 'dog (sleeping)' description: %q", output)
+	}
+
+	// Invoke bark command which uses the imported base
+	output, ok = tc.sendCommand("bark", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("bark command did not complete")
+	}
+
+	// Verify the command worked with the imported base functionality
+	_, ok = tc.waitForLookMatch("dog (A canine creature)", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("bark command should update description using imported base")
+	}
+
+	// Clean up test objects
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", importerID)); err != nil {
+		t.Fatalf("/remove importer: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/remove importer did not complete")
+	}
+
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", dogID)); err != nil {
+		t.Fatalf("/remove dog: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/remove dog did not complete")
+	}
+}
+
+// TestExitFailedEvent tests the exitFailed event when exit challenges fail.
+func TestExitFailedEvent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis for exitFailed: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis for exitFailed did not complete")
+	}
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		t.Fatal("should be in genesis for exitFailed test")
+	}
+
+	// Create a room that:
+	// 1. Has an exit with UseChallenges and a Message
+	// 2. Registers callback for 'exitFailed' to update description
+	exitFailedRoomPath := uniqueSourcePath("exitfailed_room")
+	exitFailedRoomSource := `// Room for testing exitFailed event
+setDescriptions([{
+	Short: 'Exit Failed Test Room (idle)',
+	Unique: true,
+	Long: 'A room for testing the exitFailed event.',
+}]);
+setExits([
+	{
+		Descriptions: [{Short: 'out'}],
+		Destination: 'genesis',
+	},
+	{
+		Descriptions: [{Short: 'blocked'}],
+		Destination: 'genesis',
+		UseChallenges: [{Skill: 'telekinesis', Level: 100, Message: 'The door remains firmly shut.'}],
+	},
+]);
+addCallback('exitFailed', ['emit'], (msg) => {
+	// Update room description to confirm we received the event
+	var exitName = msg.exit && msg.exit.Descriptions && msg.exit.Descriptions[0] ? msg.exit.Descriptions[0].Short : 'unknown';
+	var subjectId = msg.subject && msg.subject.Id ? msg.subject.Id : 'unknown';
+	setDescriptions([{
+		Short: 'Exit Failed Test Room (saw: ' + exitName + ', by: ' + subjectId.substring(0, 8) + ')',
+		Unique: true,
+		Long: 'A room for testing the exitFailed event.',
+	}]);
+});
+`
+	if err := ts.WriteSource(exitFailedRoomPath, exitFailedRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", exitFailedRoomPath, err)
+	}
+
+	// Create the room
+	exitFailedRoomID, err := tc.createObject(exitFailedRoomPath)
+	if err != nil {
+		t.Fatalf("create exitfailed_room: %v", err)
+	}
+
+	// Enter the room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", exitFailedRoomID)); err != nil {
+		t.Fatalf("/enter exitfailed_room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter exitfailed_room did not complete")
+	}
+	if !tc.waitForLocation("", exitFailedRoomID, defaultWaitTimeout) {
+		t.Fatal("user did not move to exitfailed_room")
+	}
+
+	// Verify initial room description
+	output, ok := tc.waitForLookMatch("Exit Failed Test Room (idle)", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("look did not show initial exitfailed room description: %q", output)
+	}
+
+	// Try to use the blocked exit (should fail - no telekinesis skill)
+	output, ok = tc.sendCommand("blocked", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("blocked exit command did not complete")
+	}
+
+	// Verify the challenge message was printed
+	if !strings.Contains(output, "The door remains firmly shut.") {
+		t.Fatalf("blocked exit should print challenge message: %q", output)
+	}
+
+	// Verify user is still in the room
+	selfInspect, err := tc.inspect("")
+	if err != nil {
+		t.Fatalf("failed to inspect self after exitFailed: %v", err)
+	}
+	if selfInspect.GetLocation() != exitFailedRoomID {
+		t.Fatalf("user should still be in exitfailed_room after failed exit, but is in %q", selfInspect.GetLocation())
+	}
+
+	// Wait for the room's description to change (confirms exitFailed event was received)
+	output, ok = tc.waitForLookMatch("Exit Failed Test Room (saw: blocked", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("room should have received exitFailed event and updated description: %q", output)
+	}
+
+	// Cleanup: exit back to genesis
+	if err := tc.sendLine("out"); err != nil {
+		t.Fatalf("out exit command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("out exit command did not complete")
+	}
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		t.Fatal("user did not move to genesis via 'out' exit")
+	}
+
+	// Remove the test room
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", exitFailedRoomID)); err != nil {
+		t.Fatalf("/remove exitfailed_room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/remove exitfailed_room did not complete")
+	}
+}
