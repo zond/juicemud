@@ -105,15 +105,22 @@ func (r *Resolver) Resolve(ctx context.Context, sourcePath string, load LoadFunc
 		return nil, err
 	}
 
-	// Cache the result
+	// Cache the result, with double-check in case another goroutine cached it first
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.cache[sourcePath]; ok {
+		// Another goroutine cached this while we were resolving; use their result
+		return &ResolveResult{
+			Source:   existing.source,
+			MaxMtime: existing.maxMtime,
+			Deps:     existing.deps,
+		}, nil
+	}
 	r.cache[sourcePath] = &cacheEntry{
 		source:   source,
 		maxMtime: maxMtime,
 		deps:     deps,
 	}
-	r.mu.Unlock()
-
 	return &ResolveResult{
 		Source:   source,
 		MaxMtime: maxMtime,

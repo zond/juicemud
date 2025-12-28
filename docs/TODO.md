@@ -2,27 +2,6 @@
 
 Known issues and tasks to address.
 
-## Code Quality: Import Resolver Cache Double-Check
-
-**Location:** `js/imports/imports.go:81-122`
-
-**Issue:** The cache lookup uses RLock, then does expensive resolution, then caches with Lock. Two goroutines could both miss the cache and do redundant work. Not a correctness issue, but wasted computation.
-
-**Fix:** Add double-check inside the Lock:
-```go
-r.mu.Lock()
-if existing, ok := r.cache[sourcePath]; ok {
-    r.mu.Unlock()
-    return &ResolveResult{Source: existing.source, ...}, nil
-}
-r.cache[sourcePath] = &cacheEntry{...}
-r.mu.Unlock()
-```
-
-**Priority:** Low - only affects concurrent first-access to same source.
-
-**Date identified:** 2025-12-25
-
 ## Code Quality: Large Function addObjectCallbacks
 
 **Location:** `game/processing.go:556-909`
