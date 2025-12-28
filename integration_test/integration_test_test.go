@@ -1097,3 +1097,172 @@ addCallback('exitFailed', ['emit'], (msg) => {
 		t.Fatal("/remove exitfailed_room did not complete")
 	}
 }
+
+// TestSetInterval tests setInterval() and clearInterval() for periodic events.
+func TestSetInterval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis for interval: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis for interval did not complete")
+	}
+
+	// Create an object that uses setInterval to count ticks
+	// Minimum interval is 5000ms (5 seconds)
+	sourcePath := uniqueSourcePath("pulsing_gem")
+	intervalSource := `
+// Only initialize on first run (state.tickCount will be undefined)
+if (state.tickCount === undefined) {
+	state.tickCount = 0;
+	state.intervalId = setInterval(5000, 'tick', {});
+	setDescriptions([{Short: 'pulsing gem (0 pulses)'}]);
+}
+
+addCallback('tick', ['emit'], (msg) => {
+	state.tickCount = (state.tickCount || 0) + 1;
+	setDescriptions([{Short: 'pulsing gem (' + state.tickCount + ' pulses)'}]);
+});
+
+addCallback('halt', ['action'], (msg) => {
+	if (state.intervalId) {
+		clearInterval(state.intervalId);
+		state.intervalId = null;
+		setDescriptions([{Short: 'dormant gem (halted at ' + state.tickCount + ')'}]);
+	}
+});
+`
+	if err := ts.WriteSource(sourcePath, intervalSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+
+	pulsingGemID, err := tc.createObject(sourcePath)
+	if err != nil {
+		t.Fatalf("create pulsing_gem: %v", err)
+	}
+
+	// Verify object starts with 0 pulses
+	output, found := tc.waitForLookMatch("pulsing gem (0 pulses)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("pulsing gem should start with 0 pulses: %q", output)
+	}
+
+	// Wait for the first tick (interval is 5000ms, need ~6s to see 1 pulse)
+	intervalWaitTimeout := 12 * time.Second
+	output, found = tc.waitForLookMatch("1 pulses", intervalWaitTimeout)
+	if !found {
+		t.Fatalf("interval should have fired at least once: %q", output)
+	}
+
+	// Halt the interval
+	if err := tc.sendLine("halt"); err != nil {
+		t.Fatalf("halt command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("halt command did not complete")
+	}
+
+	// Verify it shows dormant/halted
+	output, found = tc.waitForLookMatch("dormant gem (halted at", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("gem should show halted: %q", output)
+	}
+
+	// Record the pulse count when halted
+	var haltedPulses int
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "halted at") {
+			parts := strings.Split(line, "halted at ")
+			if len(parts) > 1 {
+				numStr := strings.TrimSuffix(strings.TrimSpace(parts[1]), ")")
+				fmt.Sscanf(numStr, "%d", &haltedPulses)
+			}
+		}
+	}
+
+	// Wait longer than the interval period to verify no more pulses occurred.
+	// NOTE: A fixed sleep is unavoidable here because we're testing that an event
+	// does NOT fire - there's nothing to poll for or wait on.
+	time.Sleep(6 * time.Second)
+	output, ok := tc.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("look after halt did not complete")
+	}
+	// The description should still show the same halted pulse count
+	if !strings.Contains(output, fmt.Sprintf("halted at %d", haltedPulses)) {
+		t.Fatalf("interval should not fire after clearInterval: %q (expected halted at %d)", output, haltedPulses)
+	}
+
+	// Cleanup
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", pulsingGemID)); err != nil {
+		t.Fatalf("/remove pulsing_gem: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/remove pulsing_gem did not complete")
+	}
+}
+
+// TestIntervalsCommand tests the /intervals wizard command for listing intervals.
+func TestIntervalsCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create a new interval object (minimum interval is 5000ms)
+	sourcePath := uniqueSourcePath("interval_lister")
+	intervalListSource := `
+setDescriptions([{Short: 'interval lister'}]);
+if (state.intervalId === undefined) {
+	state.intervalId = setInterval(5000, 'heartbeat', {type: 'beat'});
+}
+`
+	if err := ts.WriteSource(sourcePath, intervalListSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+
+	intervalListerID, err := tc.createObject(sourcePath)
+	if err != nil {
+		t.Fatalf("create interval_lister: %v", err)
+	}
+
+	// Check /intervals command shows the interval
+	output, ok := tc.sendCommand("/intervals", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/intervals command did not complete")
+	}
+	if !strings.Contains(output, intervalListerID) {
+		t.Fatalf("/intervals should show object ID: %q", output)
+	}
+	if !strings.Contains(output, "heartbeat") {
+		t.Fatalf("/intervals should show event name 'heartbeat': %q", output)
+	}
+	if !strings.Contains(output, "5000") {
+		t.Fatalf("/intervals should show interval ms: %q", output)
+	}
+
+	// Cleanup
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", intervalListerID)); err != nil {
+		t.Fatalf("/remove interval_lister: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/remove interval_lister did not complete")
+	}
+}

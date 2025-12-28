@@ -21,8 +21,10 @@ Known issues and tasks to address.
 - `TestRemoveCurrentLocation` - /remove current location edge case
 - `TestJavaScriptImports` - @import directive for JS modules
 - `TestExitFailedEvent` - exitFailed event on challenge failure
+- `TestSetInterval` - setInterval()/clearInterval() periodic events
+- `TestIntervalsCommand` - /intervals wizard command
 
-**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~20 test sections remain in `RunAll`.
+**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~18 test sections remain in `RunAll`.
 
 **Priority:** Low - purely organizational improvement.
 
