@@ -4,13 +4,19 @@ Known issues and tasks to address.
 
 ## Code Quality: Split Integration Tests
 
-**Location:** `integration_test/run_all.go` (3000+ lines)
+**Location:** `integration_test/run_all.go` (2700+ lines)
 
 **Issue:** All integration tests in one file makes it hard to find specific tests.
 
-**Progress:** Infrastructure is in place (TestMain handles setup, package variables for shared state, `uniqueSourcePath` helper for test isolation). Individual tests can now be incrementally extracted from `RunAll` into `TestXxx` functions.
+**Progress:** Infrastructure is in place (TestMain handles setup, package variables for shared state, `uniqueSourcePath` helper for test isolation). The following tests have been extracted from `RunAll` into individual `TestXxx` functions in `integration_test_test.go`:
+- `TestSetTimeout` - setTimeout() delayed events
+- `TestStatsCommand` - /stats wizard command
+- `TestStatePersistence` - Object state persistence
+- `TestCreatedEvent` - 'created' event with creator info
+- `TestLookTarget` - look command with target
+- `TestRemoveCommand` - /remove wizard command
 
-**Remaining work:** Extract test sections one at a time into individual `TestXxx` functions.
+**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~26 test sections remain in `RunAll`.
 
 **Priority:** Low - purely organizational improvement.
 
