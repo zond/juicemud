@@ -1722,6 +1722,254 @@ addCallback('disablelearn', ['action'], (msg) => {
 	}
 }
 
+// TestGetNeighbourhood tests the getNeighbourhood() JS API.
+func TestGetNeighbourhood(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis where we have exits to other rooms
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create a test room connected to genesis
+	neighborRoomPath := uniqueSourcePath("neighbor_room")
+	neighborRoomSource := `setDescriptions([{Short: 'Neighbor Room', Unique: true, Long: 'A neighboring room.'}]);
+setExits([{Descriptions: [{Short: 'back'}], Destination: 'genesis'}]);
+`
+	if err := ts.WriteSource(neighborRoomPath, neighborRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", neighborRoomPath, err)
+	}
+
+	neighborRoomID, err := tc.createObject(neighborRoomPath)
+	if err != nil {
+		t.Fatalf("create neighbor_room: %v", err)
+	}
+
+	// Create a scout room (the room we'll be in) with an exit to the neighbor room
+	scoutRoomPath := uniqueSourcePath("scout_room")
+	scoutRoomSource := fmt.Sprintf(`setDescriptions([{Short: 'Scout Room', Unique: true, Long: 'A room for scouting.'}]);
+setExits([
+	{Descriptions: [{Short: 'north'}], Destination: '%s'},
+	{Descriptions: [{Short: 'out'}], Destination: 'genesis'},
+]);
+`, neighborRoomID)
+	if err := ts.WriteSource(scoutRoomPath, scoutRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", scoutRoomPath, err)
+	}
+
+	scoutRoomID, err := tc.createObject(scoutRoomPath)
+	if err != nil {
+		t.Fatalf("create scout_room: %v", err)
+	}
+
+	// Enter the scout room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", scoutRoomID)); err != nil {
+		t.Fatalf("/enter scout_room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter scout_room did not complete")
+	}
+
+	// Create a scout object that uses getNeighbourhood() on a "survey" action
+	scoutPath := uniqueSourcePath("scout")
+	scoutSource := `setDescriptions([{Short: 'scout drone (idle)'}]);
+addCallback('survey', ['action'], (msg) => {
+	const hood = getNeighbourhood();
+	// Build a report of what we see
+	const locName = hood.Location.Container.Descriptions[0].Short;
+	const contentCount = hood.Location.Content ? Object.keys(hood.Location.Content).length : 0;
+	const neighborKeys = Object.keys(hood.Neighbours || {});
+	const neighborCount = neighborKeys.length;
+	// Get first neighbor's name if any
+	let neighborInfo = 'none';
+	if (neighborCount > 0) {
+		const firstNeighborLoc = hood.Neighbours[neighborKeys[0]];
+		if (firstNeighborLoc && firstNeighborLoc.Container) {
+			neighborInfo = firstNeighborLoc.Container.Descriptions[0].Short;
+		}
+	}
+	setDescriptions([{
+		Short: 'scout drone (loc:' + locName + ' content:' + contentCount + ' neighbors:' + neighborCount + ' first:' + neighborInfo + ')'
+	}]);
+});
+`
+	if err := ts.WriteSource(scoutPath, scoutSource); err != nil {
+		t.Fatalf("failed to create %s: %v", scoutPath, err)
+	}
+	if _, err := tc.createObject(scoutPath); err != nil {
+		t.Fatalf("create scout: %v", err)
+	}
+
+	// Trigger the survey action
+	if err := tc.sendLine("survey"); err != nil {
+		t.Fatalf("survey command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("survey command did not complete")
+	}
+
+	// Wait for the scout to update its description with neighbourhood info
+	// It should see Scout Room as location and have 2 neighbors (neighborRoom and genesis)
+	_, found := tc.waitForObject("*scout*loc:Scout Room*content:*neighbors:2*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("scout did not report neighbourhood info correctly - expected 2 neighbors")
+	}
+
+	// Cleanup
+	if err := tc.sendLine("out"); err != nil {
+		t.Fatalf("out command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("out command did not complete")
+	}
+
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", scoutRoomID)); err != nil {
+		t.Fatalf("/remove scout_room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/remove scout_room did not complete")
+	}
+
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", neighborRoomID)); err != nil {
+		t.Fatalf("/remove neighbor_room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/remove neighbor_room did not complete")
+	}
+}
+
+// TestDebugLog tests /debug and log() functionality.
+func TestDebugLog(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "debugLog"); err != nil {
+		t.Fatalf("failed to enter isolated room for debugLog test: %v", err)
+	}
+
+	// Create an object that logs when triggered via an action
+	sourcePath := uniqueSourcePath("logger")
+	loggerSource := `setDescriptions([{Short: 'logger stone'}]);
+addCallback('trigger', ['action'], (msg) => {
+	log('DEBUG: trigger received with line:', msg.line);
+	setDescriptions([{Short: 'logger stone (triggered)'}]);
+});
+`
+	if err := ts.WriteSource(sourcePath, loggerSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+
+	loggerID, err := tc.createObject(sourcePath)
+	if err != nil {
+		t.Fatalf("create logger: %v", err)
+	}
+
+	// Test 1: Without /debug, log output should NOT appear
+	if err := tc.sendLine("trigger logger"); err != nil {
+		t.Fatalf("trigger without debug: %v", err)
+	}
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("trigger without debug did not complete: %q", output)
+	}
+	// Verify no DEBUG message appears (we're not attached to console)
+	if strings.Contains(output, "DEBUG:") {
+		t.Fatalf("log output should NOT appear without /debug: %q", output)
+	}
+
+	// Wait for object to update its description
+	_, found := tc.waitForLookMatch("logger stone (triggered)", defaultWaitTimeout)
+	if !found {
+		t.Fatal("logger should have updated description after trigger")
+	}
+
+	// Reset the logger for the next test (re-upload resets description to untriggered state)
+	if err := ts.WriteSource(sourcePath, loggerSource); err != nil {
+		t.Fatalf("failed to reset %s: %v", sourcePath, err)
+	}
+
+	// Wait for description to reset
+	_, found = tc.waitForLookMatchFunc(func(s string) bool {
+		return strings.Contains(s, "logger stone") && !strings.Contains(s, "(triggered)")
+	}, defaultWaitTimeout)
+	if !found {
+		t.Fatal("logger should have reset description")
+	}
+
+	// Test 2: Attach console with /debug
+	output, ok = tc.sendCommand(fmt.Sprintf("/debug #%s", loggerID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/debug command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "connected to console") {
+		t.Fatalf("/debug should show 'connected to console': %q", output)
+	}
+
+	// Trigger the logger - now log output should appear
+	if err := tc.sendLine("trigger logger"); err != nil {
+		t.Fatalf("trigger with debug: %v", err)
+	}
+
+	// Wait for output that includes the DEBUG message
+	// The log output appears asynchronously, so we poll
+	found = waitForCondition(defaultWaitTimeout, 100*time.Millisecond, func() bool {
+		output = tc.readUntil(200*time.Millisecond, func(s string) bool {
+			return strings.Contains(s, "DEBUG:")
+		})
+		return strings.Contains(output, "DEBUG: trigger received with line:")
+	})
+	if !found {
+		t.Fatalf("log output should appear with /debug attached: %q", output)
+	}
+
+	// Wait for prompt after the action completes
+	tc.waitForPrompt(defaultWaitTimeout)
+
+	// Test 3: Detach with /undebug
+	output, ok = tc.sendCommand(fmt.Sprintf("/undebug #%s", loggerID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/undebug command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "disconnected from console") {
+		t.Fatalf("/undebug should show 'disconnected from console': %q", output)
+	}
+
+	// Reset the logger again
+	if err := ts.WriteSource(sourcePath, loggerSource); err != nil {
+		t.Fatalf("failed to reset %s again: %v", sourcePath, err)
+	}
+
+	// Wait for description to reset
+	_, found = tc.waitForLookMatchFunc(func(s string) bool {
+		return strings.Contains(s, "logger stone") && !strings.Contains(s, "(triggered)")
+	}, defaultWaitTimeout)
+	if !found {
+		t.Fatal("logger should have reset description again")
+	}
+
+	// Trigger again - log output should NOT appear anymore
+	output, ok = tc.sendCommand("trigger logger", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("trigger after undebug did not complete: %q", output)
+	}
+	if strings.Contains(output, "DEBUG:") {
+		t.Fatalf("log output should NOT appear after /undebug: %q", output)
+	}
+}
+
 // TestSkillConfig tests getSkillConfig() and casSkillConfig() JS APIs.
 func TestSkillConfig(t *testing.T) {
 	if testing.Short() {

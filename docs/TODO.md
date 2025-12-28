@@ -4,7 +4,7 @@ Known issues and tasks to address.
 
 ## Code Quality: Split Integration Tests
 
-**Location:** `integration_test/run_all.go` (2400+ lines)
+**Location:** `integration_test/run_all_test.go` (~1300 lines, down from 2400+)
 
 **Issue:** All integration tests in one file makes it hard to find specific tests.
 
@@ -28,8 +28,10 @@ Known issues and tasks to address.
 - `TestGetSetSourcePath` - getSourcePath()/setSourcePath() JS APIs
 - `TestGetSetLearning` - getLearning()/setLearning() JS APIs
 - `TestSkillConfig` - getSkillConfig()/casSkillConfig() JS APIs
+- `TestGetNeighbourhood` - getNeighbourhood() JS API
+- `TestDebugLog` - /debug and log() functionality
 
-**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~13 test sections remain in `RunAll`.
+**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~11 test sections remain in `RunAll`.
 
 **Priority:** Low - purely organizational improvement.
 
