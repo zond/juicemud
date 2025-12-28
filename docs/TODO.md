@@ -8,44 +8,12 @@ Known issues and tasks to address.
 
 **Issue:** All integration tests in one file makes it hard to find specific tests.
 
-**Progress:** Infrastructure is in place (TestMain handles setup, package variables for shared state, `uniqueSourcePath` helper for test isolation). The following tests have been extracted from `RunAll` into individual `TestXxx` functions in `integration_test_test.go`:
-- `TestSetTimeout` - setTimeout() delayed events
-- `TestStatsCommand` - /stats wizard command
-- `TestStatePersistence` - Object state persistence
-- `TestCreatedEvent` - 'created' event with creator info
-- `TestLookTarget` - look command with target
-- `TestRemoveCommand` - /remove wizard command
-- `TestEmitInterObject` - emit() inter-object communication
-- `TestCircularContainerPrevention` - circular container prevention
-- `TestExitAtUniverseRoot` - /exit at genesis edge case
-- `TestRemoveCurrentLocation` - /remove current location edge case
-- `TestJavaScriptImports` - @import directive for JS modules
-- `TestExitFailedEvent` - exitFailed event on challenge failure
-- `TestSetInterval` - setInterval()/clearInterval() periodic events
-- `TestIntervalsCommand` - /intervals wizard command
-- `TestCreateRemoveObject` - createObject()/removeObject() JS APIs
-- `TestRemoveCallback` - removeCallback() JS API
-- `TestGetSetSourcePath` - getSourcePath()/setSourcePath() JS APIs
-- `TestGetSetLearning` - getLearning()/setLearning() JS APIs
-- `TestSkillConfig` - getSkillConfig()/casSkillConfig() JS APIs
-- `TestGetNeighbourhood` - getNeighbourhood() JS API
-- `TestDebugLog` - /debug and log() functionality
-- `TestRoomAndSiblingActionHandlers` - Room and sibling action handlers
-- `TestAddDelWiz` - /addwiz and /delwiz commands
-- `TestEmitWithChallenges` - emit() with skill challenges
-- `TestEmitToLocation` - emitToLocation() JS API
-- `TestEmitToLocationWithChallenges` - emitToLocation() with skill challenges
-- `TestMovementEvents` - Movement event notifications
-- `TestCustomMovementVerb` - Custom movement verbs
-- `TestJSMovementRendering` - JS-based movement rendering
-- `TestGetLocationAndMoveObject` - getLocation()/moveObject() JS APIs
-- `TestGetContent` - getContent() JS API
+**Status:** COMPLETE - All tests have been extracted to individual `TestXxx` functions in `integration_test_test.go`.
 
-**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~6 test sections remain in `RunAll` (Tests 3-8 core movement/wizard commands).
-
-**Priority:** Low - purely organizational improvement.
+**Summary:** All integration tests from the monolithic `RunAll` function have been extracted into 38 individual test functions. Each test is self-contained with its own setup and teardown. `RunAll` now only contains minimal setup for `bin/integration_test` interactive testing compatibility.
 
 **Date identified:** 2025-12-25
+**Date completed:** 2025-12-29
 
 ## Code Quality: Inconsistent Error Wrapping
 

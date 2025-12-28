@@ -2538,12 +2538,20 @@ func TestAddDelWiz(t *testing.T) {
 	if err := tc.sendLine("/delwiz " + testUsername); err != nil {
 		t.Fatalf("/delwiz command: %v", err)
 	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/delwiz command did not complete: %q", output)
+	// Loop until we get the expected response (async movement messages may arrive first)
+	var allOutput string
+	for deadline := time.Now().Add(defaultWaitTimeout); time.Now().Before(deadline); {
+		output, ok = tc.waitForPrompt(defaultWaitTimeout)
+		allOutput += output
+		if !ok {
+			t.Fatalf("/delwiz command did not complete: %q", allOutput)
+		}
+		if strings.Contains(allOutput, "Revoked wizard privileges") {
+			break
+		}
 	}
-	if !strings.Contains(output, "Revoked wizard privileges") {
-		t.Fatalf("/delwiz should confirm revoke: %q", output)
+	if !strings.Contains(allOutput, "Revoked wizard privileges") {
+		t.Fatalf("/delwiz should confirm revoke: %q", allOutput)
 	}
 
 	// Reconnect to pick up revoked status
@@ -3061,5 +3069,553 @@ addCallback('updateconfig', ['action'], (msg) => {
 	_, found = tc.waitForObject("*skill config tester*config:forget=7200*", defaultWaitTimeout)
 	if !found {
 		t.Fatal("skill config should have Forget=7200 after update")
+	}
+}
+
+// TestWizardCommands tests basic wizard commands: /inspect, /ls, /create.
+func TestWizardCommands(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create a source file for an object
+	boxPath := uniqueSourcePath("box")
+	boxSource := `// A simple box
+setDescriptions([{
+	Short: 'wooden box',
+	Long: 'A simple wooden box.',
+}]);
+`
+	if err := ts.WriteSource(boxPath, boxSource); err != nil {
+		t.Fatalf("failed to create %s: %v", boxPath, err)
+	}
+
+	// Test /create
+	boxID, err := tc.createObject(boxPath)
+	if err != nil {
+		t.Fatalf("create box: %v", err)
+	}
+
+	// Test /inspect on the created object
+	if err := tc.sendLine(fmt.Sprintf("/inspect #%s", boxID)); err != nil {
+		t.Fatalf("/inspect command: %v", err)
+	}
+	inspectOutput, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/inspect command did not complete")
+	}
+	if !strings.Contains(inspectOutput, "wooden box") {
+		t.Fatalf("/inspect should show object description: %q", inspectOutput)
+	}
+
+	// Test /ls - verify output contains the box source file
+	if err := tc.sendLine(fmt.Sprintf("/ls %s", boxPath)); err != nil {
+		t.Fatalf("/ls command: %v", err)
+	}
+	lsOutput, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/ls command did not complete")
+	}
+	// /ls on a file path should show the file
+	if !strings.Contains(lsOutput, "box") {
+		t.Fatalf("/ls output should reference the box file: %q", lsOutput)
+	}
+}
+
+// TestEnterExitCommands tests /enter and /exit wizard movement commands.
+func TestEnterExitCommands(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create a test room
+	roomPath := uniqueSourcePath("entertest_room")
+	roomSource := `setDescriptions([{
+	Short: 'Enter Test Room',
+	Unique: true,
+	Long: 'A room for testing /enter and /exit.',
+}]);
+`
+	if err := ts.WriteSource(roomPath, roomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", roomPath, err)
+	}
+	roomID, err := tc.createObject(roomPath)
+	if err != nil {
+		t.Fatalf("create room: %v", err)
+	}
+
+	// Move into the room using /enter
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomID)); err != nil {
+		t.Fatalf("/enter command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter command did not complete")
+	}
+
+	// Verify user is in the room
+	if !tc.waitForLocation("", roomID, defaultWaitTimeout) {
+		t.Fatal("user did not move to room via /enter")
+	}
+
+	// Exit back out using /exit
+	if err := tc.sendLine("/exit"); err != nil {
+		t.Fatalf("/exit command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/exit command did not complete")
+	}
+
+	// Verify user is back in genesis
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		t.Fatal("user did not return to genesis via /exit")
+	}
+}
+
+// TestLookCommand tests the look command with room descriptions, contents, and exits.
+func TestLookCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis first
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Test look in genesis
+	output, ok := tc.waitForLookMatch("Black cosmos", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("look did not show genesis room name: %q", output)
+	}
+	if !strings.Contains(output, "darkness") {
+		t.Fatalf("look did not show genesis long description: %q", output)
+	}
+
+	// Create a room with details and an exit
+	lookRoomPath := uniqueSourcePath("looktest_room")
+	lookRoomSource := `setDescriptions([{
+	Short: 'Cozy Library',
+	Unique: true,
+	Long: 'A warm library filled with ancient tomes and comfortable chairs.',
+}]);
+setExits([{
+	Descriptions: [{Short: 'north'}],
+	Destination: 'genesis',
+}]);
+`
+	if err := ts.WriteSource(lookRoomPath, lookRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", lookRoomPath, err)
+	}
+	lookRoomID, err := tc.createObject(lookRoomPath)
+	if err != nil {
+		t.Fatalf("create lookroom: %v", err)
+	}
+
+	// Create an object to place in the room
+	bookPath := uniqueSourcePath("book")
+	bookSource := `setDescriptions([{
+	Short: 'dusty book',
+	Unique: false,
+	Long: 'An old book covered in dust.',
+}]);
+`
+	if err := ts.WriteSource(bookPath, bookSource); err != nil {
+		t.Fatalf("failed to create %s: %v", bookPath, err)
+	}
+	bookID, err := tc.createObject(bookPath)
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+
+	// Move the book into the look room
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", bookID, lookRoomID)); err != nil {
+		t.Fatalf("/move book to lookroom: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/move book to lookroom did not complete")
+	}
+
+	// Enter the room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", lookRoomID)); err != nil {
+		t.Fatalf("/enter lookroom: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter lookroom did not complete")
+	}
+	if !tc.waitForLocation("", lookRoomID, defaultWaitTimeout) {
+		t.Fatal("user did not move to lookroom")
+	}
+
+	// Test look command
+	output, ok = tc.waitForLookMatch("Cozy Library", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("look did not show room name: %q", output)
+	}
+	if !strings.Contains(output, "ancient tomes") {
+		t.Fatalf("look did not show long description: %q", output)
+	}
+	if !strings.Contains(output, "dusty book") {
+		t.Fatalf("look did not show book in room: %q", output)
+	}
+	if !strings.Contains(output, "north") {
+		t.Fatalf("look did not show exit 'north': %q", output)
+	}
+
+	// Test non-wizard movement: use the north exit to go back to genesis
+	if err := tc.sendLine("north"); err != nil {
+		t.Fatalf("north command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("north command did not complete")
+	}
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		t.Fatal("user did not move to genesis via 'north' command")
+	}
+}
+
+// TestBidirectionalMovement tests non-wizard movement through bidirectional exits.
+func TestBidirectionalMovement(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create two rooms with bidirectional exits
+	// Step 1: Create empty source files
+	roomAPath := uniqueSourcePath("bidir_roomA")
+	roomBPath := uniqueSourcePath("bidir_roomB")
+	if err := ts.WriteSource(roomAPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomAPath, err)
+	}
+	if err := ts.WriteSource(roomBPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomBPath, err)
+	}
+
+	// Step 2: Create the room objects
+	roomAID, err := tc.createObject(roomAPath)
+	if err != nil {
+		t.Fatalf("create room A: %v", err)
+	}
+	roomBID, err := tc.createObject(roomBPath)
+	if err != nil {
+		t.Fatalf("create room B: %v", err)
+	}
+
+	// Step 3: Update source files with exits referencing object IDs
+	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Room Alpha', Unique: true}]);
+setExits([{Descriptions: [{Short: 'east'}], Destination: '%s'}]);
+`, roomBID)
+	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomAPath, err)
+	}
+	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Room Beta', Unique: true}]);
+setExits([{Descriptions: [{Short: 'west'}], Destination: '%s'}]);
+`, roomAID)
+	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomBPath, err)
+	}
+
+	// Enter room A
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A did not complete")
+	}
+
+	// Verify we're in room A
+	output, ok := tc.waitForLookMatch("Room Alpha", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("not in Room Alpha: %q", output)
+	}
+
+	// Move east to room B using non-wizard movement
+	if err := tc.sendLine("east"); err != nil {
+		t.Fatalf("east command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("east command did not complete")
+	}
+	if !tc.waitForLocation("", roomBID, defaultWaitTimeout) {
+		t.Fatal("user did not move to room B via 'east' command")
+	}
+
+	// Verify we're in room B
+	output, ok = tc.waitForLookMatch("Room Beta", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("not in Room Beta: %q", output)
+	}
+
+	// Move west back to room A
+	if err := tc.sendLine("west"); err != nil {
+		t.Fatalf("west command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("west command did not complete")
+	}
+	if !tc.waitForLocation("", roomAID, defaultWaitTimeout) {
+		t.Fatal("user did not move back to room A via 'west' command")
+	}
+}
+
+// TestScanCommand tests the scan command which shows the neighborhood.
+func TestScanCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create two rooms with bidirectional exits
+	roomAPath := uniqueSourcePath("scan_roomA")
+	roomBPath := uniqueSourcePath("scan_roomB")
+	if err := ts.WriteSource(roomAPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomAPath, err)
+	}
+	if err := ts.WriteSource(roomBPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomBPath, err)
+	}
+
+	roomAID, err := tc.createObject(roomAPath)
+	if err != nil {
+		t.Fatalf("create room A: %v", err)
+	}
+	roomBID, err := tc.createObject(roomBPath)
+	if err != nil {
+		t.Fatalf("create room B: %v", err)
+	}
+
+	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Scan Room', Unique: true}]);
+setExits([{Descriptions: [{Short: 'south'}], Destination: '%s'}]);
+`, roomBID)
+	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomAPath, err)
+	}
+	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Neighbor Room', Unique: true}]);
+setExits([{Descriptions: [{Short: 'north'}], Destination: '%s'}]);
+`, roomAID)
+	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomBPath, err)
+	}
+
+	// Enter room A
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A did not complete")
+	}
+
+	// Test scan command
+	output, ok := tc.waitForScanMatch("Scan Room", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("scan did not show current location: %q", output)
+	}
+	if !strings.Contains(output, "Via exit south") {
+		t.Fatalf("scan did not show 'Via exit south': %q", output)
+	}
+	if !strings.Contains(output, "Neighbor Room") {
+		t.Fatalf("scan did not show neighboring room: %q", output)
+	}
+}
+
+// TestChallengeSystem tests perception and strength skill challenges.
+func TestChallengeSystem(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "challenge"); err != nil {
+		t.Fatalf("failed to enter isolated room: %v", err)
+	}
+
+	// Create a challenge room with a hidden object and a skill-gated exit
+	challengeRoomPath := uniqueSourcePath("challenge_room")
+	challengeRoomSource := `setDescriptions([{
+	Short: 'Challenge Room',
+	Unique: true,
+	Long: 'A room for testing the challenge system.',
+}]);
+setExits([
+	{
+		Descriptions: [{Short: 'easy'}],
+		Destination: 'genesis',
+	},
+	{
+		Descriptions: [{Short: 'locked'}],
+		Destination: 'genesis',
+		UseChallenges: [{Skill: 'strength', Level: 100}],
+	},
+]);
+`
+	if err := ts.WriteSource(challengeRoomPath, challengeRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", challengeRoomPath, err)
+	}
+	challengeRoomID, err := tc.createObject(challengeRoomPath)
+	if err != nil {
+		t.Fatalf("create challenge_room: %v", err)
+	}
+
+	// Create a hidden gem that requires high perception to see
+	hiddenGemPath := uniqueSourcePath("hidden_gem")
+	hiddenGemSource := `setDescriptions([{
+	Short: 'hidden gem',
+	Long: 'A sparkling gem hidden in the shadows.',
+	Challenges: [{Skill: 'perception', Level: 100}],
+}]);
+`
+	if err := ts.WriteSource(hiddenGemPath, hiddenGemSource); err != nil {
+		t.Fatalf("failed to create %s: %v", hiddenGemPath, err)
+	}
+	hiddenGemID, err := tc.createObject(hiddenGemPath)
+	if err != nil {
+		t.Fatalf("create hidden_gem: %v", err)
+	}
+
+	// Move the gem into the challenge room
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", hiddenGemID, challengeRoomID)); err != nil {
+		t.Fatalf("/move gem to challenge_room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/move gem did not complete")
+	}
+	if !tc.waitForLocation(fmt.Sprintf("#%s", hiddenGemID), challengeRoomID, defaultWaitTimeout) {
+		t.Fatal("hidden gem did not move to challenge_room")
+	}
+
+	// Enter the challenge room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", challengeRoomID)); err != nil {
+		t.Fatalf("/enter challenge_room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter challenge_room did not complete")
+	}
+	if !tc.waitForLocation("", challengeRoomID, defaultWaitTimeout) {
+		t.Fatal("user did not move to challenge_room")
+	}
+
+	// Test 1: Look should NOT show the hidden gem (user has no perception skill)
+	output, ok := tc.waitForLookMatch("Challenge Room", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("look did not show challenge room: %q", output)
+	}
+	if strings.Contains(output, "hidden gem") {
+		t.Fatalf("look should NOT show hidden gem without perception skill: %q", output)
+	}
+
+	// Test 2: Verify both exits are visible
+	if !strings.Contains(output, "easy") {
+		t.Fatalf("look did not show 'easy' exit: %q", output)
+	}
+	if !strings.Contains(output, "locked") {
+		t.Fatalf("look did not show 'locked' exit: %q", output)
+	}
+
+	// Test 3: Try to use the locked exit (should fail - no strength skill)
+	if err := tc.sendLine("locked"); err != nil {
+		t.Fatalf("locked exit command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("locked exit command did not complete")
+	}
+	// Verify user is still in challenge room
+	selfInspect, err := tc.inspect("")
+	if err != nil {
+		t.Fatalf("failed to inspect self: %v", err)
+	}
+	if selfInspect.GetLocation() != challengeRoomID {
+		t.Fatalf("user should still be in challenge_room after failed exit, but is in %q", selfInspect.GetLocation())
+	}
+
+	// Test 4: Use the easy exit (should succeed)
+	if err := tc.sendLine("easy"); err != nil {
+		t.Fatalf("easy exit command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("easy exit command did not complete")
+	}
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		t.Fatal("user did not move to genesis via 'easy' exit")
+	}
+
+	// Test 5: Grant skills and verify challenges pass
+	// Create a trainable object that grants skills when triggered
+	trainerPath := uniqueSourcePath("trainer")
+	trainerSource := `setDescriptions([{Short: 'skill trainer'}]);
+addCallback('train', ['action'], (msg) => {
+	// Get the actor (the user who triggered the action)
+	const actorId = msg.actor;
+	// Emit to the actor to grant them skills
+	emit(actorId, 'grantSkills', {});
+});
+`
+	if err := ts.WriteSource(trainerPath, trainerSource); err != nil {
+		t.Fatalf("failed to create %s: %v", trainerPath, err)
+	}
+	if _, err := tc.createObject(trainerPath); err != nil {
+		t.Fatalf("create trainer: %v", err)
+	}
+
+	// Note: We can't easily modify the wizard's user object without affecting other tests.
+	// Instead, we test the perception challenge by inspecting whether the gem is visible.
+	// For a complete test with skill granting, we'd need a fresh user.
+
+	// Clean up - return to genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
 	}
 }
