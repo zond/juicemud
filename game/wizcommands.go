@@ -925,26 +925,30 @@ func (c *Connection) wizCommands() commands {
 					}
 					targetIntervalID := parts[2]
 
-					// Find and delete the interval (need to find objectID first)
-					var found bool
+					// Find the interval first (need objectID to delete).
+					// Collect info before deleting to avoid deadlock: Each() holds RLock,
+					// Del() needs Lock on the same mutex.
+					var targetObjectID, targetEventName string
 					for interval, err := range intervals.Each() {
 						if err != nil {
 							continue
 						}
 						if interval.IntervalID == targetIntervalID {
-							if err := intervals.Del(interval.ObjectID, targetIntervalID); err != nil {
-								fmt.Fprintf(c.term, "Error deleting interval: %v\n", err)
-								return nil
-							}
-							fmt.Fprintf(c.term, "Cleared interval %s (object: %s, event: %s)\n",
-								targetIntervalID, interval.ObjectID, interval.EventName)
-							found = true
+							targetObjectID = interval.ObjectID
+							targetEventName = interval.EventName
 							break
 						}
 					}
-					if !found {
+					if targetObjectID == "" {
 						fmt.Fprintf(c.term, "Interval %q not found.\n", targetIntervalID)
+						return nil
 					}
+					if err := intervals.Del(targetObjectID, targetIntervalID); err != nil {
+						fmt.Fprintf(c.term, "Error deleting interval: %v\n", err)
+						return nil
+					}
+					fmt.Fprintf(c.term, "Cleared interval %s (object: %s, event: %s)\n",
+						targetIntervalID, targetObjectID, targetEventName)
 					return nil
 				}
 

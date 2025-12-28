@@ -153,11 +153,18 @@ func (g *Game) RecoverIntervals(ctx context.Context) error {
 	now := int64(g.storage.Queue().Now())
 	recovered := 0
 
+	// Collect all intervals first to avoid holding read lock while calling Update.
+	// The Each() iterator holds a read lock, and Update() needs a write lock on
+	// the same mutex, which would cause a deadlock.
+	var intervals []*structs.Interval
 	for interval, err := range g.storage.Intervals().Each() {
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
+		intervals = append(intervals, interval)
+	}
 
+	for _, interval := range intervals {
 		var fireAt int64
 		var missedCount int
 
