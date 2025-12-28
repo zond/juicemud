@@ -1553,3 +1553,171 @@ addCallback('checkproof', ['action'], (msg) => {
 		t.Fatal("callback test object should show 'checked' with proof:2, proving ping action was dispatched but callback removed")
 	}
 }
+
+// TestGetSetSourcePath tests getSourcePath() and setSourcePath() JS APIs.
+func TestGetSetSourcePath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions with other tests
+	if _, err := tc.enterIsolatedRoom(ts, "sourcePath"); err != nil {
+		t.Fatalf("failed to enter isolated room for sourcePath test: %v", err)
+	}
+
+	// Create an object that can report and change its source path
+	sourcePath := uniqueSourcePath("source_path_test")
+	newSourcePath := uniqueSourcePath("new_source")
+	sourcePathSource := fmt.Sprintf(`setDescriptions([{Short: 'source path tester (ready)'}]);
+addCallback('getpath', ['action'], (msg) => {
+	const path = getSourcePath();
+	setDescriptions([{Short: 'source path tester (path:' + path + ')'}]);
+});
+addCallback('setpath', ['action'], (msg) => {
+	setSourcePath('%s');
+	// Note: description will be reset on next reload, so we verify via /inspect
+});
+`, newSourcePath)
+	if err := ts.WriteSource(sourcePath, sourcePathSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+	// Create the new source file so the object can still run after path change
+	if err := ts.WriteSource(newSourcePath, sourcePathSource); err != nil {
+		t.Fatalf("failed to create %s: %v", newSourcePath, err)
+	}
+	sourcePathObjID, err := tc.createObject(sourcePath)
+	if err != nil {
+		t.Fatalf("create source_path_test: %v", err)
+	}
+
+	// Test getSourcePath() - verify it returns the correct path via description
+	if err := tc.sendLine("getpath"); err != nil {
+		t.Fatalf("getpath command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("getpath command did not complete")
+	}
+	_, found := tc.waitForObject("*source path tester*path:"+sourcePath+"*", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("getSourcePath() should return %s initially", sourcePath)
+	}
+
+	// Also verify via /inspect
+	if !tc.waitForSourcePath(fmt.Sprintf("#%s", sourcePathObjID), sourcePath, defaultWaitTimeout) {
+		t.Fatalf("source path should be %s initially via /inspect", sourcePath)
+	}
+
+	// Test setSourcePath - change the path
+	if err := tc.sendLine("setpath"); err != nil {
+		t.Fatalf("setpath command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("setpath command did not complete")
+	}
+
+	// Verify SourcePath changed via /inspect (description gets reset on reload)
+	if !tc.waitForSourcePath(fmt.Sprintf("#%s", sourcePathObjID), newSourcePath, defaultWaitTimeout) {
+		t.Fatalf("source path should be %s after setSourcePath", newSourcePath)
+	}
+}
+
+// TestGetSetLearning tests getLearning() and setLearning() JS APIs.
+func TestGetSetLearning(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "learning"); err != nil {
+		t.Fatalf("failed to enter isolated room for learning test: %v", err)
+	}
+
+	// Create an object that can toggle learning mode
+	sourcePath := uniqueSourcePath("learning_test")
+	learningSource := `setDescriptions([{Short: 'learning tester (ready)'}]);
+addCallback('checklearn', ['action'], (msg) => {
+	const learning = getLearning();
+	setDescriptions([{Short: 'learning tester (learning:' + learning + ')'}]);
+});
+addCallback('enablelearn', ['action'], (msg) => {
+	setLearning(true);
+	setDescriptions([{Short: 'learning tester (enabled)'}]);
+});
+addCallback('disablelearn', ['action'], (msg) => {
+	setLearning(false);
+	setDescriptions([{Short: 'learning tester (disabled)'}]);
+});
+`
+	if err := ts.WriteSource(sourcePath, learningSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+	if _, err := tc.createObject(sourcePath); err != nil {
+		t.Fatalf("create learning_test: %v", err)
+	}
+
+	// Check initial learning state (should be false)
+	if err := tc.sendLine("checklearn"); err != nil {
+		t.Fatalf("checklearn command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("checklearn command did not complete")
+	}
+	_, found := tc.waitForObject("*learning tester*learning:false*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("learning should be false initially")
+	}
+
+	// Enable learning
+	if err := tc.sendLine("enablelearn"); err != nil {
+		t.Fatalf("enablelearn command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("enablelearn command did not complete")
+	}
+	_, found = tc.waitForObject("*learning tester*enabled*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("learning tester should confirm enabled")
+	}
+
+	// Check learning state again (should be true)
+	if err := tc.sendLine("checklearn"); err != nil {
+		t.Fatalf("second checklearn command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("second checklearn command did not complete")
+	}
+	_, found = tc.waitForObject("*learning tester*learning:true*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("learning should be true after enable")
+	}
+
+	// Disable learning
+	if err := tc.sendLine("disablelearn"); err != nil {
+		t.Fatalf("disablelearn command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("disablelearn command did not complete")
+	}
+	_, found = tc.waitForObject("*learning tester*disabled*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("learning tester should confirm disabled")
+	}
+
+	// Check learning state again (should be false)
+	if err := tc.sendLine("checklearn"); err != nil {
+		t.Fatalf("third checklearn command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("third checklearn command did not complete")
+	}
+	_, found = tc.waitForObject("*learning tester*learning:false*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("learning should be false after disable")
+	}
+}
