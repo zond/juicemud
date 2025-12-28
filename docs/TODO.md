@@ -27,8 +27,9 @@ Known issues and tasks to address.
 - `TestRemoveCallback` - removeCallback() JS API
 - `TestGetSetSourcePath` - getSourcePath()/setSourcePath() JS APIs
 - `TestGetSetLearning` - getLearning()/setLearning() JS APIs
+- `TestSkillConfig` - getSkillConfig()/casSkillConfig() JS APIs
 
-**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~14 test sections remain in `RunAll`.
+**Remaining work:** Continue extracting test sections one at a time into individual `TestXxx` functions. ~13 test sections remain in `RunAll`.
 
 **Priority:** Low - purely organizational improvement.
 

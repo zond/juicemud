@@ -1721,3 +1721,116 @@ addCallback('disablelearn', ['action'], (msg) => {
 		t.Fatal("learning should be false after disable")
 	}
 }
+
+// TestSkillConfig tests getSkillConfig() and casSkillConfig() JS APIs.
+func TestSkillConfig(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "skillConfig"); err != nil {
+		t.Fatalf("failed to enter isolated room for skillConfig test: %v", err)
+	}
+
+	// Create an object that can query and set skill configs
+	sourcePath := uniqueSourcePath("skill_config_test")
+	// Use unique skill name to avoid conflicts with other tests
+	skillName := fmt.Sprintf("TestConfigSkill_%d", sourceCounter.Load())
+	skillConfigSource := fmt.Sprintf(`setDescriptions([{Short: 'skill config tester (ready)'}]);
+addCallback('getconfig', ['action'], (msg) => {
+	const config = getSkillConfig('%s');
+	if (config === null) {
+		setDescriptions([{Short: 'skill config tester (config:null)'}]);
+	} else {
+		setDescriptions([{Short: 'skill config tester (config:forget=' + config.Forget + ')'}]);
+	}
+});
+addCallback('setconfig', ['action'], (msg) => {
+	// Use CAS to set config - null as old value means "doesn't exist yet"
+	const newConfig = {Forget: 3600, Recharge: 1000};
+	const success = casSkillConfig('%s', null, newConfig);
+	setDescriptions([{Short: 'skill config tester (set:' + success + ')'}]);
+});
+addCallback('updateconfig', ['action'], (msg) => {
+	// Use CAS to update existing config
+	const oldConfig = getSkillConfig('%s');
+	if (oldConfig === null) {
+		setDescriptions([{Short: 'skill config tester (update:noexist)'}]);
+		return;
+	}
+	const newConfig = {Forget: 7200, Recharge: oldConfig.Recharge};
+	const success = casSkillConfig('%s', oldConfig, newConfig);
+	setDescriptions([{Short: 'skill config tester (update:' + success + ')'}]);
+});
+`, skillName, skillName, skillName, skillName)
+	if err := ts.WriteSource(sourcePath, skillConfigSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+	if _, err := tc.createObject(sourcePath); err != nil {
+		t.Fatalf("create skill_config_test: %v", err)
+	}
+
+	// First query - should be null (doesn't exist yet)
+	if err := tc.sendLine("getconfig"); err != nil {
+		t.Fatalf("getconfig command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("getconfig command did not complete")
+	}
+	_, found := tc.waitForObject("*skill config tester*config:null*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("skill config should be null initially")
+	}
+
+	// Set the config
+	if err := tc.sendLine("setconfig"); err != nil {
+		t.Fatalf("setconfig command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("setconfig command did not complete")
+	}
+	_, found = tc.waitForObject("*skill config tester*set:true*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("casSkillConfig should return true for new config")
+	}
+
+	// Query again - should now have value
+	if err := tc.sendLine("getconfig"); err != nil {
+		t.Fatalf("second getconfig command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("second getconfig command did not complete")
+	}
+	_, found = tc.waitForObject("*skill config tester*config:forget=3600*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("skill config should have Forget=3600 after set")
+	}
+
+	// Update the config using CAS
+	if err := tc.sendLine("updateconfig"); err != nil {
+		t.Fatalf("updateconfig command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("updateconfig command did not complete")
+	}
+	_, found = tc.waitForObject("*skill config tester*update:true*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("casSkillConfig should return true for valid update")
+	}
+
+	// Verify update took effect
+	if err := tc.sendLine("getconfig"); err != nil {
+		t.Fatalf("third getconfig command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("third getconfig command did not complete")
+	}
+	_, found = tc.waitForObject("*skill config tester*config:forget=7200*", defaultWaitTimeout)
+	if !found {
+		t.Fatal("skill config should have Forget=7200 after update")
+	}
+}
