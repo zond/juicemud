@@ -377,10 +377,9 @@ func (c *Connection) renderDefaultMovement(m *movement, src, dst *movementPerspe
 
 func (c *Connection) describeLocation(loc *structs.Location) error {
 	fmt.Fprintln(c.term, loc.Container.Name())
-	descs := loc.Container.GetDescriptions()
-	if len(descs) > 0 && descs[0].Long != "" {
+	if long := structs.Descriptions(loc.Container.GetDescriptions()).Long(); long != "" {
 		fmt.Fprintln(c.term)
-		fmt.Fprintln(c.term, descs[0].Long)
+		fmt.Fprintln(c.term, long)
 	}
 	if len(loc.Content) > 0 {
 		fmt.Fprintln(c.term)
@@ -591,12 +590,9 @@ func (c *Connection) basicCommands() commands {
 						}
 					} else {
 						fmt.Fprintln(c.term, target.Name())
-						descs := target.GetDescriptions()
-						if len(descs) > 0 {
-							if descs[0].Long != "" {
-								fmt.Fprintln(c.term)
-								fmt.Fprintln(c.term, descs[0].Long)
-							}
+						if long := structs.Descriptions(target.GetDescriptions()).Long(); long != "" {
+							fmt.Fprintln(c.term)
+							fmt.Fprintln(c.term, long)
 						}
 					}
 				}

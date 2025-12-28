@@ -246,14 +246,30 @@ func (d Descriptions) Matches(pattern string) bool {
 	return false
 }
 
-// Detect returns the first description the viewer can perceive, or nil.
-func (d Descriptions) Detect(viewer *Object, targetID string) *Description {
+// Detect returns all descriptions the viewer can perceive.
+// This includes descriptions with no challenges (always visible) and
+// descriptions where the viewer overcomes the challenges.
+// Returns nil if no descriptions are visible.
+func (d Descriptions) Detect(viewer *Object, targetID string) []Description {
+	var result []Description
 	for _, desc := range d {
 		if Challenges(desc.Challenges).Check(viewer, targetID) > 0 {
-			return &desc
+			result = append(result, desc)
 		}
 	}
-	return nil
+	return result
+}
+
+// Long returns the concatenated Long texts from all descriptions.
+// Empty Long texts are skipped, and non-empty texts are separated by a space.
+func (d Descriptions) Long() string {
+	var parts []string
+	for _, desc := range d {
+		if desc.Long != "" {
+			parts = append(parts, desc.Long)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // AddDescriptionChallenges returns a copy with added difficulty on all descriptions.
@@ -272,22 +288,20 @@ func (o *Object) AddDescriptionChallenges(addedChallenges Challenges) (*Object, 
 }
 
 // Filter returns a copy with only descriptions and exits the viewer can perceive.
+// Multiple descriptions may be included if the viewer overcomes challenges for multiple descriptions.
 func (o *Object) Filter(viewer *Object) (*Object, error) {
 	cpy, err := Clone(o)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 
-	if desc := Descriptions(cpy.Unsafe.Descriptions).Detect(viewer, cpy.Unsafe.Id); desc != nil {
-		cpy.Unsafe.Descriptions = []Description{*desc}
-	} else {
-		cpy.Unsafe.Descriptions = nil
-	}
+	cpy.Unsafe.Descriptions = Descriptions(cpy.Unsafe.Descriptions).Detect(viewer, cpy.Unsafe.Id)
 
 	exits := Exits{}
 	for _, exit := range cpy.Unsafe.Exits {
-		if exitDesc := Descriptions(exit.Descriptions).Detect(viewer, cpy.Unsafe.Id); exitDesc != nil {
-			exit.Descriptions = []Description{*exitDesc}
+		exitDescs := Descriptions(exit.Descriptions).Detect(viewer, cpy.Unsafe.Id)
+		if len(exitDescs) > 0 {
+			exit.Descriptions = exitDescs
 			exits = append(exits, exit)
 		}
 	}

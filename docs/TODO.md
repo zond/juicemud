@@ -86,25 +86,3 @@ func (g *Game) makeEmitCallback(ctx context.Context, object *structs.Object) fun
 **Priority:** Low - only affects the loader tool startup time.
 
 **Date identified:** 2025-12-25
-
-## Feature: Concatenate Multiple Passing Descriptions
-
-**Location:** `structs/structs.go` (Detect), `game/connection.go` (rendering)
-
-**Current behavior:** `Descriptions.Detect()` returns the **first** description where challenges pass. Only one description is ever shown.
-
-**Proposed behavior:** Change `Descriptions.Detect()` to return `[]Description` containing all descriptions where there is no challenge, or the observer overcomes the challenge. Rendering concatenates all `Long` texts.
-
-**Benefits:**
-- Layered discovery: Objects reveal more detail as skills improve
-- Richer world-building: Same object can have base features + hidden aspects
-- Progressive revelation: Rewards skill investment with more information
-
-**Implementation:**
-1. Change `Descriptions.Detect()` return type from `*Description` to `[]Description`
-2. Update all callers (`Object.Filter()`, rendering code)
-3. Update integration tests
-
-**Priority:** Medium - significant feature improvement.
-
-**Date identified:** 2025-12-28

@@ -136,6 +136,49 @@ func TestDescriptionsMatches(t *testing.T) {
 	}
 }
 
+func TestDescriptionsLong(t *testing.T) {
+	tests := []struct {
+		name     string
+		descs    Descriptions
+		expected string
+	}{
+		{
+			name:     "empty descriptions",
+			descs:    Descriptions{},
+			expected: "",
+		},
+		{
+			name:     "single description with long",
+			descs:    Descriptions{{Long: "A dark room."}},
+			expected: "A dark room.",
+		},
+		{
+			name:     "multiple descriptions concatenated",
+			descs:    Descriptions{{Long: "A dark room."}, {Long: "Shadows dance on the walls."}},
+			expected: "A dark room. Shadows dance on the walls.",
+		},
+		{
+			name:     "skips empty long texts",
+			descs:    Descriptions{{Long: "A dark room."}, {Long: ""}, {Long: "It smells musty."}},
+			expected: "A dark room. It smells musty.",
+		},
+		{
+			name:     "all empty long texts",
+			descs:    Descriptions{{Long: ""}, {Long: ""}},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.descs.Long()
+			if result != tt.expected {
+				t.Errorf("Long() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestLocationIdentify(t *testing.T) {
 	// Helper to create an object with a Short description
 	makeObj := func(id, short string) *Object {
