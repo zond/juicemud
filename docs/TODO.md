@@ -31,11 +31,9 @@ Known issues and tasks to address.
 
 ### Medium Priority
 
-- [ ] Split long tests using `t.Run()` subtests:
-  - `TestAddDelWiz` (~150 lines) - Note: sequential dependencies make this complex
-  - `TestDebugLog` (~125 lines) - Note: sequential dependencies make this complex
-  - `TestChallengeSystem` (~125 lines)
-  - `TestSkillConfig` (~115 lines)
+- [~] Split long tests using `t.Run()` subtests:
+  - Skipped: `TestAddDelWiz`, `TestDebugLog`, `TestChallengeSystem`, `TestSkillConfig` all have sequential dependencies that prevent running subtests independently
+  - t.Run() adds boilerplate without benefit when subtests can't run in isolation
 
 - [x] Add table-driven tests for `TestStatsCommand`
   - Converted 7 subcommand tests to table-driven format
@@ -50,7 +48,8 @@ Known issues and tasks to address.
 
 ### Low Priority
 
-- [ ] Standardize source path naming conventions (currently mixed: `skill_config_test`, `dimreceiver`, `entertest_room`)
+- [x] Standardize source path naming conventions to snake_case
+  - Renamed: `dimreceiver` → `dim_receiver`, `eaglereceiver` → `eagle_receiver`, etc.
 
 - [ ] Add missing test coverage:
   - Server restart state persistence

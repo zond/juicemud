@@ -736,27 +736,27 @@ func TestRemoveCurrentLocation(t *testing.T) {
 	removeTestRoomSource := `setDescriptions([{Short: 'remove test room', Long: 'A room for testing /remove edge case.'}]);
 setExits([{Name: 'out', Destination: 'genesis'}]);
 `
-	sourcePath := uniqueSourcePath("removetestroom")
+	sourcePath := uniqueSourcePath("remove_test_room")
 	if err := testServer.WriteSource(sourcePath, removeTestRoomSource); err != nil {
 		t.Fatalf("failed to create %s: %v", sourcePath, err)
 	}
 
 	removeTestRoomID, err := tc.createObject(sourcePath)
 	if err != nil {
-		t.Fatalf("create removetestroom: %v", err)
+		t.Fatalf("create remove_test_room: %v", err)
 	}
 
 	// Enter the test room
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", removeTestRoomID)); err != nil {
-		t.Fatalf("/enter removetestroom: %v", err)
+		t.Fatalf("/enter remove_test_room: %v", err)
 	}
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/enter removetestroom did not complete")
+		t.Fatal("/enter remove_test_room did not complete")
 	}
 
 	// Verify we're in the test room
 	if !tc.waitForLocation("", removeTestRoomID, defaultWaitTimeout) {
-		t.Fatal("should be in removetestroom")
+		t.Fatal("should be in remove_test_room")
 	}
 
 	// Drain any stale notifications before the command
@@ -782,10 +782,10 @@ setExits([{Name: 'out', Destination: 'genesis'}]);
 
 	// Return to genesis
 	if err := tc.sendLine("out"); err != nil {
-		t.Fatalf("out from removetestroom: %v", err)
+		t.Fatalf("out from remove_test_room: %v", err)
 	}
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("out from removetestroom did not complete")
+		t.Fatal("out from remove_test_room did not complete")
 	}
 }
 
@@ -1686,7 +1686,7 @@ func TestEmitWithChallenges(t *testing.T) {
 	}
 
 	// High-perception receiver - has 200 perception, should receive challenged emit
-	highPercPath := uniqueSourcePath("eaglereceiver")
+	highPercPath := uniqueSourcePath("eagle_receiver")
 	highPercReceiverSource := `setDescriptions([{Short: 'eagle orb (waiting)'}]);
 setSkills({perception: {Practical: 200, Theoretical: 200}});
 addCallback('secret', ['emit'], (msg) => {
@@ -1698,7 +1698,7 @@ addCallback('secret', ['emit'], (msg) => {
 	}
 
 	// Low-perception receiver - has 1 perception, should NOT receive challenged emit with level 50
-	lowPercPath := uniqueSourcePath("dimreceiver")
+	lowPercPath := uniqueSourcePath("dim_receiver")
 	lowPercReceiverSource := `setDescriptions([{Short: 'dim orb (waiting)'}]);
 setSkills({perception: {Practical: 1, Theoretical: 1}});
 addCallback('secret', ['emit'], (msg) => {
@@ -1710,7 +1710,7 @@ addCallback('secret', ['emit'], (msg) => {
 	}
 
 	// Sender emits with perception challenge at level 50
-	senderPath := uniqueSourcePath("challengesender")
+	senderPath := uniqueSourcePath("challenge_sender")
 	challengeSenderSource := `setDescriptions([{Short: 'whisperer orb'}]);
 addCallback('whisper', ['action'], (msg) => {
 	const parts = msg.line.split(' ');
@@ -1726,17 +1726,17 @@ addCallback('whisper', ['action'], (msg) => {
 	// Create receivers
 	eagleID, err := tc.createObject(highPercPath)
 	if err != nil {
-		t.Fatalf("create eaglereceiver: %v", err)
+		t.Fatalf("create eagle_receiver: %v", err)
 	}
 
 	dimID, err := tc.createObject(lowPercPath)
 	if err != nil {
-		t.Fatalf("create dimreceiver: %v", err)
+		t.Fatalf("create dim_receiver: %v", err)
 	}
 
 	// Create sender
 	if _, err := tc.createObject(senderPath); err != nil {
-		t.Fatalf("create challengesender: %v", err)
+		t.Fatalf("create challenge_sender: %v", err)
 	}
 
 	// Whisper to the high-perception receiver - should succeed
@@ -1789,7 +1789,7 @@ func TestEmitToLocation(t *testing.T) {
 	}
 
 	// Create a broadcast room
-	broadcastRoomPath := uniqueSourcePath("broadcastroom")
+	broadcastRoomPath := uniqueSourcePath("broadcast_room")
 	broadcastRoomSource := `setDescriptions([{Short: 'broadcast chamber', Long: 'A room for broadcasting.'}]);
 setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
 `
@@ -1798,7 +1798,7 @@ setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
 	}
 	broadcastRoomID, err := tc.createObject(broadcastRoomPath)
 	if err != nil {
-		t.Fatalf("create broadcastroom: %v", err)
+		t.Fatalf("create broadcast_room: %v", err)
 	}
 
 	// Enter the broadcast room
@@ -1885,7 +1885,7 @@ func TestEmitToLocationWithChallenges(t *testing.T) {
 	}
 
 	// Create a broadcast room for this test
-	broadcastRoomPath := uniqueSourcePath("chalbroadcastroom")
+	broadcastRoomPath := uniqueSourcePath("chal_broadcast_room")
 	broadcastRoomSource := `setDescriptions([{Short: 'telepathy chamber', Long: 'A room for telepathic broadcasts.'}]);
 setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
 `
@@ -1894,7 +1894,7 @@ setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
 	}
 	broadcastRoomID, err := tc.createObject(broadcastRoomPath)
 	if err != nil {
-		t.Fatalf("create chalbroadcastroom: %v", err)
+		t.Fatalf("create chal_broadcast_room: %v", err)
 	}
 
 	// Enter the broadcast room
@@ -1906,7 +1906,7 @@ setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
 	}
 
 	// Sensitive ear - high telepathy, should receive
-	sensitiveEarPath := uniqueSourcePath("sensitiveear")
+	sensitiveEarPath := uniqueSourcePath("sensitive_ear")
 	sensitiveEarSource := `setDescriptions([{Short: 'sensitive ear (idle)'}]);
 setSkills({telepathy: {Practical: 150, Theoretical: 150}});
 addCallback('mindcast', ['emit'], (msg) => {
@@ -1917,11 +1917,11 @@ addCallback('mindcast', ['emit'], (msg) => {
 		t.Fatalf("failed to create %s: %v", sensitiveEarPath, err)
 	}
 	if _, err := tc.createObject(sensitiveEarPath); err != nil {
-		t.Fatalf("create sensitiveear: %v", err)
+		t.Fatalf("create sensitive_ear: %v", err)
 	}
 
 	// Deaf ear - low telepathy, should NOT receive
-	deafEarPath := uniqueSourcePath("deafear")
+	deafEarPath := uniqueSourcePath("deaf_ear")
 	deafEarSource := `setDescriptions([{Short: 'deaf ear (idle)'}]);
 setSkills({telepathy: {Practical: 5, Theoretical: 5}});
 addCallback('mindcast', ['emit'], (msg) => {
@@ -1932,7 +1932,7 @@ addCallback('mindcast', ['emit'], (msg) => {
 		t.Fatalf("failed to create %s: %v", deafEarPath, err)
 	}
 	if _, err := tc.createObject(deafEarPath); err != nil {
-		t.Fatalf("create deafear: %v", err)
+		t.Fatalf("create deaf_ear: %v", err)
 	}
 
 	// Telepathic broadcaster - uses emitToLocation with telepathy challenge
@@ -2116,7 +2116,7 @@ func TestJSMovementRendering(t *testing.T) {
 	tc.ensureInGenesis(t)
 
 	// Create two rooms with bidirectional exits so observer sees both source and destination
-	roomAID, roomBID := createBidirectionalRooms(t, ts, tc, "jsorb", "Orb Room A", "Orb Room B", "north", "south")
+	roomAID, roomBID := createBidirectionalRooms(t, ts, tc, "js_orb", "Orb Room A", "Orb Room B", "north", "south")
 
 	// Enter room A to create the object there
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
@@ -2127,7 +2127,7 @@ func TestJSMovementRendering(t *testing.T) {
 	}
 
 	// Create an object that handles its own movement rendering via JS in room A
-	jsOrbPath := uniqueSourcePath("jsorb")
+	jsOrbPath := uniqueSourcePath("js_orb")
 	jsRenderSource := `setDescriptions([{Short: 'glowing orb'}]);
 setMovement({Active: false, Verb: ''});
 
@@ -2152,7 +2152,7 @@ addCallback('renderMovement', ['emit'], (msg) => {
 	}
 	jsOrbID, err := tc.createObject(jsOrbPath)
 	if err != nil {
-		t.Fatalf("create jsorb object: %v", err)
+		t.Fatalf("create js_orb object: %v", err)
 	}
 
 	// Move wizard to room B (destination) to observe movement
@@ -2166,11 +2166,11 @@ addCallback('renderMovement', ['emit'], (msg) => {
 	// Move the orb from room A to room B
 	// Wizard should see JS-rendered "A glowing orb drifts in from south, humming softly."
 	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", jsOrbID, roomBID)); err != nil {
-		t.Fatalf("/move jsorb: %v", err)
+		t.Fatalf("/move js_orb: %v", err)
 	}
 	promptOutput, ok := tc.waitForPrompt(defaultWaitTimeout)
 	if !ok {
-		t.Fatal("/move jsorb did not complete")
+		t.Fatal("/move js_orb did not complete")
 	}
 	additionalOutput := tc.readUntil(500*time.Millisecond, func(s string) bool {
 		return strings.Contains(s, "drifts in") || strings.Contains(s, "humming softly")
@@ -2496,7 +2496,7 @@ func TestRoomAndSiblingActionHandlers(t *testing.T) {
 	}
 
 	// Create a room that handles the "shake" action
-	actionRoomPath := uniqueSourcePath("actionroom")
+	actionRoomPath := uniqueSourcePath("action_room")
 	actionRoomSource := `setDescriptions([{Short: 'shaky chamber', Long: 'A small room with unstable walls.'}]);
 setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
 addCallback('shake', ['action'], (msg) => {
@@ -2510,15 +2510,15 @@ addCallback('shake', ['action'], (msg) => {
 	// Create the room
 	actionRoomID, err := tc.createObject(actionRoomPath)
 	if err != nil {
-		t.Fatalf("create actionroom: %v", err)
+		t.Fatalf("create action_room: %v", err)
 	}
 
 	// Enter the action room
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", actionRoomID)); err != nil {
-		t.Fatalf("/enter actionroom: %v", err)
+		t.Fatalf("/enter action_room: %v", err)
 	}
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/enter actionroom did not complete")
+		t.Fatal("/enter action_room did not complete")
 	}
 
 	// Issue "shake" command - the room should handle this action
@@ -3015,7 +3015,7 @@ func TestEnterExitCommands(t *testing.T) {
 	}
 
 	// Create a test room
-	roomPath := uniqueSourcePath("entertest_room")
+	roomPath := uniqueSourcePath("enter_test_room")
 	roomSource := `setDescriptions([{
 	Short: 'Enter Test Room',
 	Unique: true,
@@ -3084,7 +3084,7 @@ func TestLookCommand(t *testing.T) {
 	}
 
 	// Create a room with details and an exit
-	lookRoomPath := uniqueSourcePath("looktest_room")
+	lookRoomPath := uniqueSourcePath("look_test_room")
 	lookRoomSource := `setDescriptions([{
 	Short: 'Cozy Library',
 	Unique: true,
@@ -3380,35 +3380,8 @@ setExits([
 		t.Fatal("user did not move to genesis via 'easy' exit")
 	}
 
-	// Test 5: Grant skills and verify challenges pass
-	// Create a trainable object that grants skills when triggered
-	trainerPath := uniqueSourcePath("trainer")
-	trainerSource := `setDescriptions([{Short: 'skill trainer'}]);
-addCallback('train', ['action'], (msg) => {
-	// Get the actor (the user who triggered the action)
-	const actorId = msg.actor;
-	// Emit to the actor to grant them skills
-	emit(actorId, 'grantSkills', {});
-});
-`
-	if err := ts.WriteSource(trainerPath, trainerSource); err != nil {
-		t.Fatalf("failed to create %s: %v", trainerPath, err)
-	}
-	if _, err := tc.createObject(trainerPath); err != nil {
-		t.Fatalf("create trainer: %v", err)
-	}
-
-	// Note: We can't easily modify the wizard's user object without affecting other tests.
-	// Instead, we test the perception challenge by inspecting whether the gem is visible.
-	// For a complete test with skill granting, we'd need a fresh user.
-
-	// Clean up - return to genesis
-	if err := tc.sendLine("/enter #genesis"); err != nil {
-		t.Fatalf("/enter genesis: %v", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/enter genesis did not complete")
-	}
+	// Clean up - ensure we're back in genesis
+	tc.ensureInGenesis(t)
 }
 
 // TestErrorCases tests error handling for various invalid inputs.
