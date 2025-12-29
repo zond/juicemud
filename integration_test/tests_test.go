@@ -133,137 +133,110 @@ func TestStatsCommand(t *testing.T) {
 
 	tc := wizardClient
 
-	// Test /stats summary (default)
-	if err := tc.sendLine("/stats"); err != nil {
-		t.Fatalf("/stats command: %v", err)
-	}
-	output, ok := tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats command did not complete: %q", output)
-	}
-	// Verify output shows expected fields
-	if !strings.Contains(output, "JS Statistics") {
-		t.Fatalf("/stats should show 'JS Statistics': %q", output)
-	}
-	if !strings.Contains(output, "EXECUTIONS") {
-		t.Fatalf("/stats should show 'EXECUTIONS': %q", output)
-	}
-	if !strings.Contains(output, "ERRORS") {
-		t.Fatalf("/stats should show 'ERRORS': %q", output)
-	}
-
-	// Test /stats summary explicitly
-	if err := tc.sendLine("/stats summary"); err != nil {
-		t.Fatalf("/stats summary command: %v", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats summary did not complete: %q", output)
-	}
-	if !strings.Contains(output, "JS Statistics") {
-		t.Fatalf("/stats summary should show 'JS Statistics': %q", output)
-	}
-
-	// Test /stats errors
-	if err := tc.sendLine("/stats errors"); err != nil {
-		t.Fatalf("/stats errors command: %v", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats errors did not complete: %q", output)
-	}
-	// Should show "Error Summary" header
-	if !strings.Contains(output, "Error Summary") {
-		t.Fatalf("/stats errors should show 'Error Summary': %q", output)
-	}
-
-	// Test /stats errors locations
-	if err := tc.sendLine("/stats errors locations"); err != nil {
-		t.Fatalf("/stats errors locations command: %v", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats errors locations did not complete: %q", output)
-	}
-	// Either shows "No error locations" or a table with Location header
-	if !strings.Contains(output, "No error locations") && !strings.Contains(output, "Location") {
-		t.Fatalf("/stats errors locations should show locations or 'No error locations': %q", output)
+	// Table-driven tests for /stats subcommands
+	tests := []struct {
+		name     string
+		cmd      string
+		contains []string // All must be present
+		either   []string // At least one must be present (if non-empty)
+	}{
+		{
+			name:     "default shows summary",
+			cmd:      "/stats",
+			contains: []string{"JS Statistics", "EXECUTIONS", "ERRORS"},
+		},
+		{
+			name:     "summary subcommand",
+			cmd:      "/stats summary",
+			contains: []string{"JS Statistics"},
+		},
+		{
+			name:     "errors subcommand",
+			cmd:      "/stats errors",
+			contains: []string{"Error Summary"},
+		},
+		{
+			name:   "errors locations",
+			cmd:    "/stats errors locations",
+			either: []string{"No error locations", "Location"},
+		},
+		{
+			name:   "scripts subcommand",
+			cmd:    "/stats scripts",
+			either: []string{"No scripts", "Source Path"},
+		},
+		{
+			name:   "objects subcommand",
+			cmd:    "/stats objects",
+			either: []string{"No objects", "Object ID"},
+		},
+		{
+			name:   "perf slow",
+			cmd:    "/stats perf slow",
+			either: []string{"No slow executions", "]"},
+		},
 	}
 
-	// Test /stats scripts
-	if err := tc.sendLine("/stats scripts"); err != nil {
-		t.Fatalf("/stats scripts command: %v", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats scripts did not complete: %q", output)
-	}
-	// Either shows "No scripts recorded." or a table with Source Path header
-	if !strings.Contains(output, "No scripts") && !strings.Contains(output, "Source Path") {
-		t.Fatalf("/stats scripts should show scripts or 'No scripts': %q", output)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, ok := tc.sendCommand(tt.cmd, defaultWaitTimeout)
+			if !ok {
+				t.Fatalf("%s did not complete: %q", tt.cmd, output)
+			}
+
+			// Check all required strings are present
+			for _, s := range tt.contains {
+				if !strings.Contains(output, s) {
+					t.Errorf("%s should contain %q: %q", tt.cmd, s, output)
+				}
+			}
+
+			// Check at least one of the either strings is present
+			if len(tt.either) > 0 {
+				found := false
+				for _, s := range tt.either {
+					if strings.Contains(output, s) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("%s should contain one of %v: %q", tt.cmd, tt.either, output)
+				}
+			}
+		})
 	}
 
-	// Test /stats objects
-	if err := tc.sendLine("/stats objects"); err != nil {
-		t.Fatalf("/stats objects command: %v", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats objects did not complete: %q", output)
-	}
-	// Either shows "No objects recorded." or a table with Object ID header
-	if !strings.Contains(output, "No objects") && !strings.Contains(output, "Object ID") {
-		t.Fatalf("/stats objects should show objects or 'No objects': %q", output)
-	}
+	// Test /stats reset separately since it changes state
+	t.Run("reset clears statistics", func(t *testing.T) {
+		output, ok := tc.sendCommand("/stats reset", defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/stats reset did not complete: %q", output)
+		}
+		if !strings.Contains(output, "Statistics reset") {
+			t.Fatalf("/stats reset should confirm reset: %q", output)
+		}
 
-	// Test /stats perf slow
-	if err := tc.sendLine("/stats perf slow"); err != nil {
-		t.Fatalf("/stats perf slow command: %v", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats perf slow did not complete: %q", output)
-	}
-	// Either shows "No slow executions recorded." or slow execution records
-	if !strings.Contains(output, "No slow executions") && !strings.Contains(output, "]") {
-		t.Fatalf("/stats perf slow should show slow execs or 'No slow executions': %q", output)
-	}
-
-	// Test /stats reset
-	if err := tc.sendLine("/stats reset"); err != nil {
-		t.Fatalf("/stats reset command: %v", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats reset did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Statistics reset") {
-		t.Fatalf("/stats reset should confirm reset: %q", output)
-	}
-
-	// Verify reset worked by checking summary shows zero
-	if err := tc.sendLine("/stats summary"); err != nil {
-		t.Fatalf("/stats summary after reset: %v", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats summary after reset did not complete: %q", output)
-	}
-	if !strings.Contains(output, "Total: 0") {
-		t.Fatalf("/stats summary after reset should show 'Total: 0': %q", output)
-	}
+		// Verify reset worked
+		output, ok = tc.sendCommand("/stats summary", defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/stats summary after reset did not complete: %q", output)
+		}
+		if !strings.Contains(output, "Total: 0") {
+			t.Fatalf("/stats summary after reset should show 'Total: 0': %q", output)
+		}
+	})
 
 	// Test /stats help (unknown subcommand)
-	if err := tc.sendLine("/stats help"); err != nil {
-		t.Fatalf("/stats help command: %v", err)
-	}
-	output, ok = tc.waitForPrompt(defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/stats help did not complete: %q", output)
-	}
-	if !strings.Contains(output, "usage:") {
-		t.Fatalf("/stats help should show usage: %q", output)
-	}
+	t.Run("help shows usage", func(t *testing.T) {
+		output, ok := tc.sendCommand("/stats help", defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/stats help did not complete: %q", output)
+		}
+		if !strings.Contains(output, "usage:") {
+			t.Fatalf("/stats help should show usage: %q", output)
+		}
+	})
 }
 
 // TestStatePersistence tests that object state persists across executions.
