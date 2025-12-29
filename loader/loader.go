@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/zond/juicemud"
-	"github.com/zond/juicemud/game"
 	"github.com/zond/juicemud/storage"
 	"github.com/zond/juicemud/structs"
 
@@ -40,11 +39,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Pass false for firstStartup - loader operates on existing data
-	if _, err := game.New(ctx, store, false); err != nil {
-		log.Fatal(err)
-	}
-
 	defer store.Close()
 
 	if *doRestore {
