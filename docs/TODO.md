@@ -13,8 +13,8 @@ Known issues and tasks to address.
 
 ### Event System
 
-- [ ] Handle 'message' events in handleEmitEvent
-  - When an object receives a 'message' event, print the message to connected player terminals
+- [x] Handle 'message' events in handleEmitEvent
+  - When an object receives a 'message' event with `{"text": "..."}`, prints to connected terminal
   - Useful for NPC dialogue, system messages, etc.
 
 - [ ] Extend `emitToLocation` to emit to neighbourhood

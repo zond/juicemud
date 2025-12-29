@@ -246,6 +246,11 @@ func (c *Connection) scan() error {
 
 // handleEmitEvent handles emit events that should be rendered to the connection.
 // This is a convenience for users - JS processing always continues regardless.
+// messageContent is the payload for message events.
+type messageContent struct {
+	Text string `json:"text"`
+}
+
 func (c *Connection) handleEmitEvent(call *structs.Call) error {
 	switch call.Name {
 	case movementEventType:
@@ -260,6 +265,14 @@ func (c *Connection) handleEmitEvent(call *structs.Call) error {
 			return juicemud.WithStack(err)
 		}
 		fmt.Fprintln(c.term, resp.Message)
+	case messageEventType:
+		msg := &messageContent{}
+		if err := json.Unmarshal([]byte(call.Message), msg); err != nil {
+			return juicemud.WithStack(err)
+		}
+		if msg.Text != "" {
+			fmt.Fprintln(c.term, msg.Text)
+		}
 	}
 	return nil
 }
@@ -558,7 +571,10 @@ func (c *Connection) identifyingCommand(def defaultObject, maxTargets int, f fun
 		}
 		targets := []*structs.Object{}
 		for _, pattern := range parts[1:] {
-			if c.wiz && strings.HasPrefix(pattern, "#") {
+			if pattern == "self" {
+				// "self" always resolves to the user's own object
+				targets = append(targets, obj)
+			} else if c.wiz && strings.HasPrefix(pattern, "#") {
 				target, err := c.game.accessObject(c.ctx, pattern[1:])
 				if err != nil {
 					fmt.Fprintln(c.term, err.Error())

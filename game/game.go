@@ -48,6 +48,11 @@ const (
 	// movementRenderedEventType is sent back to an observer from a moving object
 	// containing the custom movement message to display.
 	movementRenderedEventType = "movementRendered"
+
+	// messageEventType is sent to objects to display a message.
+	// When received by an object with an active connection, the message is printed to their terminal.
+	// Useful for NPC dialogue, system messages, etc.
+	messageEventType = "message"
 )
 
 const (

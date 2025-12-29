@@ -3557,6 +3557,45 @@ addCallback('test_event', ['emit'], (data) => {
 	tc.removeObject(t, objID, false)
 }
 
+// TestMessageEvent tests that message events are printed to connected players.
+func TestMessageEvent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+
+	tc.ensureInGenesis(t)
+
+	// Get the wizard's object ID using "self" keyword
+	output, ok := tc.sendCommand("/inspect self Id", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/inspect self did not complete: %q", output)
+	}
+	// Extract the ID from output (it will be a quoted string like "abc123")
+	selfID := strings.Trim(strings.TrimSpace(output), `"`)
+	if selfID == "" || strings.Contains(selfID, " ") {
+		t.Fatalf("failed to extract self ID: %q", output)
+	}
+
+	// Send a message event to self
+	testMessage := "Hello from message event!"
+	if err := tc.sendLine(fmt.Sprintf(`/emit #%s message emit {"text":"%s"}`, selfID, testMessage)); err != nil {
+		t.Fatalf("failed to send /emit: %v", err)
+	}
+
+	// Wait for both the emit confirmation and the message to appear
+	received := tc.readUntil(defaultWaitTimeout, func(s string) bool {
+		return strings.Contains(s, "Emitted") && strings.Contains(s, testMessage)
+	})
+	if !strings.Contains(received, "Emitted") {
+		t.Fatalf("/emit should confirm event was emitted: %q", received)
+	}
+	if !strings.Contains(received, testMessage) {
+		t.Fatalf("message event should be printed to terminal, got: %q", received)
+	}
+}
+
 // TestErrorCases tests error handling for various invalid inputs.
 func TestErrorCases(t *testing.T) {
 	if testing.Short() {
