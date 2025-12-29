@@ -2983,7 +2983,7 @@ setDescriptions([{
 		t.Fatalf("/inspect should show object description: %q", inspectOutput)
 	}
 
-	// Test /ls - verify output contains the box source file
+	// Test /ls on a file - verify output contains the box source file
 	if err := tc.sendLine(fmt.Sprintf("/ls %s", boxPath)); err != nil {
 		t.Fatalf("/ls command: %v", err)
 	}
@@ -2994,6 +2994,39 @@ setDescriptions([{
 	// /ls on a file path should show the file
 	if !strings.Contains(lsOutput, "box") {
 		t.Fatalf("/ls output should reference the box file: %q", lsOutput)
+	}
+
+	// Test /ls on root directory
+	if err := tc.sendLine("/ls /"); err != nil {
+		t.Fatalf("/ls / command: %v", err)
+	}
+	lsRootOutput, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/ls / command did not complete")
+	}
+	// Root should contain standard directories
+	if !strings.Contains(lsRootOutput, "dir") {
+		t.Fatalf("/ls / should show directories: %q", lsRootOutput)
+	}
+
+	// Test /ls on a subdirectory (create one first with a nested source)
+	nestedPath := uniqueSourcePath("subdir/nested_file")
+	nestedSource := `setDescriptions([{Short: 'nested object'}]);`
+	if err := ts.WriteSource(nestedPath, nestedSource); err != nil {
+		t.Fatalf("failed to create %s: %v", nestedPath, err)
+	}
+	// Get the directory part
+	dirPath := nestedPath[:strings.LastIndex(nestedPath, "/")]
+	if err := tc.sendLine(fmt.Sprintf("/ls %s", dirPath)); err != nil {
+		t.Fatalf("/ls dir command: %v", err)
+	}
+	lsDirOutput, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/ls dir command did not complete")
+	}
+	// Should show the nested file
+	if !strings.Contains(lsDirOutput, "nested_file") {
+		t.Fatalf("/ls on directory should show files within: %q", lsDirOutput)
 	}
 }
 

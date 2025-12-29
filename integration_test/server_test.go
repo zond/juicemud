@@ -278,14 +278,6 @@ func (tc *terminalClient) readUntil(timeout time.Duration, match func(string) bo
 	return result.String()
 }
 
-// waitFor reads until the expected string appears or timeout.
-func (tc *terminalClient) waitFor(expected string, timeout time.Duration) (string, bool) {
-	output := tc.readUntil(timeout, func(s string) bool {
-		return strings.Contains(s, expected)
-	})
-	return output, strings.Contains(output, expected)
-}
-
 // waitForPrompt waits for the command prompt to appear, indicating the server is ready for input.
 // Returns all output received up to and including the prompt.
 // Waits until the output ENDS with a prompt to avoid partial reads.
@@ -359,10 +351,22 @@ func (r *inspectResult) GetID() string         { return r.ID }
 func (r *inspectResult) GetLocation() string   { return r.Location }
 func (r *inspectResult) GetSourcePath() string { return r.SourcePath }
 
-// jsonExtractor matches the JSON object in /inspect output.
-// Uses greedy matching which works correctly here because /inspect outputs
-// exactly one well-formed JSON object with no stray braces in the output.
-var jsonExtractor = regexp.MustCompile(`(?s)\{.*\}`)
+// extractFirstJSON finds and extracts the first complete JSON object from a string.
+// Uses json.Decoder for proper parsing rather than regex, handling nested braces correctly.
+func extractFirstJSON(s string) (string, error) {
+	start := strings.Index(s, "{")
+	if start == -1 {
+		return "", fmt.Errorf("no JSON object found")
+	}
+	// Use json.Decoder to properly find the end of the JSON object
+	dec := json.NewDecoder(strings.NewReader(s[start:]))
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return "", fmt.Errorf("invalid JSON: %w", err)
+	}
+	// InputOffset tells us how many bytes were consumed
+	return s[start : start+int(dec.InputOffset())], nil
+}
 
 // createdIDExtractor matches the object ID in /create output (e.g., "Created #abc123_XYZ").
 // Object IDs use base64url encoding which includes alphanumeric, underscore, and hyphen.
@@ -420,14 +424,14 @@ func (tc *terminalClient) inspect(target string) (*inspectResult, error) {
 	if !ok {
 		return nil, fmt.Errorf("inspect command did not complete: %q", output)
 	}
-	// Extract JSON from output
-	jsonMatch := jsonExtractor.FindString(output)
-	if jsonMatch == "" {
-		return nil, fmt.Errorf("no JSON found in inspect output: %q", output)
+	// Extract JSON from output using proper JSON parsing
+	jsonStr, err := extractFirstJSON(output)
+	if err != nil {
+		return nil, fmt.Errorf("no JSON found in inspect output: %q (%w)", output, err)
 	}
 	var result inspectResult
-	if err := json.Unmarshal([]byte(jsonMatch), &result); err != nil {
-		return nil, fmt.Errorf("parsing inspect JSON: %w (raw: %q)", err, jsonMatch)
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return nil, fmt.Errorf("parsing inspect JSON: %w (raw: %q)", err, jsonStr)
 	}
 	return &result, nil
 }

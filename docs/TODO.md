@@ -56,10 +56,15 @@ Known issues and tasks to address.
   - Concurrent access patterns
   - Connection drop mid-command
   - Multiple SSH sessions from same user
-  - `/ls` on directories (only file path currently tested)
   - JS API error returns
 
-- [ ] Consider non-greedy regex at `server_test.go:364` (currently relies on single JSON object in output)
+- [x] Fix JSON extraction in server_test.go
+  - Replaced greedy regex `\{.*\}` with proper JSON parsing using json.Decoder
+  - Handles nested braces correctly
+
+- [x] Add /ls directory tests
+  - Test /ls on root directory
+  - Test /ls on subdirectory with nested files
 
 ## Features
 
