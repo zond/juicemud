@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -3459,17 +3460,41 @@ function unclosed( {
 		}
 
 		// Try to create an object from the bad source
+		// With proper JS syntax errors, /create should fail or show an error
 		output, ok := tc.sendCommand("/create "+badSourcePath, defaultWaitTimeout)
 		if !ok {
 			t.Fatalf("/create did not complete: %q", output)
 		}
-		// The object might be created but should have errors when script runs
-		// Let's verify we can at least detect problems
-		if strings.Contains(output, "Created") {
-			// If created, the object's script should fail to run properly
-			// Extract ID and try to trigger it
-			t.Logf("Object created despite syntax error (deferred execution): %q", output)
+
+		// Check the actual behavior:
+		// 1. If /create reports an error (doesn't show "Created"), that's correct
+		// 2. If /create shows "Created", the syntax error was deferred
+		if !strings.Contains(output, "Created") {
+			// Good - syntax error was caught during creation
+			t.Logf("Syntax error correctly caught during /create: %q", output)
+			return
 		}
+
+		// Object was created - extract ID and verify the broken state
+		idMatch := regexp.MustCompile(`Created #(\S+)`).FindStringSubmatch(output)
+		if len(idMatch) < 2 {
+			t.Fatalf("could not extract object ID from: %q", output)
+		}
+		brokenID := idMatch[1]
+		t.Logf("Object created with deferred syntax error: ID=%s", brokenID)
+
+		// The object exists but has broken JS - verify /inspect still works
+		inspectOutput, ok := tc.sendCommand("/inspect #"+brokenID, defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/inspect broken object did not complete: %q", inspectOutput)
+		}
+		// Should show the source path pointing to our bad source
+		if !strings.Contains(inspectOutput, badSourcePath) {
+			t.Fatalf("broken object should reference bad source path: %q", inspectOutput)
+		}
+
+		// Clean up the broken object
+		tc.removeObject(t, brokenID, false)
 	})
 
 	t.Run("MoveInvalidObject", func(t *testing.T) {
