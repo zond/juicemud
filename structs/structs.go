@@ -117,6 +117,19 @@ func (o *Object) HasCallback(name string, tag string) bool {
 	return found
 }
 
+// FindExit returns a pointer to a copy of the exit leading to destination, or nil if not found.
+// The returned pointer is heap-allocated and safe to store beyond the Object's lifetime.
+func (o *Object) FindExit(destination string) *Exit {
+	exits := o.GetExits()
+	for i := range exits {
+		if exits[i].Destination == destination {
+			exitCopy := exits[i]
+			return &exitCopy
+		}
+	}
+	return nil
+}
+
 // PostUnmarshal initializes nil map fields on an ObjectDO to empty maps.
 // Called automatically by Object.Unmarshal via PostUnmarshaler interface.
 func (o *ObjectDO) PostUnmarshal() {
@@ -179,12 +192,22 @@ type Challenges []Challenge
 
 // Merge adds levels from mergeChallenges to challenges with matching skills.
 func (c Challenges) Merge(mergeChallenges map[string]Challenge) Challenges {
+	// Track which skills we've already included
+	included := make(map[string]bool, len(c))
 	newChallenges := Challenges{}
+	// First, add all challenges from c, merging levels where both have the skill
 	for _, challenge := range c {
 		if mergeChallenge, found := mergeChallenges[challenge.Skill]; found {
 			challenge.Level += mergeChallenge.Level
 		}
 		newChallenges = append(newChallenges, challenge)
+		included[challenge.Skill] = true
+	}
+	// Then, add any challenges from mergeChallenges that weren't in c
+	for skill, mergeChallenge := range mergeChallenges {
+		if !included[skill] {
+			newChallenges = append(newChallenges, mergeChallenge)
+		}
 	}
 	return newChallenges
 }
@@ -458,26 +481,105 @@ func (l *Location) Identify(s string) (*Object, error) {
 	return nil, errors.Errorf("Only %v %q found", len(objs), pattern)
 }
 
+// Perspective describes a location from an observer's point of view.
+// Here=true, Exit=nil: observer's current room
+// Here=false, Exit!=nil: via that exit
+// Here=false, Exit=nil: from an unknown direction (no return exit found)
+type Perspective struct {
+	Here bool
+	Exit *Exit
+}
+
+// LocationEmit is the content of events emitted via emitToLocation.
+// It wraps the original data with perspective information.
+type LocationEmit struct {
+	Data        any
+	Perspective Perspective
+}
+
+// Observers yields each object in the location that passes the given challenges.
+// Objects with the same ID as targetID are excluded (you can't observe yourself).
+func (l *Location) Observers(targetID string, challenges Challenges) iter.Seq[*Object] {
+	return func(yield func(*Object) bool) {
+		for viewer := range l.All() {
+			if viewer.GetId() != targetID {
+				if challenges.Check(viewer, targetID) > 0 {
+					if !yield(viewer) {
+						return
+					}
+				}
+			}
+		}
+	}
+}
+
+// Observation represents an observer and the challenges they overcame to perceive.
+type Observation struct {
+	Subject     *Object     // The observer
+	Challenges  Challenges  // Combined challenges: baseChallenges (+ TransmitChallenges for neighbours)
+	Perspective Perspective // Where the event came from (observer's perspective)
+}
+
+// Observers yields observations for all objects that can perceive targetID.
+// For observers in the same location, Challenges = baseChallenges.
+// For observers in neighbouring locations, Challenges = baseChallenges + exit.TransmitChallenges.
+// Perspective indicates where the observation is from (here, via exit, or unknown).
+func (n *DeepNeighbourhood) Observers(targetID string, baseChallenges Challenges) iter.Seq[*Observation] {
+	return func(yield func(*Observation) bool) {
+		// Observers in the same location - perspective is "here"
+		for viewer := range n.Location.Observers(targetID, baseChallenges) {
+			if !yield(&Observation{
+				Subject:     viewer,
+				Challenges:  baseChallenges,
+				Perspective: Perspective{Here: true},
+			}) {
+				return
+			}
+		}
+		// Observers in neighbouring locations, via exits from source
+		for _, exit := range n.Location.Container.GetExits() {
+			neighbour, found := n.Neighbours[exit.Destination]
+			if !found {
+				continue
+			}
+			// Combine base challenges with exit's TransmitChallenges
+			combined := baseChallenges.Merge(Challenges(exit.TransmitChallenges).Map())
+			// Find the return exit (observer→source) for perspective
+			returnExit := neighbour.Container.FindExit(n.Location.Container.GetId())
+			perspective := Perspective{Here: false, Exit: returnExit}
+			for viewer := range neighbour.Observers(targetID, combined) {
+				if !yield(&Observation{
+					Subject:     viewer,
+					Challenges:  combined,
+					Perspective: perspective,
+				}) {
+					return
+				}
+			}
+		}
+	}
+}
+
 type Detection struct {
-	Subject *Object
-	Object  *Object
+	Subject     *Object     // The observer
+	Object      *Object     // What the observer perceives (filtered by challenges)
+	Perspective Perspective // Where the event came from (observer's perspective)
 }
 
 // Detections yields each object that can perceive the target and how it appears to them.
-func (l *Location) Detections(target *Object, addedChallenges Challenges) iter.Seq2[*Detection, error] {
+// The perspective describes where the event came from (from the observer's point of view).
+// The target should have all challenges applied via AddDescriptionChallenges before calling.
+// Typically this includes TransmitChallenges from exits when observing through an exit.
+func (l *Location) Detections(target *Object, perspective Perspective) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
 		for viewer := range l.All() {
 			if viewer.GetId() != target.GetId() {
-				if challenged, err := target.AddDescriptionChallenges(addedChallenges); err != nil {
-					if !yield(nil, juicemud.WithStack(err)) {
-						return
-					}
-				} else if filtered, err := challenged.Filter(viewer); err != nil {
+				if filtered, err := target.Filter(viewer); err != nil {
 					if !yield(nil, juicemud.WithStack(err)) {
 						return
 					}
 				} else if len(filtered.GetDescriptions()) > 0 {
-					if !yield(&Detection{Subject: viewer, Object: filtered}, nil) {
+					if !yield(&Detection{Subject: viewer, Object: filtered, Perspective: perspective}, nil) {
 						return
 					}
 				}
@@ -487,21 +589,37 @@ func (l *Location) Detections(target *Object, addedChallenges Challenges) iter.S
 }
 
 // Detections yields all objects that can perceive the target, including via exits.
+// Sensory events travel from source (n.Location) to observers in neighbours.
+// TransmitChallenges on the source→neighbour exit are added to the target's description challenges.
+// The perspective is set to the observer→source exit (or unknown if no return exit).
 func (n *DeepNeighbourhood) Detections(target *Object) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
-		for det, err := range n.Location.Detections(target, nil) {
+		// Observers in the same location as target - perspective is "here"
+		for det, err := range n.Location.Detections(target, Perspective{Here: true}) {
 			if !yield(det, err) {
 				return
 			}
 		}
-		for _, neighbour := range n.Neighbours {
-			for _, exit := range neighbour.Container.GetExits() {
-				if exit.Destination == n.Location.Container.GetId() {
-					for det, err := range neighbour.Detections(target, Challenges(exit.TransmitChallenges)) {
-						if !yield(det, err) {
-							return
-						}
-					}
+		// Observers in neighbouring locations, via exits from source
+		for _, exit := range n.Location.Container.GetExits() {
+			neighbour, found := n.Neighbours[exit.Destination]
+			if !found {
+				continue
+			}
+			// Add source→neighbour exit's TransmitChallenges to target
+			challenged, err := target.AddDescriptionChallenges(Challenges(exit.TransmitChallenges))
+			if err != nil {
+				if !yield(nil, juicemud.WithStack(err)) {
+					return
+				}
+				continue
+			}
+			// Perspective: observer→source exit (nil if no return exit found)
+			returnExit := neighbour.Container.FindExit(n.Location.Container.GetId())
+			perspective := Perspective{Here: false, Exit: returnExit}
+			for det, err := range neighbour.Detections(challenged, perspective) {
+				if !yield(det, err) {
+					return
 				}
 			}
 		}
@@ -516,19 +634,6 @@ type Neighbourhood struct {
 func (n *Neighbourhood) Describe() string {
 	b, _ := goccy.MarshalIndent(n, "", "  ")
 	return string(b)
-}
-
-// FindLocation returns the exit to locID if reachable, or (nil, true) if it's current location.
-func (n *Neighbourhood) FindLocation(locID string) (*Exit, bool) {
-	if n.Location.GetId() == locID {
-		return nil, true
-	}
-	for _, exit := range n.Location.GetExits() {
-		if neigh, found := n.Neighbours[exit.Destination]; found && neigh.GetId() == locID {
-			return &exit, true
-		}
-	}
-	return nil, false
 }
 
 type DeepNeighbourhood struct {

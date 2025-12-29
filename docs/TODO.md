@@ -17,11 +17,12 @@ Known issues and tasks to address.
   - When an object receives a 'message' event with `{"text": "..."}`, prints to connected terminal
   - Useful for NPC dialogue, system messages, etc.
 
-- [ ] Extend `emitToLocation` to emit to neighbourhood
-  - Currently emits only to objects in the specified location
-  - Should emit to everything in the neighbourhood (location + neighboring rooms)
-  - Use exit transmit challenges to filter what propagates to neighboring rooms
+- [x] Extend `emitToLocation` to emit to neighbourhood
+  - Emits to objects in the specified location with `source: {here: true}`
+  - Also emits to neighbouring rooms via exits with `source: {exit: "exitName"}`
+  - Exit's TransmitChallenges filter which observers can perceive through that exit
   - Regular challenges parameter still filters individual recipients
+  - Exit name is from observer's perspective (exit back to source location)
 
 - [ ] Add JS function to print to connection
   - Add `printToConnection(message)` JS function available on objects with active connections

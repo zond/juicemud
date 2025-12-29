@@ -287,23 +287,19 @@ func (c *Connection) renderMovement(m *movement) error {
 		return juicemud.WithStack(err)
 	}
 
-	var src, dst *movementPerspective
+	var src, dst *structs.Perspective
 	if m.Source != nil {
-		if exit, found := neigh.FindLocation(*m.Source); found {
-			if exit != nil {
-				src = &movementPerspective{Exit: exit.Name()}
-			} else {
-				src = &movementPerspective{Here: true}
-			}
+		if neigh.Location.GetId() == *m.Source {
+			src = &structs.Perspective{Here: true}
+		} else if exit := neigh.Location.FindExit(*m.Source); exit != nil {
+			src = &structs.Perspective{Exit: exit}
 		}
 	}
 	if m.Destination != nil {
-		if exit, found := neigh.FindLocation(*m.Destination); found {
-			if exit != nil {
-				dst = &movementPerspective{Exit: exit.Name()}
-			} else {
-				dst = &movementPerspective{Here: true}
-			}
+		if neigh.Location.GetId() == *m.Destination {
+			dst = &structs.Perspective{Here: true}
+		} else if exit := neigh.Location.FindExit(*m.Destination); exit != nil {
+			dst = &structs.Perspective{Exit: exit}
 		}
 	}
 
@@ -349,26 +345,26 @@ func (c *Connection) renderMovement(m *movement) error {
 
 // renderDefaultMovement renders a movement message using Go-based rendering.
 // src/dst are the pre-computed perspectives (nil if not visible, Here=true for current room,
-// or Exit set to the exit name for neighbors). verb is the movement verb (e.g., "moves", "scurries").
-func (c *Connection) renderDefaultMovement(m *movement, src, dst *movementPerspective, verb string) {
+// or Exit set for neighbors). verb is the movement verb (e.g., "moves", "scurries").
+func (c *Connection) renderDefaultMovement(m *movement, src, dst *structs.Perspective, verb string) {
 	name := lang.Capitalize(m.Object.Indef())
 	srcHere := src != nil && src.Here
 	dstHere := dst != nil && dst.Here
-	srcNeighbor := src != nil && src.Exit != ""
-	dstNeighbor := dst != nil && dst.Exit != ""
+	srcNeighbor := src != nil && src.Exit != nil
+	dstNeighbor := dst != nil && dst.Exit != nil
 
 	switch {
 	case srcHere && dstNeighbor:
 		// Leaves current room to visible neighbor
-		fmt.Fprintf(c.term, "%s %s %s.\n", name, verb, dst.Exit)
+		fmt.Fprintf(c.term, "%s %s %s.\n", name, verb, dst.Exit.Name())
 
 	case srcNeighbor && dstHere:
 		// Arrives at current room from visible neighbor
-		fmt.Fprintf(c.term, "%s %s in from %s.\n", name, verb, src.Exit)
+		fmt.Fprintf(c.term, "%s %s in from %s.\n", name, verb, src.Exit.Name())
 
 	case srcNeighbor && dstNeighbor:
 		// Passes between two visible neighbors
-		fmt.Fprintf(c.term, "%s %s from %s to %s.\n", name, verb, src.Exit, dst.Exit)
+		fmt.Fprintf(c.term, "%s %s from %s to %s.\n", name, verb, src.Exit.Name(), dst.Exit.Name())
 
 	case srcHere:
 		// Leaves current room to unknown/invisible destination
@@ -380,11 +376,11 @@ func (c *Connection) renderDefaultMovement(m *movement, src, dst *movementPerspe
 
 	case srcNeighbor:
 		// Leaves visible neighbor to unknown destination
-		fmt.Fprintf(c.term, "Via %s, you see %s leave.\n", src.Exit, m.Object.Indef())
+		fmt.Fprintf(c.term, "Via %s, you see %s leave.\n", src.Exit.Name(), m.Object.Indef())
 
 	case dstNeighbor:
 		// Arrives at visible neighbor from unknown source
-		fmt.Fprintf(c.term, "Via %s, you see %s arrive.\n", dst.Exit, m.Object.Indef())
+		fmt.Fprintf(c.term, "Via %s, you see %s arrive.\n", dst.Exit.Name(), m.Object.Indef())
 	}
 }
 

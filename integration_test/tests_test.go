@@ -1973,6 +1973,323 @@ addCallback('mindspeak', ['action'], (msg) => {
 	}
 }
 
+// TestEmitToLocationNeighbourhood tests emitToLocation() propagating to neighbouring rooms.
+func TestEmitToLocationNeighbourhood(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	tc.ensureInGenesis(t)
+
+	// Create two connected rooms
+	roomAPath := uniqueSourcePath("neigh_room_a")
+	roomBPath := uniqueSourcePath("neigh_room_b")
+
+	// Create empty sources first
+	if err := ts.WriteSource(roomAPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomAPath, err)
+	}
+	if err := ts.WriteSource(roomBPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomBPath, err)
+	}
+
+	roomAID, err := tc.createObject(roomAPath)
+	if err != nil {
+		t.Fatalf("create room A: %v", err)
+	}
+	roomBID, err := tc.createObject(roomBPath)
+	if err != nil {
+		t.Fatalf("create room B: %v", err)
+	}
+
+	// Update room sources with exits pointing to each other
+	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Room Alpha', Unique: true}]);
+setExits([{Descriptions: [{Short: 'east'}], Destination: '%s'}]);
+`, roomBID)
+	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomAPath, err)
+	}
+
+	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Room Beta', Unique: true}]);
+setExits([{Descriptions: [{Short: 'west'}], Destination: '%s'}]);
+`, roomAID)
+	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomBPath, err)
+	}
+
+	// Enter room A
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A did not complete")
+	}
+
+	// Create listener in room A - should receive with source.here=true
+	listenerAPath := uniqueSourcePath("listener_a")
+	listenerASource := `setDescriptions([{Short: 'listener A (idle)'}]);
+addCallback('shout', ['emit'], (msg) => {
+	if (msg.source && msg.source.here) {
+		setDescriptions([{Short: 'listener A (heard here: ' + msg.text + ')'}]);
+	} else if (msg.source && msg.source.exit) {
+		setDescriptions([{Short: 'listener A (heard from ' + msg.source.exit + ': ' + msg.text + ')'}]);
+	} else {
+		setDescriptions([{Short: 'listener A (heard: ' + msg.text + ')'}]);
+	}
+});
+`
+	if err := ts.WriteSource(listenerAPath, listenerASource); err != nil {
+		t.Fatalf("failed to create %s: %v", listenerAPath, err)
+	}
+	if _, err := tc.createObject(listenerAPath); err != nil {
+		t.Fatalf("create listener A: %v", err)
+	}
+
+	// Create listener in room B - should receive with source.exit="west" (exit back to room A)
+	listenerBPath := uniqueSourcePath("listener_b")
+	listenerBSource := `setDescriptions([{Short: 'listener B (idle)'}]);
+addCallback('shout', ['emit'], (msg) => {
+	if (msg.source && msg.source.here) {
+		setDescriptions([{Short: 'listener B (heard here: ' + msg.text + ')'}]);
+	} else if (msg.source && msg.source.exit) {
+		setDescriptions([{Short: 'listener B (heard from ' + msg.source.exit + ': ' + msg.text + ')'}]);
+	} else {
+		setDescriptions([{Short: 'listener B (heard: ' + msg.text + ')'}]);
+	}
+});
+`
+	if err := ts.WriteSource(listenerBPath, listenerBSource); err != nil {
+		t.Fatalf("failed to create %s: %v", listenerBPath, err)
+	}
+	// Move to room B to create listener there
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomBID)); err != nil {
+		t.Fatalf("/enter room B: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room B did not complete")
+	}
+	if _, err := tc.createObject(listenerBPath); err != nil {
+		t.Fatalf("create listener B: %v", err)
+	}
+
+	// Go back to room A and create a shouter
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A again: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A again did not complete")
+	}
+
+	shouterPath := uniqueSourcePath("shouter")
+	shouterSource := fmt.Sprintf(`setDescriptions([{Short: 'shouter (idle)'}]);
+addCallback('yell', ['action'], (msg) => {
+	emitToLocation('%s', 'shout', {text: 'Hello!'});
+	setDescriptions([{Short: 'shouter (yelled)'}]);
+});
+`, roomAID)
+	if err := ts.WriteSource(shouterPath, shouterSource); err != nil {
+		t.Fatalf("failed to create %s: %v", shouterPath, err)
+	}
+	if _, err := tc.createObject(shouterPath); err != nil {
+		t.Fatalf("create shouter: %v", err)
+	}
+
+	// Issue the yell command
+	if err := tc.sendLine("yell"); err != nil {
+		t.Fatalf("yell command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("yell command did not complete")
+	}
+
+	// Listener A should have heard with source.here=true
+	output, found := tc.waitForLookMatch("listener A (heard here: Hello!)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("listener A should have heard with source.here: %q", output)
+	}
+
+	// Check listener B in room B
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomBID)); err != nil {
+		t.Fatalf("/enter room B to check: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room B to check did not complete")
+	}
+
+	// Listener B should have heard with source.exit="west" (the exit from B back to A)
+	output, found = tc.waitForLookMatch("listener B (heard from west: Hello!)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("listener B should have heard with source.exit=west: %q", output)
+	}
+}
+
+// TestTransmitChallenges tests that TransmitChallenges on exits filter who can perceive events.
+// The challenge direction is source→observer: the exit FROM source TO observer determines filtering.
+func TestTransmitChallenges(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	tc.ensureInGenesis(t)
+
+	// Create two connected rooms where the exit FROM A TO B has TransmitChallenges
+	roomAPath := uniqueSourcePath("transmit_room_a")
+	roomBPath := uniqueSourcePath("transmit_room_b")
+
+	// Create empty sources first
+	if err := ts.WriteSource(roomAPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomAPath, err)
+	}
+	if err := ts.WriteSource(roomBPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomBPath, err)
+	}
+
+	roomAID, err := tc.createObject(roomAPath)
+	if err != nil {
+		t.Fatalf("create room A: %v", err)
+	}
+	roomBID, err := tc.createObject(roomBPath)
+	if err != nil {
+		t.Fatalf("create room B: %v", err)
+	}
+
+	// Room A has an exit to B with TransmitChallenges requiring 'perception' skill level 50
+	// This means events FROM A can only reach observers in B if they have perception >= 50
+	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Transmit Room A', Unique: true}]);
+setExits([{
+	Descriptions: [{Short: 'foggy passage'}],
+	Destination: '%s',
+	TransmitChallenges: [{Skill: 'perception', Level: 50}]
+}]);
+`, roomBID)
+	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomAPath, err)
+	}
+
+	// Room B has a normal exit back to A (no TransmitChallenges)
+	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Transmit Room B', Unique: true}]);
+setExits([{Descriptions: [{Short: 'clear passage'}], Destination: '%s'}]);
+`, roomAID)
+	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomBPath, err)
+	}
+
+	// Enter room A
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A did not complete")
+	}
+
+	// Create a skilled listener in room B (perception 150 - passes the challenge)
+	skilledListenerPath := uniqueSourcePath("skilled_listener")
+	skilledListenerSource := `setDescriptions([{Short: 'skilled listener (idle)'}]);
+setSkills({perception: {Practical: 150, Theoretical: 150}});
+addCallback('shout', ['emit'], (msg) => {
+	if (msg.Perspective && msg.Perspective.Exit) {
+		setDescriptions([{Short: 'skilled listener (heard: ' + msg.Data.text + ')'}]);
+	}
+});
+`
+	if err := ts.WriteSource(skilledListenerPath, skilledListenerSource); err != nil {
+		t.Fatalf("failed to create %s: %v", skilledListenerPath, err)
+	}
+
+	// Create an unskilled listener in room B (no perception - fails the challenge)
+	unskilledListenerPath := uniqueSourcePath("unskilled_listener")
+	unskilledListenerSource := `setDescriptions([{Short: 'unskilled listener (idle)'}]);
+addCallback('shout', ['emit'], (msg) => {
+	if (msg.Perspective && msg.Perspective.Exit) {
+		setDescriptions([{Short: 'unskilled listener (heard: ' + msg.Data.text + ')'}]);
+	}
+});
+`
+	if err := ts.WriteSource(unskilledListenerPath, unskilledListenerSource); err != nil {
+		t.Fatalf("failed to create %s: %v", unskilledListenerPath, err)
+	}
+
+	// Create a broadcaster in room A that shouts to its location
+	broadcasterPath := uniqueSourcePath("transmit_broadcaster")
+	broadcasterSource := fmt.Sprintf(`setDescriptions([{Short: 'broadcaster'}]);
+addCallback('broadcast', ['action'], () => {
+	emitToLocation('%s', 'shout', {text: 'Hello!'});
+});
+`, roomAID)
+	if err := ts.WriteSource(broadcasterPath, broadcasterSource); err != nil {
+		t.Fatalf("failed to create %s: %v", broadcasterPath, err)
+	}
+	if _, err := tc.createObject(broadcasterPath); err != nil {
+		t.Fatalf("create broadcaster: %v", err)
+	}
+
+	// Enter room B to create listeners there
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomBID)); err != nil {
+		t.Fatalf("/enter room B: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room B did not complete")
+	}
+
+	if _, err := tc.createObject(skilledListenerPath); err != nil {
+		t.Fatalf("create skilled listener: %v", err)
+	}
+	if _, err := tc.createObject(unskilledListenerPath); err != nil {
+		t.Fatalf("create unskilled listener: %v", err)
+	}
+
+	// Go back to room A to trigger the broadcast (action events require being in same room)
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A for broadcast: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A for broadcast did not complete")
+	}
+
+	// Trigger the broadcast by typing the action command
+	if err := tc.sendLine("broadcast"); err != nil {
+		t.Fatalf("broadcast command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("broadcast command did not complete")
+	}
+
+	// Go to room B to check the listeners
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomBID)); err != nil {
+		t.Fatalf("/enter room B to check: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room B to check did not complete")
+	}
+
+	// Wait and verify: skilled listener should have heard
+	output, found := tc.waitForLookMatch("skilled listener (heard: Hello!)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("skilled listener should have heard through the foggy passage: %q", output)
+	}
+
+	// Unskilled listener should NOT have heard (still idle)
+	if err := tc.sendLine("look"); err != nil {
+		t.Fatalf("look: %v", err)
+	}
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatal("look did not complete")
+	}
+	if strings.Contains(output, "unskilled listener (heard:") {
+		t.Fatalf("unskilled listener should NOT have heard through the foggy passage (lacks perception skill): %q", output)
+	}
+	if !strings.Contains(output, "unskilled listener (idle)") {
+		t.Fatalf("unskilled listener should still be idle: %q", output)
+	}
+}
+
 // TestMovementEvents tests movement event notifications.
 func TestMovementEvents(t *testing.T) {
 	if testing.Short() {
@@ -3920,5 +4237,169 @@ func TestMultipleSSHSessions(t *testing.T) {
 	}
 	if !strings.Contains(output3, "cosmos") && !strings.Contains(output3, "Genesis") {
 		t.Fatalf("session 3 should see spawn location: %q", output3)
+	}
+}
+
+// TestTransmitChallengesMovement tests that TransmitChallenges on exits filter who can perceive movement events.
+// When an object moves in room A, observers in neighbouring room B (connected via exit with TransmitChallenges)
+// should only see the movement if they pass the challenge check.
+func TestTransmitChallengesMovement(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	tc.ensureInGenesis(t)
+
+	// Create two connected rooms where the exit FROM A TO B has TransmitChallenges
+	roomAPath := uniqueSourcePath("transmit_move_a")
+	roomBPath := uniqueSourcePath("transmit_move_b")
+	destPath := uniqueSourcePath("transmit_move_dest")
+
+	// Create empty sources first
+	if err := ts.WriteSource(roomAPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomAPath, err)
+	}
+	if err := ts.WriteSource(roomBPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomBPath, err)
+	}
+	if err := ts.WriteSource(destPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", destPath, err)
+	}
+
+	roomAID, err := tc.createObject(roomAPath)
+	if err != nil {
+		t.Fatalf("create room A: %v", err)
+	}
+	roomBID, err := tc.createObject(roomBPath)
+	if err != nil {
+		t.Fatalf("create room B: %v", err)
+	}
+	destID, err := tc.createObject(destPath)
+	if err != nil {
+		t.Fatalf("create dest room: %v", err)
+	}
+
+	// Room A has:
+	// - exit to B with TransmitChallenges (perception 50) - events need skill to reach B
+	// - exit to destination (where the object will move to)
+	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Movement Source Room', Unique: true}]);
+setExits([
+	{Descriptions: [{Short: 'foggy window'}], Destination: '%s', TransmitChallenges: [{Skill: 'perception', Level: 50}]},
+	{Descriptions: [{Short: 'exit'}], Destination: '%s'}
+]);
+`, roomBID, destID)
+	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomAPath, err)
+	}
+
+	// Room B has a normal exit back to A (no TransmitChallenges)
+	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Observer Room', Unique: true}]);
+setExits([{Descriptions: [{Short: 'clear window'}], Destination: '%s'}]);
+`, roomAID)
+	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomBPath, err)
+	}
+
+	// Destination room exits back to A
+	destSource := fmt.Sprintf(`setDescriptions([{Short: 'Destination Room', Unique: true}]);
+setExits([{Descriptions: [{Short: 'back'}], Destination: '%s'}]);
+`, roomAID)
+	if err := ts.WriteSource(destPath, destSource); err != nil {
+		t.Fatalf("failed to update %s: %v", destPath, err)
+	}
+
+	// Enter room A to create the moveable object
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A did not complete")
+	}
+
+	// Create a moveable object in room A
+	moveablePath := uniqueSourcePath("transmit_moveable")
+	moveableSource := `setDescriptions([{Short: 'glowing orb'}]);
+setMovement({Active: true});
+`
+	if err := ts.WriteSource(moveablePath, moveableSource); err != nil {
+		t.Fatalf("failed to create %s: %v", moveablePath, err)
+	}
+	moveableID, err := tc.createObject(moveablePath)
+	if err != nil {
+		t.Fatalf("create moveable: %v", err)
+	}
+
+	// Enter room B to create observers there
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomBID)); err != nil {
+		t.Fatalf("/enter room B: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room B did not complete")
+	}
+
+	// Create a skilled observer in room B (perception 150 - passes the challenge)
+	skilledObserverPath := uniqueSourcePath("skilled_move_observer")
+	skilledObserverSource := `setDescriptions([{Short: 'skilled observer (watching)'}]);
+setSkills({perception: {Practical: 150, Theoretical: 150}});
+addCallback('movement', ['emit'], (msg) => {
+	// Movement events have Object, Source, Destination (not source.exit like emit events)
+	const desc = msg.Object ? msg.Object.Descriptions[0].Short : 'something';
+	setDescriptions([{Short: 'skilled observer (saw: ' + desc + ')'}]);
+});
+`
+	if err := ts.WriteSource(skilledObserverPath, skilledObserverSource); err != nil {
+		t.Fatalf("failed to create %s: %v", skilledObserverPath, err)
+	}
+	if _, err := tc.createObject(skilledObserverPath); err != nil {
+		t.Fatalf("create skilled observer: %v", err)
+	}
+
+	// Create an unskilled observer in room B (no perception - fails the challenge)
+	unskilledObserverPath := uniqueSourcePath("unskilled_move_observer")
+	unskilledObserverSource := `setDescriptions([{Short: 'unskilled observer (watching)'}]);
+addCallback('movement', ['emit'], (msg) => {
+	// Movement events have Object, Source, Destination (not source.exit like emit events)
+	const desc = msg.Object ? msg.Object.Descriptions[0].Short : 'something';
+	setDescriptions([{Short: 'unskilled observer (saw: ' + desc + ')'}]);
+});
+`
+	if err := ts.WriteSource(unskilledObserverPath, unskilledObserverSource); err != nil {
+		t.Fatalf("failed to create %s: %v", unskilledObserverPath, err)
+	}
+	if _, err := tc.createObject(unskilledObserverPath); err != nil {
+		t.Fatalf("create unskilled observer: %v", err)
+	}
+
+	// Move the object from room A to destination
+	// Observers in room B should only see this if they pass the TransmitChallenges
+	if err := tc.sendLine(fmt.Sprintf("/move #%s #%s", moveableID, destID)); err != nil {
+		t.Fatalf("/move: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/move did not complete")
+	}
+
+	// Wait and verify: skilled observer should have seen the movement through the foggy window
+	output, found := tc.waitForLookMatch("skilled observer (saw: glowing orb)", defaultWaitTimeout)
+	if !found {
+		t.Fatalf("skilled observer should have seen movement through the foggy window: %q", output)
+	}
+
+	// Unskilled observer should NOT have seen (still watching)
+	if err := tc.sendLine("look"); err != nil {
+		t.Fatalf("look: %v", err)
+	}
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatal("look did not complete")
+	}
+	if strings.Contains(output, "unskilled observer (saw:") {
+		t.Fatalf("unskilled observer should NOT have seen movement through the foggy window (lacks perception skill): %q", output)
+	}
+	if !strings.Contains(output, "unskilled observer (watching)") {
+		t.Fatalf("unskilled observer should still be watching: %q", output)
 	}
 }

@@ -226,19 +226,12 @@ type contentChange struct {
 	Object *structs.Object // the object that was added/removed
 }
 
-// movementPerspective describes a location from an observer's perspective.
-// Either Here is true (observer's current room) or Exit contains the exit name.
-type movementPerspective struct {
-	Here bool
-	Exit string
-}
-
 // renderMovementRequest is sent to a moving object when Movement.Active is false.
 // The object should emit movementRenderedResponse back to the observer.
 type renderMovementRequest struct {
 	Observer    string               // Observer's object ID to emit response to
-	Source      *movementPerspective // nil if not visible
-	Destination *movementPerspective // nil if not visible
+	Source      *structs.Perspective // nil if not visible
+	Destination *structs.Perspective // nil if not visible
 }
 
 // movementRenderedResponse is sent back to an observer with the message to display.
@@ -756,9 +749,10 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		}
 		eventName := args[1].String()
 
-		message, err := v8go.JSONStringify(rc.Context(), args[2])
-		if err != nil {
-			return rc.Throw("trying to serialize %v: %v", args[2], err)
+		// Parse the message data
+		var messageData any
+		if err := rc.Copy(&messageData, args[2]); err != nil {
+			return rc.Throw("invalid message data: %v", err)
 		}
 
 		// Parse optional challenges
@@ -769,8 +763,8 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 			}
 		}
 
-		// Load the location and its content
-		loc, err := g.loadLocation(ctx, locationId)
+		// Load the deep neighbourhood (location + neighbours with content)
+		neighbourhood, err := g.loadDeepNeighbourhoodAt(ctx, locationId)
 		if err != nil {
 			return rc.Throw("location %q not found: %v", locationId, err)
 		}
@@ -778,18 +772,21 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		at := g.storage.Queue().After(defaultReactionDelay)
 		emitterId := object.GetId()
 
-		// Emit to each object in the location
-		for recipientId, recipient := range loc.Content {
-			// If challenges provided, check recipient's skills
-			if len(challenges) > 0 {
-				if challenges.Check(recipient, emitterId) <= 0 {
-					// Recipient fails challenge - skip
-					continue
-				}
-			}
-
-			if err := g.emitJSON(ctx, at, recipientId, eventName, message); err != nil {
-				return rc.Throw("trying to enqueue %v for %v: %v", message, recipientId, err)
+		// Iterate over all observers who pass the challenges
+		for obs := range neighbourhood.Observers(emitterId, challenges) {
+			if err := g.storage.Queue().Push(ctx, &structs.AnyEvent{
+				At:     at,
+				Object: obs.Subject.GetId(),
+				Caller: &structs.AnyCall{
+					Name: eventName,
+					Tag:  emitEventTag,
+					Content: &structs.LocationEmit{
+						Data:        messageData,
+						Perspective: obs.Perspective,
+					},
+				},
+			}); err != nil {
+				return rc.Throw("emitting to %v: %v", obs.Subject.GetId(), err)
 			}
 		}
 
