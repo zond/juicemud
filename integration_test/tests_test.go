@@ -1813,7 +1813,7 @@ setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
 	listener1Path := uniqueSourcePath("listener1")
 	listener1Source := `setDescriptions([{Short: 'listener alpha (idle)'}]);
 addCallback('announce', ['emit'], (msg) => {
-	setDescriptions([{Short: 'listener alpha (heard: ' + msg.message + ')'}]);
+	setDescriptions([{Short: 'listener alpha (heard: ' + msg.Data.message + ')'}]);
 });
 `
 	if err := ts.WriteSource(listener1Path, listener1Source); err != nil {
@@ -1827,7 +1827,7 @@ addCallback('announce', ['emit'], (msg) => {
 	listener2Path := uniqueSourcePath("listener2")
 	listener2Source := `setDescriptions([{Short: 'listener beta (idle)'}]);
 addCallback('announce', ['emit'], (msg) => {
-	setDescriptions([{Short: 'listener beta (heard: ' + msg.message + ')'}]);
+	setDescriptions([{Short: 'listener beta (heard: ' + msg.Data.message + ')'}]);
 });
 `
 	if err := ts.WriteSource(listener2Path, listener2Source); err != nil {
@@ -1910,7 +1910,7 @@ setExits([{Descriptions: [{Short: 'out'}], Destination: 'genesis'}]);
 	sensitiveEarSource := `setDescriptions([{Short: 'sensitive ear (idle)'}]);
 setSkills({telepathy: {Practical: 150, Theoretical: 150}});
 addCallback('mindcast', ['emit'], (msg) => {
-	setDescriptions([{Short: 'sensitive ear (heard: ' + msg.thought + ')'}]);
+	setDescriptions([{Short: 'sensitive ear (heard: ' + msg.Data.thought + ')'}]);
 });
 `
 	if err := ts.WriteSource(sensitiveEarPath, sensitiveEarSource); err != nil {
@@ -1925,7 +1925,7 @@ addCallback('mindcast', ['emit'], (msg) => {
 	deafEarSource := `setDescriptions([{Short: 'deaf ear (idle)'}]);
 setSkills({telepathy: {Practical: 5, Theoretical: 5}});
 addCallback('mindcast', ['emit'], (msg) => {
-	setDescriptions([{Short: 'deaf ear (heard: ' + msg.thought + ')'}]);
+	setDescriptions([{Short: 'deaf ear (heard: ' + msg.Data.thought + ')'}]);
 });
 `
 	if err := ts.WriteSource(deafEarPath, deafEarSource); err != nil {
@@ -2028,16 +2028,16 @@ setExits([{Descriptions: [{Short: 'west'}], Destination: '%s'}]);
 		t.Fatal("/enter room A did not complete")
 	}
 
-	// Create listener in room A - should receive with source.here=true
+	// Create listener in room A - should receive with Perspective.Here=true
 	listenerAPath := uniqueSourcePath("listener_a")
 	listenerASource := `setDescriptions([{Short: 'listener A (idle)'}]);
 addCallback('shout', ['emit'], (msg) => {
-	if (msg.source && msg.source.here) {
-		setDescriptions([{Short: 'listener A (heard here: ' + msg.text + ')'}]);
-	} else if (msg.source && msg.source.exit) {
-		setDescriptions([{Short: 'listener A (heard from ' + msg.source.exit + ': ' + msg.text + ')'}]);
+	if (msg.Perspective && msg.Perspective.Here) {
+		setDescriptions([{Short: 'listener A (heard here: ' + msg.Data.text + ')'}]);
+	} else if (msg.Perspective && msg.Perspective.Exit) {
+		setDescriptions([{Short: 'listener A (heard from ' + msg.Perspective.Exit.Descriptions[0].Short + ': ' + msg.Data.text + ')'}]);
 	} else {
-		setDescriptions([{Short: 'listener A (heard: ' + msg.text + ')'}]);
+		setDescriptions([{Short: 'listener A (heard: ' + msg.Data.text + ')'}]);
 	}
 });
 `
@@ -2048,16 +2048,16 @@ addCallback('shout', ['emit'], (msg) => {
 		t.Fatalf("create listener A: %v", err)
 	}
 
-	// Create listener in room B - should receive with source.exit="west" (exit back to room A)
+	// Create listener in room B - should receive with Perspective.Exit="west" (exit back to room A)
 	listenerBPath := uniqueSourcePath("listener_b")
 	listenerBSource := `setDescriptions([{Short: 'listener B (idle)'}]);
 addCallback('shout', ['emit'], (msg) => {
-	if (msg.source && msg.source.here) {
-		setDescriptions([{Short: 'listener B (heard here: ' + msg.text + ')'}]);
-	} else if (msg.source && msg.source.exit) {
-		setDescriptions([{Short: 'listener B (heard from ' + msg.source.exit + ': ' + msg.text + ')'}]);
+	if (msg.Perspective && msg.Perspective.Here) {
+		setDescriptions([{Short: 'listener B (heard here: ' + msg.Data.text + ')'}]);
+	} else if (msg.Perspective && msg.Perspective.Exit) {
+		setDescriptions([{Short: 'listener B (heard from ' + msg.Perspective.Exit.Descriptions[0].Short + ': ' + msg.Data.text + ')'}]);
 	} else {
-		setDescriptions([{Short: 'listener B (heard: ' + msg.text + ')'}]);
+		setDescriptions([{Short: 'listener B (heard: ' + msg.Data.text + ')'}]);
 	}
 });
 `
@@ -3961,6 +3961,12 @@ function unclosed( {
 		if err := ts.WriteSource(badSourcePath, badSource); err != nil {
 			t.Fatalf("failed to create %s: %v", badSourcePath, err)
 		}
+		// Clean up the bad source file when the test completes
+		defer func() {
+			if err := ts.RemoveSource(badSourcePath); err != nil {
+				t.Logf("warning: failed to remove bad source file: %v", err)
+			}
+		}()
 
 		// Try to create an object from the bad source
 		// With proper JS syntax errors, /create should fail or show an error

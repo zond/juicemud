@@ -35,3 +35,4 @@ Instructions for Claude Code when working with this repository.
 ### Go MCP server
 - If there is no gopls MCP server, run `claude mcp add gopls -- gopls mcp` to install it.
 - Run `gopls mcp -instructions` for instructions about how to interact with the gopls MCP server.
+- Always fix hints provided by gopls.

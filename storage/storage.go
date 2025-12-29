@@ -214,6 +214,27 @@ func (s *Storage) SourceModTime(_ context.Context, path string) (int64, error) {
 	return info.ModTime().UnixNano(), nil
 }
 
+// SetSource writes a source file to the filesystem.
+func (s *Storage) SetSource(_ context.Context, path string, content []byte) error {
+	fullPath, err := s.safePath(path)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		return juicemud.WithStack(err)
+	}
+	return os.WriteFile(fullPath, content, 0644)
+}
+
+// RemoveSource removes a source file from the filesystem.
+func (s *Storage) RemoveSource(_ context.Context, path string) error {
+	fullPath, err := s.safePath(path)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	return juicemud.WithStack(os.Remove(fullPath))
+}
+
 // LoadResolvedSource loads a source file with all `// @import` directives resolved.
 // Returns the concatenated source with dependencies prepended in topological order,
 // the maximum modification time across all files in the dependency tree, and any error.
@@ -601,9 +622,9 @@ func (s *Storage) LoadObjects(ctx context.Context, ids map[string]bool, ref Refr
 	}
 	if ref != nil {
 		for _, obj := range res {
-			if err := s.maybeRefresh(ctx, obj, ref); err != nil {
-				return nil, juicemud.WithStack(err)
-			}
+			// Continue on refresh errors - the object is still usable with old state.
+			// JS errors are already recorded in jsStats by run().
+			s.maybeRefresh(ctx, obj, ref)
 		}
 	}
 	return res, nil
@@ -611,14 +632,16 @@ func (s *Storage) LoadObjects(ctx context.Context, ids map[string]bool, ref Refr
 
 // AccessObject loads the object with the given ID. If a Refresh is given, it will be run if the
 // object source is newer than the last run of the object.
+// Refresh errors are ignored - the object is still usable with old state, and JS errors
+// are recorded in jsStats by run().
 func (s *Storage) AccessObject(ctx context.Context, id string, ref Refresh) (*structs.Object, error) {
 	res, err := s.objects.Get(id)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
-	if err := s.maybeRefresh(ctx, res, ref); err != nil {
-		return nil, juicemud.WithStack(err)
-	}
+	// Continue on refresh errors - the object is still usable with old state.
+	// JS errors are already recorded in jsStats by run().
+	s.maybeRefresh(ctx, res, ref)
 	return res, nil
 }
 

@@ -307,10 +307,14 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 						intervalInfo = &IntervalExecInfo{IntervalID: ev.IntervalID, EventName: ev.Call.Name}
 					}
 
-					// run() and loadRun() handle recording execution time and errors
+					// run() and loadRun() handle recording execution time and errors in jsStats
 					if _, _, err := g.loadRun(ctx, ev.Object, call, intervalInfo); err != nil {
-						log.Printf("trying to execute %+v: %v", ev, err)
-						log.Printf("%v", juicemud.StackTrace(err))
+						// Skip logging for deleted objects - this is normal when events
+						// are queued for objects that get removed before events fire
+						if !errors.Is(err, os.ErrNotExist) {
+							log.Printf("trying to execute %+v: %v", ev, err)
+							log.Printf("%v", juicemud.StackTrace(err))
+						}
 					}
 
 					// Handle interval re-enqueueing after handler execution

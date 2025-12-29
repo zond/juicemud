@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -118,22 +117,23 @@ func (ts *TestServer) SourcesDir() string {
 // WriteSource writes a source file to the sources directory.
 // The path should start with "/" (e.g., "/user.js").
 func (ts *TestServer) WriteSource(path, content string) error {
-	fullPath := filepath.Join(ts.SourcesDir(), path)
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(fullPath, []byte(content), 0644)
+	return ts.Storage().SetSource(context.Background(), path, []byte(content))
 }
 
 // ReadSource reads a source file from the sources directory.
 // The path should start with "/" (e.g., "/user.js").
 func (ts *TestServer) ReadSource(path string) (string, error) {
-	fullPath := filepath.Join(ts.SourcesDir(), path)
-	content, err := os.ReadFile(fullPath)
+	content, _, err := ts.Storage().LoadSource(context.Background(), path)
 	if err != nil {
 		return "", err
 	}
 	return string(content), nil
+}
+
+// RemoveSource removes a source file from the sources directory.
+// The path should start with "/" (e.g., "/user.js").
+func (ts *TestServer) RemoveSource(path string) error {
+	return ts.Storage().RemoveSource(context.Background(), path)
 }
 
 // terminalClient wraps an SSH session for testing.

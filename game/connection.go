@@ -435,7 +435,6 @@ func (c commands) attempt(conn *Connection, name string, line string) (bool, err
 		}
 	}
 	return false, nil
-
 }
 
 func m(s ...string) map[string]bool {
@@ -645,6 +644,7 @@ type objectAttempter struct {
 func (o objectAttempter) attempt(c *Connection, name string, line string) (found bool, err error) {
 	obj, err := c.game.accessObject(c.ctx, o.id)
 	if err != nil {
+		// Can't access own object - this is a real error
 		return false, juicemud.WithStack(err)
 	}
 	found, err = c.game.run(c.ctx, obj, &structs.AnyCall{
@@ -655,11 +655,11 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 			"line": line,
 		},
 	}, nil)
-	if err != nil {
-		return false, juicemud.WithStack(err)
-	} else if found {
-		return true, nil
+	if found {
+		return true, err
 	}
+	// Continue on errors - broken JS shouldn't block command search.
+	// JS errors are already recorded in jsStats by run().
 
 	actionCall := &structs.AnyCall{
 		Name: name,
@@ -671,10 +671,15 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 	}
 
 	loc, found, err := c.game.loadRun(c.ctx, obj.GetLocation(), actionCall, nil)
-	if found || err != nil {
-		return found, err
+	if found {
+		return true, err
 	}
+	// Continue on errors - broken location JS shouldn't block command search.
 
+	if loc == nil {
+		// Location couldn't be loaded at all - can't continue
+		return false, nil
+	}
 	if loc, err = loc.Filter(obj); err != nil {
 		return false, juicemud.WithStack(err)
 	}
@@ -726,9 +731,11 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 	delete(cont, o.id)
 	for sibID := range cont {
 		_, found, err = c.game.loadRun(c.ctx, sibID, actionCall, nil)
-		if found || err != nil {
-			return found, err
+		if found {
+			return true, err
 		}
+		// Continue on errors - a broken sibling shouldn't block command processing.
+		// JS errors are already recorded in jsStats by run().
 	}
 	return false, nil
 }
