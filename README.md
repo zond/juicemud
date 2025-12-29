@@ -385,7 +385,79 @@ Key differences from `setTimeout`:
 
 **Debugging**: Wizards can attach to an object's console with `/debug #objectid` to see `log()` output, and detach with `/undebug #objectid`.
 
-**Skill/Challenge System**: Descriptions and exits can have challenge requirements. Objects have skills with theoretical/practical levels, recharge times, and forgetting mechanics. See `docs/skill-system.md` for details.
+**Skill/Challenge System**: Objects have skills with theoretical/practical levels, recharge times, and forgetting mechanics. Descriptions and exits can require skill challenges to perceive or use. See `docs/skill-system.md` for the underlying math.
+
+**Description Challenges**: Each description can have skill challenges that must be passed to perceive it:
+
+```javascript
+setDescriptions([
+    {
+        Short: 'ordinary rock',
+        Long: 'A plain gray rock.',
+        // No challenges - always visible
+    },
+    {
+        Short: 'hidden gem',
+        Long: 'A sparkling gem concealed in the shadows.',
+        Challenges: [{Skill: 'perception', Level: 50}],
+    },
+    {
+        Short: 'ancient runes',
+        Long: 'Faint magical runes are etched into the surface.',
+        Challenges: [{Skill: 'perception', Level: 30}, {Skill: 'arcana', Level: 20}],
+    },
+]);
+```
+
+How description visibility works:
+- All descriptions where the viewer passes the challenges (sum > 0) are included
+- The first visible description's `Short` is used as the object's name
+- All visible `Long` texts are concatenated when examining
+- Descriptions with no challenges are always visible
+- Multiple challenges on one description are summed (must pass overall)
+
+Use cases:
+- **Hidden objects**: Require Perception to notice at all
+- **Disguises**: First description is the disguise, second requires Insight to see through
+- **Graduated detail**: Basic description always visible, expert analysis requires skill
+
+**Exit Challenges**: Exits have two types of challenges:
+
+```javascript
+setExits([
+    {
+        Descriptions: [{Short: 'north'}],
+        Destination: 'room-abc123',
+        // No challenges - anyone can use and see through
+    },
+    {
+        Descriptions: [{Short: 'locked door'}],
+        Destination: 'room-def456',
+        // UseChallenges: must pass to traverse the exit
+        UseChallenges: [{Skill: 'strength', Level: 50, Message: 'The door is too heavy to open.'}],
+    },
+    {
+        Descriptions: [{Short: 'foggy passage'}],
+        Destination: 'room-ghi789',
+        // TransmitChallenges: added difficulty to perceive things through this exit
+        TransmitChallenges: [{Skill: 'perception', Level: 30}],
+    },
+]);
+```
+
+- **`UseChallenges`**: Checked when a player tries to move through the exit. On failure, the `Message` is printed and an `exitFailed` event is sent to the room.
+- **`TransmitChallenges`**: Added to description challenges when viewing neighboring rooms via `scan`. Makes distant objects harder to perceive through foggy/dark/narrow passages.
+
+Exit descriptions can also have challenges (for secret doors):
+```javascript
+setExits([{
+    Descriptions: [{
+        Short: 'hidden passage',
+        Challenges: [{Skill: 'perception', Level: 80}],
+    }],
+    Destination: 'secret-room',
+}]);
+```
 
 **File System**: JavaScript sources are stored directly on the filesystem in `<dir>/src/`. Wizards can browse and edit these files using standard text editors or IDEs.
 
