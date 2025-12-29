@@ -174,7 +174,8 @@ func TestStatsCommand(t *testing.T) {
 		{
 			name:   "perf slow",
 			cmd:    "/stats perf slow",
-			either: []string{"No slow executions", "]"},
+			// Output is either "No slow executions recorded." or "[HH:MM:SS] #objID path Xms"
+			either: []string{"No slow executions", "ms"},
 		},
 	}
 
