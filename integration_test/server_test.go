@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	cryptossh "golang.org/x/crypto/ssh"
@@ -669,4 +670,60 @@ setExits([{Name: 'out', Destination: 'genesis'}]);
 	}
 
 	return roomID, nil
+}
+
+// ensureInGenesis moves the player to genesis if not already there.
+// Fails the test if the movement fails.
+func (tc *terminalClient) ensureInGenesis(t *testing.T) {
+	t.Helper()
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+}
+
+// createBidirectionalRooms creates two rooms with exits connecting them.
+// This is a common pattern in movement and scan tests.
+// The baseName parameter is used to generate unique source paths.
+// Returns (roomAID, roomBID) or fails the test.
+func createBidirectionalRooms(t *testing.T, ts *TestServer, tc *terminalClient, baseName, nameA, nameB, exitAtoB, exitBtoA string) (string, string) {
+	t.Helper()
+
+	// Step 1: Create empty source files
+	roomAPath := uniqueSourcePath(baseName + "_roomA")
+	roomBPath := uniqueSourcePath(baseName + "_roomB")
+	if err := ts.WriteSource(roomAPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomAPath, err)
+	}
+	if err := ts.WriteSource(roomBPath, ""); err != nil {
+		t.Fatalf("failed to create %s: %v", roomBPath, err)
+	}
+
+	// Step 2: Create the room objects
+	roomAID, err := tc.createObject(roomAPath)
+	if err != nil {
+		t.Fatalf("create room %s: %v", nameA, err)
+	}
+	roomBID, err := tc.createObject(roomBPath)
+	if err != nil {
+		t.Fatalf("create room %s: %v", nameB, err)
+	}
+
+	// Step 3: Update source files with exits referencing object IDs
+	roomASource := fmt.Sprintf(`setDescriptions([{Short: '%s', Unique: true}]);
+setExits([{Descriptions: [{Short: '%s'}], Destination: '%s'}]);
+`, nameA, exitAtoB, roomBID)
+	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomAPath, err)
+	}
+	roomBSource := fmt.Sprintf(`setDescriptions([{Short: '%s', Unique: true}]);
+setExits([{Descriptions: [{Short: '%s'}], Destination: '%s'}]);
+`, nameB, exitBtoA, roomAID)
+	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
+		t.Fatalf("failed to update %s: %v", roomBPath, err)
+	}
+
+	return roomAID, roomBID
 }

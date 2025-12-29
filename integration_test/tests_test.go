@@ -1802,7 +1802,9 @@ addCallback('whisper', ['action'], (msg) => {
 	}
 
 	// Dim should NOT have received the secret (should still be waiting)
-	tc.sendLine("look")
+	if err := tc.sendLine("look"); err != nil {
+		t.Fatalf("look command: %v", err)
+	}
 	output, _ = tc.waitForPrompt(defaultWaitTimeout)
 	if strings.Contains(output, "dim orb (got:") {
 		t.Fatalf("low-perception receiver should NOT have received challenged emit: %q", output)
@@ -2090,48 +2092,10 @@ func TestCustomMovementVerb(t *testing.T) {
 	tc := wizardClient
 	ts := testServer
 
-	// Ensure wizard is in genesis first
-	if err := tc.sendLine("/enter #genesis"); err != nil {
-		t.Fatalf("/enter genesis: %v", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/enter genesis did not complete")
-	}
+	tc.ensureInGenesis(t)
 
 	// Create two rooms with bidirectional exits so observer sees both source and destination
-	// Step 1: Create empty source files
-	roomAPath := uniqueSourcePath("scurry_roomA")
-	roomBPath := uniqueSourcePath("scurry_roomB")
-	if err := ts.WriteSource(roomAPath, ""); err != nil {
-		t.Fatalf("failed to create %s: %v", roomAPath, err)
-	}
-	if err := ts.WriteSource(roomBPath, ""); err != nil {
-		t.Fatalf("failed to create %s: %v", roomBPath, err)
-	}
-
-	// Step 2: Create the room objects
-	roomAID, err := tc.createObject(roomAPath)
-	if err != nil {
-		t.Fatalf("create room A: %v", err)
-	}
-	roomBID, err := tc.createObject(roomBPath)
-	if err != nil {
-		t.Fatalf("create room B: %v", err)
-	}
-
-	// Step 3: Update source files with exits referencing object IDs (no # prefix)
-	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Mouse Room A', Unique: true}]);
-setExits([{Descriptions: [{Short: 'north'}], Destination: '%s'}]);
-`, roomBID)
-	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
-		t.Fatalf("failed to update %s: %v", roomAPath, err)
-	}
-	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Mouse Room B', Unique: true}]);
-setExits([{Descriptions: [{Short: 'south'}], Destination: '%s'}]);
-`, roomAID)
-	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
-		t.Fatalf("failed to update %s: %v", roomBPath, err)
-	}
+	roomAID, roomBID := createBidirectionalRooms(t, ts, tc, "scurry", "Mouse Room A", "Mouse Room B", "north", "south")
 
 	// Enter room A to create the object there
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
@@ -2189,48 +2153,10 @@ func TestJSMovementRendering(t *testing.T) {
 	tc := wizardClient
 	ts := testServer
 
-	// Ensure wizard is in genesis first
-	if err := tc.sendLine("/enter #genesis"); err != nil {
-		t.Fatalf("/enter genesis: %v", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/enter genesis did not complete")
-	}
+	tc.ensureInGenesis(t)
 
 	// Create two rooms with bidirectional exits so observer sees both source and destination
-	// Step 1: Create empty source files
-	roomAPath := uniqueSourcePath("jsorb_roomA")
-	roomBPath := uniqueSourcePath("jsorb_roomB")
-	if err := ts.WriteSource(roomAPath, ""); err != nil {
-		t.Fatalf("failed to create %s: %v", roomAPath, err)
-	}
-	if err := ts.WriteSource(roomBPath, ""); err != nil {
-		t.Fatalf("failed to create %s: %v", roomBPath, err)
-	}
-
-	// Step 2: Create the room objects
-	roomAID, err := tc.createObject(roomAPath)
-	if err != nil {
-		t.Fatalf("create room A: %v", err)
-	}
-	roomBID, err := tc.createObject(roomBPath)
-	if err != nil {
-		t.Fatalf("create room B: %v", err)
-	}
-
-	// Step 3: Update source files with exits referencing object IDs (no # prefix)
-	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Orb Room A', Unique: true}]);
-setExits([{Descriptions: [{Short: 'north'}], Destination: '%s'}]);
-`, roomBID)
-	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
-		t.Fatalf("failed to update %s: %v", roomAPath, err)
-	}
-	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Orb Room B', Unique: true}]);
-setExits([{Descriptions: [{Short: 'south'}], Destination: '%s'}]);
-`, roomAID)
-	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
-		t.Fatalf("failed to update %s: %v", roomBPath, err)
-	}
+	roomAID, roomBID := createBidirectionalRooms(t, ts, tc, "jsorb", "Orb Room A", "Orb Room B", "north", "south")
 
 	// Enter room A to create the object there
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
@@ -2524,25 +2450,12 @@ func TestAddDelWiz(t *testing.T) {
 	}
 
 	// Revoke wizard status using /delwiz
-	if err := tc.sendLine("/delwiz " + testUsername); err != nil {
-		t.Fatalf("/delwiz command: %v", err)
+	output, ok = tc.sendCommand("/delwiz "+testUsername, defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/delwiz command did not complete: %q", output)
 	}
-	// Loop until we get the expected response (async movement messages may arrive first).
-	// Use a short inner timeout to allow multiple polls within the outer deadline.
-	var allOutput string
-	for deadline := time.Now().Add(defaultWaitTimeout); time.Now().Before(deadline); {
-		output, ok = tc.waitForPrompt(500 * time.Millisecond)
-		allOutput += output
-		if !ok {
-			// Timeout on this iteration is fine - keep polling until outer deadline
-			continue
-		}
-		if strings.Contains(allOutput, "Revoked wizard privileges") {
-			break
-		}
-	}
-	if !strings.Contains(allOutput, "Revoked wizard privileges") {
-		t.Fatalf("/delwiz should confirm revoke: %q", allOutput)
+	if !strings.Contains(output, "Revoked wizard privileges") {
+		t.Fatalf("/delwiz should confirm revoke: %q", output)
 	}
 
 	// Reconnect to pick up revoked status
@@ -3301,48 +3214,10 @@ func TestBidirectionalMovement(t *testing.T) {
 	tc := wizardClient
 	ts := testServer
 
-	// Ensure we're in genesis
-	if err := tc.sendLine("/enter #genesis"); err != nil {
-		t.Fatalf("/enter genesis: %v", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/enter genesis did not complete")
-	}
+	tc.ensureInGenesis(t)
 
 	// Create two rooms with bidirectional exits
-	// Step 1: Create empty source files
-	roomAPath := uniqueSourcePath("bidir_roomA")
-	roomBPath := uniqueSourcePath("bidir_roomB")
-	if err := ts.WriteSource(roomAPath, ""); err != nil {
-		t.Fatalf("failed to create %s: %v", roomAPath, err)
-	}
-	if err := ts.WriteSource(roomBPath, ""); err != nil {
-		t.Fatalf("failed to create %s: %v", roomBPath, err)
-	}
-
-	// Step 2: Create the room objects
-	roomAID, err := tc.createObject(roomAPath)
-	if err != nil {
-		t.Fatalf("create room A: %v", err)
-	}
-	roomBID, err := tc.createObject(roomBPath)
-	if err != nil {
-		t.Fatalf("create room B: %v", err)
-	}
-
-	// Step 3: Update source files with exits referencing object IDs
-	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Room Alpha', Unique: true}]);
-setExits([{Descriptions: [{Short: 'east'}], Destination: '%s'}]);
-`, roomBID)
-	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
-		t.Fatalf("failed to update %s: %v", roomAPath, err)
-	}
-	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Room Beta', Unique: true}]);
-setExits([{Descriptions: [{Short: 'west'}], Destination: '%s'}]);
-`, roomAID)
-	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
-		t.Fatalf("failed to update %s: %v", roomBPath, err)
-	}
+	roomAID, roomBID := createBidirectionalRooms(t, ts, tc, "bidir", "Room Alpha", "Room Beta", "east", "west")
 
 	// Enter room A
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
@@ -3396,45 +3271,10 @@ func TestScanCommand(t *testing.T) {
 	tc := wizardClient
 	ts := testServer
 
-	// Ensure we're in genesis
-	if err := tc.sendLine("/enter #genesis"); err != nil {
-		t.Fatalf("/enter genesis: %v", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/enter genesis did not complete")
-	}
+	tc.ensureInGenesis(t)
 
 	// Create two rooms with bidirectional exits
-	roomAPath := uniqueSourcePath("scan_roomA")
-	roomBPath := uniqueSourcePath("scan_roomB")
-	if err := ts.WriteSource(roomAPath, ""); err != nil {
-		t.Fatalf("failed to create %s: %v", roomAPath, err)
-	}
-	if err := ts.WriteSource(roomBPath, ""); err != nil {
-		t.Fatalf("failed to create %s: %v", roomBPath, err)
-	}
-
-	roomAID, err := tc.createObject(roomAPath)
-	if err != nil {
-		t.Fatalf("create room A: %v", err)
-	}
-	roomBID, err := tc.createObject(roomBPath)
-	if err != nil {
-		t.Fatalf("create room B: %v", err)
-	}
-
-	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Scan Room', Unique: true}]);
-setExits([{Descriptions: [{Short: 'south'}], Destination: '%s'}]);
-`, roomBID)
-	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
-		t.Fatalf("failed to update %s: %v", roomAPath, err)
-	}
-	roomBSource := fmt.Sprintf(`setDescriptions([{Short: 'Neighbor Room', Unique: true}]);
-setExits([{Descriptions: [{Short: 'north'}], Destination: '%s'}]);
-`, roomAID)
-	if err := ts.WriteSource(roomBPath, roomBSource); err != nil {
-		t.Fatalf("failed to update %s: %v", roomBPath, err)
-	}
+	roomAID, _ := createBidirectionalRooms(t, ts, tc, "scan", "Scan Room", "Neighbor Room", "south", "north")
 
 	// Enter room A
 	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
