@@ -17,22 +17,26 @@ Known issues and tasks to address.
 - [x] Fix missing error check at `tests_test.go:1805`
   - Added proper error check on `tc.sendLine("look")`
 
-- [ ] Add negative test cases:
-  - `/create` with non-existent source path
-  - `/inspect` with invalid object ID
-  - JS source with syntax errors
-  - Duplicate user creation
-  - Invalid login credentials
+- [x] Add negative test cases:
+  - Added `TestErrorCases` with subtests for:
+    - `/create` with non-existent source path
+    - `/inspect` with invalid object ID
+    - JS source with syntax errors
+    - `/move` with invalid object
+    - `/remove` with invalid object
+  - Remaining: duplicate user creation, invalid login credentials
 
 ### Medium Priority
 
 - [ ] Split long tests using `t.Run()` subtests:
-  - `TestAddDelWiz` (~150 lines)
-  - `TestDebugLog` (~125 lines)
+  - `TestAddDelWiz` (~150 lines) - Note: sequential dependencies make this complex
+  - `TestDebugLog` (~125 lines) - Note: sequential dependencies make this complex
   - `TestChallengeSystem` (~125 lines)
   - `TestSkillConfig` (~115 lines)
 
-- [ ] Add table-driven tests for `TestStatsCommand`
+- [x] Add table-driven tests for `TestStatsCommand`
+  - Converted 7 subcommand tests to table-driven format
+  - Reduced ~100 lines to ~50 lines of structured code
 
 - [ ] Verify object removal succeeded in cleanup code (after `/remove`, verify object is actually gone)
 
