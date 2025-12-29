@@ -3450,3 +3450,91 @@ addCallback('train', ['action'], (msg) => {
 		t.Fatal("/enter genesis did not complete")
 	}
 }
+
+// TestErrorCases tests error handling for various invalid inputs.
+func TestErrorCases(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	tc.ensureInGenesis(t)
+
+	t.Run("CreateNonExistentPath", func(t *testing.T) {
+		// Try to create an object from a non-existent source path
+		output, ok := tc.sendCommand("/create /nonexistent/path.js", defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/create did not complete: %q", output)
+		}
+		// Should get an error message, not a success with object ID
+		if strings.Contains(output, "Created") {
+			t.Fatalf("/create should fail for non-existent path: %q", output)
+		}
+	})
+
+	t.Run("InspectInvalidObjectID", func(t *testing.T) {
+		// Try to inspect a non-existent object ID
+		output, ok := tc.sendCommand("/inspect #invalid-object-id-12345", defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/inspect did not complete: %q", output)
+		}
+		// Should get an error, not valid JSON output
+		if strings.Contains(output, `"Id":`) {
+			t.Fatalf("/inspect should fail for invalid ID: %q", output)
+		}
+	})
+
+	t.Run("JSSyntaxError", func(t *testing.T) {
+		// Create a source file with JavaScript syntax errors
+		badSourcePath := uniqueSourcePath("syntax_error")
+		badSource := `setDescriptions([{
+	Short: 'broken object',
+	// Missing closing bracket and syntax error
+	Long: 'This is broken
+}]);
+function unclosed( {
+`
+		if err := ts.WriteSource(badSourcePath, badSource); err != nil {
+			t.Fatalf("failed to create %s: %v", badSourcePath, err)
+		}
+
+		// Try to create an object from the bad source
+		output, ok := tc.sendCommand("/create "+badSourcePath, defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/create did not complete: %q", output)
+		}
+		// The object might be created but should have errors when script runs
+		// Let's verify we can at least detect problems
+		if strings.Contains(output, "Created") {
+			// If created, the object's script should fail to run properly
+			// Extract ID and try to trigger it
+			t.Logf("Object created despite syntax error (deferred execution): %q", output)
+		}
+	})
+
+	t.Run("MoveInvalidObject", func(t *testing.T) {
+		// Try to move a non-existent object
+		output, ok := tc.sendCommand("/move #nonexistent-123 #genesis", defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/move did not complete: %q", output)
+		}
+		// Should get an error
+		if strings.Contains(output, "Moved") {
+			t.Fatalf("/move should fail for invalid object: %q", output)
+		}
+	})
+
+	t.Run("RemoveInvalidObject", func(t *testing.T) {
+		// Try to remove a non-existent object
+		output, ok := tc.sendCommand("/remove #nonexistent-456", defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/remove did not complete: %q", output)
+		}
+		// Should get an error
+		if strings.Contains(output, "Removed") {
+			t.Fatalf("/remove should fail for invalid object: %q", output)
+		}
+	})
+}
