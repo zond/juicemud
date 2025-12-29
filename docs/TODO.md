@@ -24,7 +24,10 @@ Known issues and tasks to address.
     - JS source with syntax errors
     - `/move` with invalid object
     - `/remove` with invalid object
-  - Remaining: duplicate user creation, invalid login credentials
+  - [x] Added `TestAuthenticationErrors` with subtests for:
+    - Duplicate user creation
+    - Invalid login password
+    - Non-existent user login
 
 ### Medium Priority
 
@@ -38,7 +41,9 @@ Known issues and tasks to address.
   - Converted 7 subcommand tests to table-driven format
   - Reduced ~100 lines to ~50 lines of structured code
 
-- [ ] Verify object removal succeeded in cleanup code (after `/remove`, verify object is actually gone)
+- [x] Verify object removal succeeded in cleanup code (after `/remove`, verify object is actually gone)
+  - Created `removeObject(t, objectID, verify bool)` helper function
+  - Refactored 3 tests to use it with verification enabled
 
 - [x] Simplify nested timeout loop at `tests_test.go:2533-2543`
   - Replaced manual polling loop with `sendCommand` helper
@@ -56,3 +61,33 @@ Known issues and tasks to address.
   - JS API error returns
 
 - [ ] Consider non-greedy regex at `server_test.go:364` (currently relies on single JSON object in output)
+
+## Features
+
+### Wizard Commands
+
+- [ ] Add wizard command to view/update skills of objects
+  - Should allow inspecting skill levels on any object
+  - Should allow modifying skill levels for testing/debugging
+
+- [ ] Add wizard command to send generic events
+  - Should allow sending arbitrary event types to objects
+  - Example: `/emit <objectID> message "Hello world"` to send a message event
+
+### Event System
+
+- [ ] Handle 'message' events in handleEmitEvent
+  - When an object receives a 'message' event, print the message to connected player terminals
+  - Useful for NPC dialogue, system messages, etc.
+
+- [ ] Extend `emitToLocation` to emit to neighbourhood
+  - Currently emits only to objects in the specified location
+  - Should emit to everything in the neighbourhood (location + neighboring rooms)
+  - Use exit transmit challenges to filter what propagates to neighboring rooms
+  - Regular challenges parameter still filters individual recipients
+
+- [ ] Add JS function to print to connection
+  - Add `printToConnection(message)` JS function available on objects with active connections
+  - Allows wizards to configure how sensory events are rendered
+  - Example: In `user.js`: `addCallback('smell', ['emit'], (event) => printToConnection(event.description))`
+  - Keeps sensory event definitions flexible - wizards decide what senses/skills exist

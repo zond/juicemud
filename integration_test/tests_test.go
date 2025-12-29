@@ -1163,13 +1163,8 @@ addCallback('halt', ['action'], (msg) => {
 		t.Fatalf("interval should not fire after clearInterval: %q (expected halted at %d)", output, haltedPulses)
 	}
 
-	// Cleanup
-	if err := tc.sendLine(fmt.Sprintf("/remove #%s", pulsingGemID)); err != nil {
-		t.Fatalf("/remove pulsing_gem: %v", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/remove pulsing_gem did not complete")
-	}
+	// Cleanup with verification
+	tc.removeObject(t, pulsingGemID, true)
 }
 
 // TestIntervalsCommand tests the /intervals wizard command for listing intervals.
@@ -1221,13 +1216,8 @@ if (state.intervalId === undefined) {
 		t.Fatalf("/intervals should show interval ms: %q", output)
 	}
 
-	// Cleanup
-	if err := tc.sendLine(fmt.Sprintf("/remove #%s", intervalListerID)); err != nil {
-		t.Fatalf("/remove interval_lister: %v", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/remove interval_lister did not complete")
-	}
+	// Cleanup with verification
+	tc.removeObject(t, intervalListerID, true)
 }
 
 // TestCreateRemoveObject tests createObject() and removeObject() JS APIs.
@@ -1399,13 +1389,8 @@ addCallback('vanish', ['action'], (msg) => {
 		t.Fatal("self-removal failed within timeout")
 	}
 
-	// Cleanup spawner
-	if err := tc.sendLine(fmt.Sprintf("/remove #%s", spawnerID)); err != nil {
-		t.Fatalf("/remove spawner: %v", err)
-	}
-	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
-		t.Fatal("/remove spawner did not complete")
-	}
+	// Cleanup spawner with verification
+	tc.removeObject(t, spawnerID, true)
 }
 
 // TestRemoveCallback tests the removeCallback() JS API.

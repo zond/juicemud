@@ -727,3 +727,26 @@ setExits([{Descriptions: [{Short: '%s'}], Destination: '%s'}]);
 
 	return roomAID, roomBID
 }
+
+// removeObject removes an object and optionally verifies it was deleted.
+// If verify is true, it checks via /inspect that the object no longer exists.
+// This is useful for cleanup code where we want to ensure removal succeeded.
+func (tc *terminalClient) removeObject(t *testing.T, objectID string, verify bool) {
+	t.Helper()
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", objectID)); err != nil {
+		t.Fatalf("/remove #%s: %v", objectID, err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatalf("/remove #%s did not complete", objectID)
+	}
+	if verify {
+		output, ok := tc.sendCommand(fmt.Sprintf("/inspect #%s", objectID), defaultWaitTimeout)
+		if !ok {
+			t.Fatalf("/inspect after remove #%s did not complete", objectID)
+		}
+		// After removal, /inspect should show "unknown object" or similar error
+		if strings.Contains(output, "SourcePath:") {
+			t.Fatalf("object #%s should not exist after removal: %q", objectID, output)
+		}
+	}
+}
