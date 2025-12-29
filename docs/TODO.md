@@ -2,6 +2,10 @@
 
 Known issues and tasks to address.
 
+## Research
+
+- [ ] Benchmark JS engines with Go bindings to find the one that fits our usecase the best
+
 ## Features
 
 ### Wizard Commands
@@ -18,14 +22,21 @@ Known issues and tasks to address.
   - Useful for NPC dialogue, system messages, etc.
 
 - [x] Extend `emitToLocation` to emit to neighbourhood
-  - Emits to objects in the specified location with `source: {here: true}`
-  - Also emits to neighbouring rooms via exits with `source: {exit: "exitName"}`
+  - Emits to objects in the specified location with `Perspective: {Here: true}`
+  - Also emits to neighbouring rooms via exits with `Perspective: {Exit: exitObject}`
   - Exit's TransmitChallenges filter which observers can perceive through that exit
   - Regular challenges parameter still filters individual recipients
-  - Exit name is from observer's perspective (exit back to source location)
+  - Exit is from observer's perspective (exit back to source location)
 
-- [ ] Add JS function to print to connection
-  - Add `printToConnection(message)` JS function available on objects with active connections
-  - Allows wizards to configure how sensory events are rendered
-  - Example: In `user.js`: `addCallback('smell', ['emit'], (event) => printToConnection(event.description))`
-  - Keeps sensory event definitions flexible - wizards decide what senses/skills exist
+- [x] Add JS function to print to connection
+  - `print(message)` outputs directly to the object's SSH connection if one exists
+  - Silently does nothing for objects without connections (NPCs, etc.)
+  - Use for immediate output that doesn't need to go through the event queue
+  - Example: In `user.js`: `addCallback('smell', ['emit'], (event) => print(event.description))`
+
+### Debug System
+
+- [x] Add console.log ring buffer for /debug
+  - 64-message buffer per object stores recent console.log output
+  - When /debug connects, buffered messages are dumped first
+  - Helps debug objects that have already errored or run intermittently

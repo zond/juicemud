@@ -2,10 +2,6 @@
 
 Instructions for Claude Code when working with this repository.
 
-## TODO
-
-- Benchmark JS engines with Go bindings to find the one that fits our usecase the best.
-
 ## Rules
 
 - CLAUDE.md should only contain AI instructions, not general project documentation,
