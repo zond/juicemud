@@ -3140,6 +3140,84 @@ addCallback('trigger', ['action'], (msg) => {
 	}
 }
 
+// TestDebugLogBuffer tests that /debug shows buffered console output from before connecting.
+func TestDebugLogBuffer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Use isolated room to prevent action name collisions
+	if _, err := tc.enterIsolatedRoom(ts, "debugLogBuffer"); err != nil {
+		t.Fatalf("failed to enter isolated room: %v", err)
+	}
+
+	// Create an object that logs multiple messages when triggered
+	sourcePath := uniqueSourcePath("buffer_logger")
+	loggerSource := `setDescriptions([{Short: 'buffer logger'}]);
+addCallback('logmany', ['action'], (msg) => {
+	log('BUFFERED: message one');
+	log('BUFFERED: message two');
+	log('BUFFERED: message three');
+	setDescriptions([{Short: 'buffer logger (logged)'}]);
+});
+`
+	if err := ts.WriteSource(sourcePath, loggerSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+
+	loggerID, err := tc.createObject(sourcePath)
+	if err != nil {
+		t.Fatalf("create buffer_logger: %v", err)
+	}
+
+	// Trigger the logger WITHOUT being connected to /debug
+	// This will buffer the messages
+	if err := tc.sendLine("logmany buffer"); err != nil {
+		t.Fatalf("logmany: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("logmany did not complete")
+	}
+
+	// Wait for the object to update
+	_, found := tc.waitForLookMatch("buffer logger (logged)", defaultWaitTimeout)
+	if !found {
+		t.Fatal("buffer logger should have updated description")
+	}
+
+	// Now connect with /debug - should see buffered messages
+	output, ok := tc.sendCommand(fmt.Sprintf("/debug #%s", loggerID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/debug command did not complete: %q", output)
+	}
+
+	// Check that we see the buffered messages
+	if !strings.Contains(output, "buffered console output") {
+		t.Fatalf("/debug should show 'buffered console output' header: %q", output)
+	}
+	if !strings.Contains(output, "BUFFERED: message one") {
+		t.Fatalf("/debug should show first buffered message: %q", output)
+	}
+	if !strings.Contains(output, "BUFFERED: message two") {
+		t.Fatalf("/debug should show second buffered message: %q", output)
+	}
+	if !strings.Contains(output, "BUFFERED: message three") {
+		t.Fatalf("/debug should show third buffered message: %q", output)
+	}
+	if !strings.Contains(output, "end of buffer") {
+		t.Fatalf("/debug should show 'end of buffer' footer: %q", output)
+	}
+	if !strings.Contains(output, "connected to console") {
+		t.Fatalf("/debug should show 'connected to console': %q", output)
+	}
+
+	// Clean up
+	tc.sendCommand(fmt.Sprintf("/undebug #%s", loggerID), defaultWaitTimeout)
+}
+
 // TestSkillConfig tests getSkillConfig() and casSkillConfig() JS APIs.
 func TestSkillConfig(t *testing.T) {
 	if testing.Short() {

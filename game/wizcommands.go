@@ -228,8 +228,17 @@ func (c *Connection) wizCommands() commands {
 			names: m("/debug"),
 			f: c.identifyingCommand(defaultSelf, 0, func(c *Connection, _ *structs.Object, _ string, targets ...*structs.Object) error {
 				for _, target := range targets {
-					consoleSwitchboard.Attach(target.GetId(), c.term)
-					fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), target.GetId())
+					objectID := target.GetId()
+					// Dump buffered messages first
+					if buffered := consoleSwitchboard.GetBuffered(objectID); len(buffered) > 0 {
+						fmt.Fprintf(c.term, "---- buffered console output for #%s/%s ----\n", target.Name(), objectID)
+						for _, msg := range buffered {
+							c.term.Write(msg)
+						}
+						fmt.Fprintf(c.term, "---- end of buffer ----\n")
+					}
+					consoleSwitchboard.Attach(objectID, c.term)
+					fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), objectID)
 				}
 				return nil
 			}),
