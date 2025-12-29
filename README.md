@@ -410,11 +410,11 @@ setDescriptions([
 ```
 
 How description visibility works:
-- All descriptions where the viewer passes the challenges (sum > 0) are included
-- The first visible description's `Short` is used as the object's name
+- Descriptions are visible if they have no challenges OR if the sum of challenge results is positive
+- At display time, the first *visible* description's `Short` is used as the object's name
 - All visible `Long` texts are concatenated when examining
-- Descriptions with no challenges are always visible
 - Multiple challenges on one description are summed (must pass overall)
+- Note: `Object.Name()` internally returns the first description unconditionally; challenge filtering only happens when rendering views
 
 Use cases:
 - **Hidden objects**: Require Perception to notice at all
@@ -446,7 +446,7 @@ setExits([
 ```
 
 - **`UseChallenges`**: Checked when a player tries to move through the exit. On failure, the `Message` is printed and an `exitFailed` event is sent to the room.
-- **`TransmitChallenges`**: Added to description challenges when viewing neighboring rooms via `scan`. Makes distant objects harder to perceive through foggy/dark/narrow passages.
+- **`TransmitChallenges`**: Added to description challenges when viewing neighboring rooms via `scan` or detecting movement through the exit. Makes distant objects harder to perceive through foggy/dark/narrow passages.
 
 Exit descriptions can also have challenges (for secret doors):
 ```javascript
