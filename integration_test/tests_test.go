@@ -2527,13 +2527,15 @@ func TestAddDelWiz(t *testing.T) {
 	if err := tc.sendLine("/delwiz " + testUsername); err != nil {
 		t.Fatalf("/delwiz command: %v", err)
 	}
-	// Loop until we get the expected response (async movement messages may arrive first)
+	// Loop until we get the expected response (async movement messages may arrive first).
+	// Use a short inner timeout to allow multiple polls within the outer deadline.
 	var allOutput string
 	for deadline := time.Now().Add(defaultWaitTimeout); time.Now().Before(deadline); {
-		output, ok = tc.waitForPrompt(defaultWaitTimeout)
+		output, ok = tc.waitForPrompt(500 * time.Millisecond)
 		allOutput += output
 		if !ok {
-			t.Fatalf("/delwiz command did not complete: %q", allOutput)
+			// Timeout on this iteration is fine - keep polling until outer deadline
+			continue
 		}
 		if strings.Contains(allOutput, "Revoked wizard privileges") {
 			break
