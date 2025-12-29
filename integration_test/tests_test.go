@@ -4409,3 +4409,56 @@ addCallback('movement', ['emit'], (msg) => {
 		t.Fatalf("unskilled observer should still be watching: %q", output)
 	}
 }
+
+// TestPrintFunction tests that the print() JS function outputs directly to the connection.
+func TestPrintFunction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	tc.ensureInGenesis(t)
+
+	// Modify user.js to add a command that uses print()
+	// Save original to restore later
+	originalUserJS, err := ts.ReadSource("/user.js")
+	if err != nil {
+		t.Fatalf("failed to read user.js: %v", err)
+	}
+
+	// Add a testprint command to user.js
+	newUserJS := originalUserJS + `
+addCallback('testprint', ['command'], (msg) => {
+	print('Hello, world!');
+	print('This is a second line.');
+	return true;
+});
+`
+	if err := ts.WriteSource("/user.js", newUserJS); err != nil {
+		t.Fatalf("failed to write user.js: %v", err)
+	}
+	defer func() {
+		// Restore original user.js
+		if err := ts.WriteSource("/user.js", originalUserJS); err != nil {
+			t.Logf("warning: failed to restore user.js: %v", err)
+		}
+	}()
+
+	// Execute the testprint command - should trigger print() output
+	if err := tc.sendLine("testprint"); err != nil {
+		t.Fatalf("testprint: %v", err)
+	}
+
+	// Wait for the printed output
+	output := tc.readUntil(defaultWaitTimeout, func(s string) bool {
+		return strings.Contains(s, "Hello, world!") && strings.Contains(s, "second line")
+	})
+	if !strings.Contains(output, "Hello, world!") {
+		t.Fatalf("print() should output 'Hello, world!' to terminal, got: %q", output)
+	}
+	if !strings.Contains(output, "This is a second line.") {
+		t.Fatalf("print() should output 'This is a second line.' to terminal, got: %q", output)
+	}
+}

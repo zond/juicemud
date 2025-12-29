@@ -916,6 +916,21 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 
 		return nil
 	}
+
+	// print(message) - prints a message to the object's connection, if one exists.
+	// If the object has no active connection (e.g., it's an NPC), this silently does nothing.
+	// Use this for immediate output that doesn't need to go through the event queue.
+	callbacks["print"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 1 || !args[0].IsString() {
+			return rc.Throw("print takes [string] argument (message)")
+		}
+		message := args[0].String()
+		if conn, found := connectionByObjectID.GetHas(object.GetId()); found {
+			fmt.Fprintln(conn.term, message)
+		}
+		return nil
+	}
 }
 
 // run executes an object's JavaScript source with the given caller event.
