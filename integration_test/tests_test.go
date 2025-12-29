@@ -3752,3 +3752,62 @@ func TestAuthenticationErrors(t *testing.T) {
 		}
 	})
 }
+
+// TestMultipleSSHSessions tests that a user can have multiple concurrent SSH sessions.
+func TestMultipleSSHSessions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ts := testServer
+
+	// Create a test user
+	username := fmt.Sprintf("multisession_%d", sourceCounter.Add(1))
+	password := "testpass123"
+
+	tc1, err := createUser(ts.SSHAddr(), username, password)
+	if err != nil {
+		t.Fatalf("createUser: %v", err)
+	}
+	defer tc1.Close()
+
+	// Open a second session with the same user
+	tc2, err := loginUser(ts.SSHAddr(), username, password)
+	if err != nil {
+		t.Fatalf("second login: %v", err)
+	}
+	defer tc2.Close()
+
+	// Both sessions should be able to run commands
+	// New users spawn in the universe root (Black cosmos)
+	output1, ok := tc1.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("session 1 look did not complete: %q", output1)
+	}
+	if !strings.Contains(output1, "cosmos") && !strings.Contains(output1, "Genesis") {
+		t.Fatalf("session 1 should see spawn location: %q", output1)
+	}
+
+	output2, ok := tc2.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("session 2 look did not complete: %q", output2)
+	}
+	if !strings.Contains(output2, "cosmos") && !strings.Contains(output2, "Genesis") {
+		t.Fatalf("session 2 should see spawn location: %q", output2)
+	}
+
+	// Open a third session
+	tc3, err := loginUser(ts.SSHAddr(), username, password)
+	if err != nil {
+		t.Fatalf("third login: %v", err)
+	}
+	defer tc3.Close()
+
+	output3, ok := tc3.sendCommand("look", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("session 3 look did not complete: %q", output3)
+	}
+	if !strings.Contains(output3, "cosmos") && !strings.Contains(output3, "Genesis") {
+		t.Fatalf("session 3 should see spawn location: %q", output3)
+	}
+}

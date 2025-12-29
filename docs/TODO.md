@@ -55,8 +55,10 @@ Known issues and tasks to address.
   - Server restart state persistence
   - Concurrent access patterns
   - Connection drop mid-command
-  - Multiple SSH sessions from same user
   - JS API error returns
+
+- [x] Add test for multiple SSH sessions from same user
+  - TestMultipleSSHSessions: creates user, opens 3 concurrent sessions, verifies all work
 
 - [x] Fix JSON extraction in server_test.go
   - Replaced greedy regex `\{.*\}` with proper JSON parsing using json.Decoder
