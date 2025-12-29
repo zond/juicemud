@@ -6,9 +6,10 @@ Known issues and tasks to address.
 
 ### Wizard Commands
 
-- [ ] Add wizard command to send generic events
-  - Should allow sending arbitrary event types to objects
-  - Example: `/emit <objectID> message "Hello world"` to send a message event
+- [x] Add wizard command to send generic events
+  - `/emit <target> <eventName> <tag> <message>` - sends event to object
+  - Tags: emit, command, action
+  - Message must be valid JSON
 
 ### Event System
 

@@ -1184,6 +1184,63 @@ func (c *Connection) wizCommands() commands {
 				return nil
 			}),
 		},
+		{
+			names: m("/emit"),
+			f: c.identifyingCommand(defaultNone, 1, func(c *Connection, _ *structs.Object, rest string, targets ...*structs.Object) error {
+				if len(targets) != 1 {
+					fmt.Fprintln(c.term, "usage: /emit <target> <eventName> <tag> <message>")
+					fmt.Fprintln(c.term, "  target: object ID (e.g., #abc123)")
+					fmt.Fprintln(c.term, "  eventName: event type (e.g., message, tick)")
+					fmt.Fprintln(c.term, "  tag: emit, command, or action")
+					fmt.Fprintln(c.term, "  message: JSON content")
+					return nil
+				}
+
+				// Parse: eventName tag message
+				parts, messageStr := parseShellTokens(rest, 2)
+				if len(parts) < 2 || messageStr == "" {
+					fmt.Fprintln(c.term, "usage: /emit <target> <eventName> <tag> <message>")
+					return nil
+				}
+
+				eventName := parts[0]
+				tag := parts[1]
+
+				// Validate tag
+				switch tag {
+				case emitEventTag, commandEventTag, actionEventTag:
+					// OK
+				default:
+					fmt.Fprintf(c.term, "invalid tag %q: must be emit, command, or action\n", tag)
+					return nil
+				}
+
+				// Validate message is valid JSON
+				var jsonCheck any
+				if err := goccy.Unmarshal([]byte(messageStr), &jsonCheck); err != nil {
+					fmt.Fprintf(c.term, "invalid JSON message: %v\n", err)
+					return nil
+				}
+
+				target := targets[0]
+
+				// Queue the event
+				if err := c.game.storage.Queue().Push(c.ctx, &structs.Event{
+					At:     uint64(c.game.storage.Queue().After(0)),
+					Object: target.GetId(),
+					Call: structs.Call{
+						Name:    eventName,
+						Message: messageStr,
+						Tag:     tag,
+					},
+				}); err != nil {
+					return juicemud.WithStack(err)
+				}
+
+				fmt.Fprintf(c.term, "Emitted %q (%s) to #%s\n", eventName, tag, target.GetId())
+				return nil
+			}),
+		},
 	}
 }
 

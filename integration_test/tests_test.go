@@ -3485,6 +3485,78 @@ func TestSkillsCommand(t *testing.T) {
 	tc.removeObject(t, objID, false)
 }
 
+// TestEmitCommand tests the /emit wizard command.
+func TestEmitCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	tc.ensureInGenesis(t)
+
+	// Create a test object with a callback that updates state when it receives our event
+	emitTestPath := uniqueSourcePath("emit_test_obj")
+	emitTestSource := `
+setDescriptions([{Short: 'emit test object'}]);
+
+addCallback('test_event', ['emit'], (data) => {
+    state.received = true;
+    state.message = data.message;
+});
+`
+	if err := ts.WriteSource(emitTestPath, emitTestSource); err != nil {
+		t.Fatalf("failed to create %s: %v", emitTestPath, err)
+	}
+	objID, err := tc.createObject(emitTestPath)
+	if err != nil {
+		t.Fatalf("create emit_test_obj: %v", err)
+	}
+
+	// Test 1: Emit an event to the object
+	output, ok := tc.sendCommand(fmt.Sprintf(`/emit #%s test_event emit {"message":"hello world"}`, objID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/emit command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Emitted") {
+		t.Fatalf("/emit should confirm event was emitted: %q", output)
+	}
+
+	// Wait briefly for the event to be processed
+	time.Sleep(100 * time.Millisecond)
+
+	// Test 2: Verify the callback was triggered by inspecting state
+	output, ok = tc.sendCommand(fmt.Sprintf("/inspect #%s State", objID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/inspect state did not complete: %q", output)
+	}
+	if !strings.Contains(output, "received") || !strings.Contains(output, "hello world") {
+		t.Fatalf("/emit callback should have updated state: %q", output)
+	}
+
+	// Test 3: Test invalid tag
+	output, ok = tc.sendCommand(fmt.Sprintf(`/emit #%s test_event invalid_tag {}`, objID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/emit invalid tag did not complete: %q", output)
+	}
+	if !strings.Contains(output, "invalid tag") {
+		t.Fatalf("/emit should reject invalid tag: %q", output)
+	}
+
+	// Test 4: Test invalid JSON
+	output, ok = tc.sendCommand(fmt.Sprintf(`/emit #%s test_event emit {invalid}`, objID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/emit invalid JSON did not complete: %q", output)
+	}
+	if !strings.Contains(output, "invalid JSON") {
+		t.Fatalf("/emit should reject invalid JSON: %q", output)
+	}
+
+	// Clean up
+	tc.removeObject(t, objID, false)
+}
+
 // TestErrorCases tests error handling for various invalid inputs.
 func TestErrorCases(t *testing.T) {
 	if testing.Short() {
