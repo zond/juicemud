@@ -3384,6 +3384,74 @@ setExits([
 	tc.ensureInGenesis(t)
 }
 
+// TestSkillsCommand tests the /skills wizard command.
+func TestSkillsCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	tc.ensureInGenesis(t)
+
+	// Create a test object
+	skillTestPath := uniqueSourcePath("skill_test_obj")
+	skillTestSource := `setDescriptions([{Short: 'skill test object'}]);`
+	if err := ts.WriteSource(skillTestPath, skillTestSource); err != nil {
+		t.Fatalf("failed to create %s: %v", skillTestPath, err)
+	}
+	objID, err := tc.createObject(skillTestPath)
+	if err != nil {
+		t.Fatalf("create skill_test_obj: %v", err)
+	}
+
+	// Test 1: View skills on object with no skills
+	output, ok := tc.sendCommand(fmt.Sprintf("/skills #%s", objID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/skills command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "has no skills") {
+		t.Fatalf("/skills should show 'has no skills' for object without skills: %q", output)
+	}
+
+	// Test 2: Set a skill
+	output, ok = tc.sendCommand(fmt.Sprintf("/skills #%s perception 75.5 50.0", objID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/skills set command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "Set perception") || !strings.Contains(output, "75.5") {
+		t.Fatalf("/skills set should confirm skill was set: %q", output)
+	}
+
+	// Test 3: View skills to verify it was set
+	output, ok = tc.sendCommand(fmt.Sprintf("/skills #%s", objID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/skills view command did not complete: %q", output)
+	}
+	if !strings.Contains(output, "perception") || !strings.Contains(output, "75.5") || !strings.Contains(output, "50.0") {
+		t.Fatalf("/skills should show the set skill: %q", output)
+	}
+
+	// Test 4: Set another skill
+	output, ok = tc.sendCommand(fmt.Sprintf("/skills #%s strength 100 80", objID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/skills set strength did not complete: %q", output)
+	}
+
+	// Test 5: View both skills
+	output, ok = tc.sendCommand(fmt.Sprintf("/skills #%s", objID), defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/skills view both did not complete: %q", output)
+	}
+	if !strings.Contains(output, "perception") || !strings.Contains(output, "strength") {
+		t.Fatalf("/skills should show both skills: %q", output)
+	}
+
+	// Clean up
+	tc.removeObject(t, objID, false)
+}
+
 // TestErrorCases tests error handling for various invalid inputs.
 func TestErrorCases(t *testing.T) {
 	if testing.Short() {

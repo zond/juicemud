@@ -65,9 +65,9 @@ Known issues and tasks to address.
 
 ### Wizard Commands
 
-- [ ] Add wizard command to view/update skills of objects
-  - Should allow inspecting skill levels on any object
-  - Should allow modifying skill levels for testing/debugging
+- [x] Add wizard command to view/update skills of objects
+  - `/skills [target]` - shows all skills on target
+  - `/skills [target] <skillname> <theoretical> <practical>` - sets skill values
 
 - [ ] Add wizard command to send generic events
   - Should allow sending arbitrary event types to objects

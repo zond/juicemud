@@ -1124,6 +1124,66 @@ func (c *Connection) wizCommands() commands {
 				return nil
 			}),
 		},
+		{
+			names: m("/skills"),
+			f: c.identifyingCommand(defaultSelf, 1, func(c *Connection, _ *structs.Object, rest string, targets ...*structs.Object) error {
+				target := targets[0]
+				args := strings.Fields(rest)
+
+				// No args: show all skills
+				if len(args) == 0 {
+					skills := target.GetSkills()
+					if len(skills) == 0 {
+						fmt.Fprintf(c.term, "#%s has no skills\n", target.GetId())
+						return nil
+					}
+					t := table.New("Skill", "Theoretical", "Practical", "Base", "LastUsed").WithWriter(c.term)
+					for name, skill := range skills {
+						lastUsed := "never"
+						if skill.LastUsedAt > 0 {
+							lastUsed = time.Unix(0, int64(skill.LastUsedAt)).Format("2006-01-02 15:04")
+						}
+						t.AddRow(name, fmt.Sprintf("%.1f", skill.Theoretical), fmt.Sprintf("%.1f", skill.Practical), fmt.Sprintf("%.1f", skill.LastBase), lastUsed)
+					}
+					t.Print()
+					return nil
+				}
+
+				// Set skill: /skills <target> <skillname> <theoretical> <practical>
+				if len(args) < 3 {
+					fmt.Fprintln(c.term, "usage: /skills [target]")
+					fmt.Fprintln(c.term, "       /skills [target] <skillname> <theoretical> <practical>")
+					return nil
+				}
+
+				skillName := args[0]
+				theoretical, err := strconv.ParseFloat(args[1], 32)
+				if err != nil {
+					fmt.Fprintf(c.term, "invalid theoretical value: %v\n", err)
+					return nil
+				}
+				practical, err := strconv.ParseFloat(args[2], 32)
+				if err != nil {
+					fmt.Fprintf(c.term, "invalid practical value: %v\n", err)
+					return nil
+				}
+
+				// Update the skill
+				target.Lock()
+				if target.Unsafe.Skills == nil {
+					target.Unsafe.Skills = map[string]structs.Skill{}
+				}
+				skill := target.Unsafe.Skills[skillName]
+				skill.Name = skillName
+				skill.Theoretical = float32(theoretical)
+				skill.Practical = float32(practical)
+				target.Unsafe.Skills[skillName] = skill
+				target.Unlock()
+
+				fmt.Fprintf(c.term, "Set %s on #%s: theoretical=%.1f practical=%.1f\n", skillName, target.GetId(), theoretical, practical)
+				return nil
+			}),
+		},
 	}
 }
 
