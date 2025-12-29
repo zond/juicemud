@@ -2,79 +2,9 @@
 
 Known issues and tasks to address.
 
-## Integration Tests
-
-### High Priority
-
-- [x] Extract repeated bidirectional room creation into helper function
-  - Created `createBidirectionalRooms(t, ts, tc, baseName, nameA, nameB, exitAtoB, exitBtoA) (idA, idB)`
-  - Refactored 4 tests to use it
-
-- [x] Extract genesis entry pattern to helper function
-  - Created `ensureInGenesis(t, tc)` method on terminalClient
-  - Refactored 4 tests to use it
-
-- [x] Fix missing error check at `tests_test.go:1805`
-  - Added proper error check on `tc.sendLine("look")`
-
-- [x] Add negative test cases:
-  - Added `TestErrorCases` with subtests for:
-    - `/create` with non-existent source path
-    - `/inspect` with invalid object ID
-    - JS source with syntax errors
-    - `/move` with invalid object
-    - `/remove` with invalid object
-  - [x] Added `TestAuthenticationErrors` with subtests for:
-    - Duplicate user creation
-    - Invalid login password
-    - Non-existent user login
-
-### Medium Priority
-
-- [~] Split long tests using `t.Run()` subtests:
-  - Skipped: `TestAddDelWiz`, `TestDebugLog`, `TestChallengeSystem`, `TestSkillConfig` all have sequential dependencies that prevent running subtests independently
-  - t.Run() adds boilerplate without benefit when subtests can't run in isolation
-
-- [x] Add table-driven tests for `TestStatsCommand`
-  - Converted 7 subcommand tests to table-driven format
-  - Reduced ~100 lines to ~50 lines of structured code
-
-- [x] Verify object removal succeeded in cleanup code (after `/remove`, verify object is actually gone)
-  - Created `removeObject(t, objectID, verify bool)` helper function
-  - Refactored 3 tests to use it with verification enabled
-
-- [x] Simplify nested timeout loop at `tests_test.go:2533-2543`
-  - Replaced manual polling loop with `sendCommand` helper
-
-### Low Priority
-
-- [x] Standardize source path naming conventions to snake_case
-  - Renamed: `dimreceiver` → `dim_receiver`, `eaglereceiver` → `eagle_receiver`, etc.
-
-- [~] Add missing test coverage:
-  - Server restart state persistence - deferred to standalone test outside integration tests
-  - Concurrent access patterns - add when we find evidence of concurrency issues
-  - Connection drop mid-command - skipped, server handles errors normally
-  - JS API error returns - covered by TestErrorCases (JS syntax errors)
-
-- [x] Add test for multiple SSH sessions from same user
-  - TestMultipleSSHSessions: creates user, opens 3 concurrent sessions, verifies all work
-
-- [x] Fix JSON extraction in server_test.go
-  - Replaced greedy regex `\{.*\}` with proper JSON parsing using json.Decoder
-  - Handles nested braces correctly
-
-- [x] Add /ls directory tests
-  - Test /ls on root directory
-  - Test /ls on subdirectory with nested files
-
 ## Features
 
 ### Wizard Commands
-
-- [x] Add wizard command to view/update skills of objects
-  - `/skills [target]` - shows all skills on target
-  - `/skills [target] <skillname> <theoretical> <practical>` - sets skill values
 
 - [ ] Add wizard command to send generic events
   - Should allow sending arbitrary event types to objects
