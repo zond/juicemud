@@ -3918,15 +3918,15 @@ addCallback('test_event', ['emit'], (data) => {
 		t.Fatalf("/emit should confirm event was emitted: %q", output)
 	}
 
-	// Wait briefly for the event to be processed
-	time.Sleep(100 * time.Millisecond)
-
-	// Test 2: Verify the callback was triggered by inspecting state
-	output, ok = tc.sendCommand(fmt.Sprintf("/inspect #%s State", objID), defaultWaitTimeout)
-	if !ok {
-		t.Fatalf("/inspect state did not complete: %q", output)
-	}
-	if !strings.Contains(output, "received") || !strings.Contains(output, "hello world") {
+	// Test 2: Poll until the callback updates the state
+	found := waitForCondition(defaultWaitTimeout, 50*time.Millisecond, func() bool {
+		output, ok = tc.sendCommand(fmt.Sprintf("/inspect #%s State", objID), defaultWaitTimeout)
+		if !ok {
+			return false
+		}
+		return strings.Contains(output, "received") && strings.Contains(output, "hello world")
+	})
+	if !found {
 		t.Fatalf("/emit callback should have updated state: %q", output)
 	}
 

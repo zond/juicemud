@@ -2,6 +2,7 @@ package game
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"sync"
 	"testing"
@@ -50,7 +51,7 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 
 
 func TestSwitchboardAttachDetach(t *testing.T) {
-	s := NewSwitchboard()
+	s := NewSwitchboard(context.Background())
 	terminal1, _ := testTerminal(t)
 	terminal2, _ := testTerminal(t)
 
@@ -97,7 +98,7 @@ func TestSwitchboardAttachDetach(t *testing.T) {
 }
 
 func TestSwitchboardAttachNil(t *testing.T) {
-	s := NewSwitchboard()
+	s := NewSwitchboard(context.Background())
 
 	// Attaching nil should be a no-op and not panic
 	s.Attach("obj1", nil)
@@ -109,7 +110,7 @@ func TestSwitchboardAttachNil(t *testing.T) {
 }
 
 func TestSwitchboardDetachNonexistent(t *testing.T) {
-	s := NewSwitchboard()
+	s := NewSwitchboard(context.Background())
 	terminal, _ := testTerminal(t)
 
 	// Detaching from non-existent object should not panic
@@ -122,7 +123,7 @@ func TestSwitchboardDetachNonexistent(t *testing.T) {
 }
 
 func TestSwitchboardWriterNoTerminals(t *testing.T) {
-	s := NewSwitchboard()
+	s := NewSwitchboard(context.Background())
 	w := s.Writer("obj1")
 
 	// Writing with no terminals should succeed
@@ -149,7 +150,7 @@ func TestSwitchboardWriterNilSwitchboard(t *testing.T) {
 }
 
 func TestSwitchboardWriterBroadcast(t *testing.T) {
-	s := NewSwitchboard()
+	s := NewSwitchboard(context.Background())
 	terminal1, buf1 := testTerminal(t)
 	terminal2, buf2 := testTerminal(t)
 
@@ -178,7 +179,7 @@ func TestSwitchboardWriterBroadcast(t *testing.T) {
 }
 
 func TestSwitchboardWriterAutoDetachOnFailure(t *testing.T) {
-	s := NewSwitchboard()
+	s := NewSwitchboard(context.Background())
 	goodTerminal, _ := testTerminal(t)
 	badTerminal := failingTerminal(t)
 
@@ -210,7 +211,7 @@ func TestSwitchboardWriterAutoDetachOnFailure(t *testing.T) {
 }
 
 func TestSwitchboardConcurrentAccess(t *testing.T) {
-	s := NewSwitchboard()
+	s := NewSwitchboard(context.Background())
 	terminal, _ := testTerminal(t)
 	w := s.Writer("obj1")
 
@@ -247,7 +248,7 @@ func TestSwitchboardConcurrentAccess(t *testing.T) {
 }
 
 func TestSwitchboardMultipleObjects(t *testing.T) {
-	s := NewSwitchboard()
+	s := NewSwitchboard(context.Background())
 	terminal1, _ := testTerminal(t)
 	terminal2, _ := testTerminal(t)
 

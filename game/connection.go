@@ -85,10 +85,6 @@ func verifyPassword(password, encodedHash string) bool {
 	return subtle.ConstantTimeCompare(hash, expectedHash) == 1
 }
 
-var (
-	connectionByObjectID = juicemud.NewSyncMap[string, *Connection]()
-	consoleSwitchboard   = NewSwitchboard()
-)
 
 const (
 	loginAttemptInterval = 10 * time.Second
@@ -746,8 +742,8 @@ func (c *Connection) Process() error {
 	}
 	c.wiz = c.user.Wizard
 
-	connectionByObjectID.Set(string(c.user.Object), c)
-	defer connectionByObjectID.Del(string(c.user.Object))
+	c.game.connectionByObjectID.Set(string(c.user.Object), c)
+	defer c.game.connectionByObjectID.Del(string(c.user.Object))
 
 	commandSets := []attempter{objectAttempter{c.user.Object}, c.basicCommands()}
 	if c.wiz {

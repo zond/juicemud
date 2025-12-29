@@ -623,8 +623,10 @@ func (s *Storage) LoadObjects(ctx context.Context, ids map[string]bool, ref Refr
 	if ref != nil {
 		for _, obj := range res {
 			// Continue on refresh errors - the object is still usable with old state.
-			// JS errors are already recorded in jsStats by run().
-			s.maybeRefresh(ctx, obj, ref)
+			// JS errors are also recorded in jsStats by run().
+			if err := s.maybeRefresh(ctx, obj, ref); err != nil {
+				log.Printf("refresh error for object %s (%s): %v", obj.GetId(), obj.GetSourcePath(), err)
+			}
 		}
 	}
 	return res, nil
@@ -632,16 +634,18 @@ func (s *Storage) LoadObjects(ctx context.Context, ids map[string]bool, ref Refr
 
 // AccessObject loads the object with the given ID. If a Refresh is given, it will be run if the
 // object source is newer than the last run of the object.
-// Refresh errors are ignored - the object is still usable with old state, and JS errors
-// are recorded in jsStats by run().
+// Refresh errors are logged but don't fail the operation - the object is still usable with old state.
+// JS errors are also recorded in jsStats by run().
 func (s *Storage) AccessObject(ctx context.Context, id string, ref Refresh) (*structs.Object, error) {
 	res, err := s.objects.Get(id)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	// Continue on refresh errors - the object is still usable with old state.
-	// JS errors are already recorded in jsStats by run().
-	s.maybeRefresh(ctx, res, ref)
+	// JS errors are also recorded in jsStats by run().
+	if err := s.maybeRefresh(ctx, res, ref); err != nil {
+		log.Printf("refresh error for object %s (%s): %v", res.GetId(), res.GetSourcePath(), err)
+	}
 	return res, nil
 }
 

@@ -230,14 +230,14 @@ func (c *Connection) wizCommands() commands {
 				for _, target := range targets {
 					objectID := target.GetId()
 					// Dump buffered messages first
-					if buffered := consoleSwitchboard.GetBuffered(objectID); len(buffered) > 0 {
+					if buffered := c.game.consoleSwitchboard.GetBuffered(objectID); len(buffered) > 0 {
 						fmt.Fprintf(c.term, "---- buffered console output for #%s/%s ----\n", target.Name(), objectID)
 						for _, msg := range buffered {
 							c.term.Write(msg)
 						}
 						fmt.Fprintf(c.term, "---- end of buffer ----\n")
 					}
-					consoleSwitchboard.Attach(objectID, c.term)
+					c.game.consoleSwitchboard.Attach(objectID, c.term)
 					fmt.Fprintf(c.term, "#%s/%s connected to console\n", target.Name(), objectID)
 				}
 				return nil
@@ -247,7 +247,7 @@ func (c *Connection) wizCommands() commands {
 			names: m("/undebug"),
 			f: c.identifyingCommand(defaultSelf, 0, func(c *Connection, _ *structs.Object, _ string, targets ...*structs.Object) error {
 				for _, target := range targets {
-					consoleSwitchboard.Detach(target.GetId(), c.term)
+					c.game.consoleSwitchboard.Detach(target.GetId(), c.term)
 					fmt.Fprintf(c.term, "#%s/%s disconnected from console\n", target.Name(), target.GetId())
 				}
 				return nil

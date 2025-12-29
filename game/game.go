@@ -166,12 +166,14 @@ func initialObjects() map[string]*structs.ObjectDO {
 }
 
 type Game struct {
-	storage          *storage.Storage
-	jsStats          *JSStats
-	loginRateLimiter *loginRateLimiter
-	createLimiter    *createRateLimiter  // Rate limiter for createObject() JS API
-	workChan         chan *structs.Event // Unbuffered channel for event handoff to workers
-	workerWG         sync.WaitGroup      // Tracks in-flight event workers
+	storage              *storage.Storage
+	jsStats              *JSStats
+	loginRateLimiter     *loginRateLimiter
+	createLimiter        *createRateLimiter                      // Rate limiter for createObject() JS API
+	workChan             chan *structs.Event                     // Unbuffered channel for event handoff to workers
+	workerWG             sync.WaitGroup                          // Tracks in-flight event workers
+	connectionByObjectID *juicemud.SyncMap[string, *Connection]  // Maps object ID to active connection
+	consoleSwitchboard   *Switchboard                            // Debug console routing and buffering
 }
 
 // ServerConfig holds server-wide configuration stored in the root object's state.
@@ -275,11 +277,13 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 	}
 
 	g := &Game{
-		storage:          s,
-		jsStats:          NewJSStats(ctx, s.ImportResolver()),
-		loginRateLimiter: newLoginRateLimiter(ctx),
-		createLimiter:    newCreateRateLimiter(),
-		workChan:         make(chan *structs.Event), // Unbuffered for synchronous handoff
+		storage:              s,
+		jsStats:              NewJSStats(ctx, s.ImportResolver()),
+		loginRateLimiter:     newLoginRateLimiter(ctx),
+		createLimiter:        newCreateRateLimiter(),
+		workChan:             make(chan *structs.Event), // Unbuffered for synchronous handoff
+		connectionByObjectID: juicemud.NewSyncMap[string, *Connection](),
+		consoleSwitchboard:   NewSwitchboard(ctx),
 	}
 
 	// Start event workers. They process events until context is cancelled.

@@ -1,7 +1,9 @@
 package game
 
 import (
+	"context"
 	"sync"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -10,11 +12,21 @@ const (
 	// consoleBufferSize is the number of log messages to buffer per object.
 	// When /debug connects, it first receives these buffered messages.
 	consoleBufferSize = 64
+
+	// consoleBufferTTL is how long messages are retained in the buffer.
+	// Messages older than this are discarded when retrieved.
+	consoleBufferTTL = 10 * time.Minute
 )
 
-// consoleBuffer is a ring buffer for console log messages.
+// bufferedMessage is a console log message with its timestamp.
+type bufferedMessage struct {
+	data      []byte
+	timestamp time.Time
+}
+
+// consoleBuffer is a ring buffer for console log messages with TTL.
 type consoleBuffer struct {
-	messages [][]byte
+	messages []bufferedMessage
 	start    int // Index of oldest message
 	count    int // Number of messages in buffer
 }
@@ -22,33 +34,58 @@ type consoleBuffer struct {
 // push adds a message to the ring buffer, evicting the oldest if full.
 func (b *consoleBuffer) push(msg []byte) {
 	if b.messages == nil {
-		b.messages = make([][]byte, consoleBufferSize)
+		b.messages = make([]bufferedMessage, consoleBufferSize)
 	}
 	// Make a copy of the message to avoid aliasing issues
 	msgCopy := make([]byte, len(msg))
 	copy(msgCopy, msg)
 
+	entry := bufferedMessage{data: msgCopy, timestamp: time.Now()}
+
 	idx := (b.start + b.count) % consoleBufferSize
 	if b.count < consoleBufferSize {
-		b.messages[idx] = msgCopy
+		b.messages[idx] = entry
 		b.count++
 	} else {
 		// Buffer full, overwrite oldest
-		b.messages[b.start] = msgCopy
+		b.messages[b.start] = entry
 		b.start = (b.start + 1) % consoleBufferSize
 	}
 }
 
-// getAll returns all buffered messages in chronological order.
+// getAll returns all non-expired buffered messages in chronological order.
+// Messages older than consoleBufferTTL are excluded.
 func (b *consoleBuffer) getAll() [][]byte {
 	if b.count == 0 {
 		return nil
 	}
-	result := make([][]byte, b.count)
+	cutoff := time.Now().Add(-consoleBufferTTL)
+	result := make([][]byte, 0, b.count)
 	for i := 0; i < b.count; i++ {
-		result[i] = b.messages[(b.start+i)%consoleBufferSize]
+		msg := b.messages[(b.start+i)%consoleBufferSize]
+		if msg.timestamp.After(cutoff) {
+			result = append(result, msg.data)
+		}
+	}
+	if len(result) == 0 {
+		return nil
 	}
 	return result
+}
+
+// isEmpty returns true if the buffer has no non-expired messages.
+func (b *consoleBuffer) isEmpty() bool {
+	if b.count == 0 {
+		return true
+	}
+	cutoff := time.Now().Add(-consoleBufferTTL)
+	for i := 0; i < b.count; i++ {
+		msg := b.messages[(b.start+i)%consoleBufferSize]
+		if msg.timestamp.After(cutoff) {
+			return false
+		}
+	}
+	return true
 }
 
 // Switchboard manages debug console connections from wizards to objects.
@@ -60,11 +97,39 @@ type Switchboard struct {
 	buffers  map[string]*consoleBuffer              // objectID -> ring buffer
 }
 
-// NewSwitchboard creates a new console switchboard.
-func NewSwitchboard() *Switchboard {
-	return &Switchboard{
+// NewSwitchboard creates a new console switchboard and starts the cleanup goroutine.
+// The cleanup goroutine runs until ctx is cancelled.
+func NewSwitchboard(ctx context.Context) *Switchboard {
+	s := &Switchboard{
 		consoles: make(map[string]map[*term.Terminal]struct{}),
 		buffers:  make(map[string]*consoleBuffer),
+	}
+	go s.cleanupLoop(ctx)
+	return s
+}
+
+// cleanupLoop periodically removes empty (all-expired) console buffers.
+func (s *Switchboard) cleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(consoleBufferTTL)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.cleanupExpiredBuffers()
+		}
+	}
+}
+
+// cleanupExpiredBuffers removes all buffers where every message has expired.
+func (s *Switchboard) cleanupExpiredBuffers() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for objectID, buf := range s.buffers {
+		if buf.isEmpty() {
+			delete(s.buffers, objectID)
+		}
 	}
 }
 
@@ -176,13 +241,29 @@ func (w *SwitchboardWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// GetBuffered returns all buffered messages for an object in chronological order.
-// Returns nil if no messages are buffered.
+// GetBuffered returns all non-expired buffered messages for an object in chronological order.
+// Returns nil if no messages are buffered or all have expired.
+// Also cleans up the buffer entry if all messages have expired.
 func (s *Switchboard) GetBuffered(objectID string) [][]byte {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if buf := s.buffers[objectID]; buf != nil {
-		return buf.getAll()
+	buf := s.buffers[objectID]
+	if buf == nil {
+		s.mu.RUnlock()
+		return nil
 	}
-	return nil
+	messages := buf.getAll()
+	isEmpty := buf.isEmpty()
+	s.mu.RUnlock()
+
+	// Clean up empty buffer (all messages expired)
+	if isEmpty {
+		s.mu.Lock()
+		// Re-check under write lock
+		if buf := s.buffers[objectID]; buf != nil && buf.isEmpty() {
+			delete(s.buffers, objectID)
+		}
+		s.mu.Unlock()
+	}
+
+	return messages
 }

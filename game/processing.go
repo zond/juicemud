@@ -926,7 +926,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 			return rc.Throw("print takes [string] argument (message)")
 		}
 		message := args[0].String()
-		if conn, found := connectionByObjectID.GetHas(object.GetId()); found {
+		if conn, found := g.connectionByObjectID.GetHas(object.GetId()); found {
 			fmt.Fprintln(conn.term, message)
 		}
 		return nil
@@ -963,7 +963,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		if call != nil {
 
 			if call.Tag == emitEventTag {
-				if c, found := connectionByObjectID.GetHas(id); found {
+				if c, found := g.connectionByObjectID.GetHas(id); found {
 					if err := c.handleEmitEvent(call); err != nil {
 						return false, juicemud.WithStack(err)
 					}
@@ -993,7 +993,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		Origin:    sourcePath,
 		State:     object.GetState(),
 		Callbacks: callbacks,
-		Console:   consoleSwitchboard.Writer(id),
+		Console:   g.consoleSwitchboard.Writer(id),
 	}
 
 	// Time JavaScript execution for stats tracking
@@ -1015,7 +1015,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 
 		jserr := &v8go.JSError{}
 		if errors.As(err, &jserr) {
-			log.New(consoleSwitchboard.Writer(id), "", 0).Printf("---- error in %s ----\n%s\n%s", jserr.Location, jserr.Message, jserr.StackTrace)
+			log.New(g.consoleSwitchboard.Writer(id), "", 0).Printf("---- error in %s ----\n%s\n%s", jserr.Location, jserr.Message, jserr.StackTrace)
 		}
 		return false, juicemud.WithStack(err)
 	}
