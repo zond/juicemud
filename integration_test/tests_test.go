@@ -3511,3 +3511,159 @@ function unclosed( {
 		}
 	})
 }
+
+// TestAuthenticationErrors tests authentication error handling.
+// Note: The server loops on auth errors rather than returning errors,
+// so we need to check the output messages and abort cleanly.
+func TestAuthenticationErrors(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ts := testServer
+
+	t.Run("DuplicateUserCreation", func(t *testing.T) {
+		// Create a unique user first
+		username := fmt.Sprintf("duptest_%d", sourceCounter.Add(1))
+		password := "testpass123"
+
+		tc1, err := createUser(ts.SSHAddr(), username, password)
+		if err != nil {
+			t.Fatalf("first createUser: %v", err)
+		}
+		tc1.Close()
+
+		// Start a new connection and try to create the same user
+		tc2, err := newTerminalClient(ts.SSHAddr())
+		if err != nil {
+			t.Fatalf("newTerminalClient: %v", err)
+		}
+		defer tc2.Close()
+
+		if _, ok := tc2.waitForPrompt(defaultWaitTimeout); !ok {
+			t.Fatal("did not get initial prompt")
+		}
+		if err := tc2.sendLine("create user"); err != nil {
+			t.Fatalf("sendLine create user: %v", err)
+		}
+		if _, ok := tc2.waitForPrompt(defaultWaitTimeout); !ok {
+			t.Fatal("create user prompt did not appear")
+		}
+		// Send the duplicate username
+		if err := tc2.sendLine(username); err != nil {
+			t.Fatalf("sendLine username: %v", err)
+		}
+
+		// Should see "Username already exists!" and loop back for another username
+		output, ok := tc2.waitForPrompt(defaultWaitTimeout)
+		if !ok {
+			t.Fatal("prompt after duplicate username did not appear")
+		}
+		if !strings.Contains(output, "Username already exists") {
+			t.Errorf("expected 'Username already exists' error, got: %q", output)
+		}
+
+		// Abort to clean up
+		if err := tc2.sendLine("abort"); err != nil {
+			t.Fatalf("sendLine abort: %v", err)
+		}
+	})
+
+	t.Run("InvalidPassword", func(t *testing.T) {
+		// Create a user
+		username := fmt.Sprintf("passtest_%d", sourceCounter.Add(1))
+		password := "correctpass"
+
+		tc1, err := createUser(ts.SSHAddr(), username, password)
+		if err != nil {
+			t.Fatalf("createUser: %v", err)
+		}
+		tc1.Close()
+
+		// Start a new connection and try to login with wrong password
+		tc2, err := newTerminalClient(ts.SSHAddr())
+		if err != nil {
+			t.Fatalf("newTerminalClient: %v", err)
+		}
+		defer tc2.Close()
+
+		if _, ok := tc2.waitForPrompt(defaultWaitTimeout); !ok {
+			t.Fatal("did not get initial prompt")
+		}
+		if err := tc2.sendLine("login user"); err != nil {
+			t.Fatalf("sendLine login user: %v", err)
+		}
+		if _, ok := tc2.waitForPrompt(defaultWaitTimeout); !ok {
+			t.Fatal("login user prompt did not appear")
+		}
+		// Send username
+		if err := tc2.sendLine(username); err != nil {
+			t.Fatalf("sendLine username: %v", err)
+		}
+		if _, ok := tc2.waitForPrompt(defaultWaitTimeout); !ok {
+			t.Fatal("password prompt did not appear")
+		}
+		// Send wrong password
+		if err := tc2.sendLine("wrongpassword"); err != nil {
+			t.Fatalf("sendLine wrong password: %v", err)
+		}
+
+		// Should see "Invalid credentials!" and loop back
+		output, ok := tc2.waitForPrompt(defaultWaitTimeout)
+		if !ok {
+			t.Fatal("prompt after invalid password did not appear")
+		}
+		if !strings.Contains(output, "Invalid credentials") {
+			t.Errorf("expected 'Invalid credentials' error, got: %q", output)
+		}
+
+		// Abort to clean up
+		if err := tc2.sendLine("abort"); err != nil {
+			t.Fatalf("sendLine abort: %v", err)
+		}
+	})
+
+	t.Run("NonExistentUser", func(t *testing.T) {
+		// Start a new connection and try to login as non-existent user
+		tc, err := newTerminalClient(ts.SSHAddr())
+		if err != nil {
+			t.Fatalf("newTerminalClient: %v", err)
+		}
+		defer tc.Close()
+
+		if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+			t.Fatal("did not get initial prompt")
+		}
+		if err := tc.sendLine("login user"); err != nil {
+			t.Fatalf("sendLine login user: %v", err)
+		}
+		if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+			t.Fatal("login user prompt did not appear")
+		}
+		// Send non-existent username
+		if err := tc.sendLine("nonexistent_user_xyz"); err != nil {
+			t.Fatalf("sendLine username: %v", err)
+		}
+		if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+			t.Fatal("password prompt did not appear")
+		}
+		// Send any password
+		if err := tc.sendLine("anypassword"); err != nil {
+			t.Fatalf("sendLine password: %v", err)
+		}
+
+		// Should see "Invalid credentials!" (same message as wrong password for security)
+		output, ok := tc.waitForPrompt(defaultWaitTimeout)
+		if !ok {
+			t.Fatal("prompt after non-existent user did not appear")
+		}
+		if !strings.Contains(output, "Invalid credentials") {
+			t.Errorf("expected 'Invalid credentials' error, got: %q", output)
+		}
+
+		// Abort to clean up
+		if err := tc.sendLine("abort"); err != nil {
+			t.Fatalf("sendLine abort: %v", err)
+		}
+	})
+}
