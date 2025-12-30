@@ -1218,6 +1218,21 @@ if (state.intervalId === undefined) {
 		t.Fatalf("/intervals should show interval ms: %q", output)
 	}
 
+	// Check /intervals #objectid shows intervals for that specific object
+	output, ok = tc.sendCommand(fmt.Sprintf("/intervals #%s", intervalListerID), defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/intervals #objectid command did not complete")
+	}
+	if !strings.Contains(output, "heartbeat") {
+		t.Fatalf("/intervals #objectid should show event name 'heartbeat': %q", output)
+	}
+	if !strings.Contains(output, "5000") {
+		t.Fatalf("/intervals #objectid should show interval ms: %q", output)
+	}
+	if strings.Contains(output, "No intervals") {
+		t.Fatalf("/intervals #objectid should NOT say 'No intervals': %q", output)
+	}
+
 	// Cleanup with verification
 	tc.removeObject(t, intervalListerID, true)
 }

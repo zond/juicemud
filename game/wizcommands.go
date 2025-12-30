@@ -962,7 +962,7 @@ func (c *Connection) wizCommands() commands {
 				}
 
 				// Otherwise treat as objectID - list intervals for that object
-				objectID := subcmd
+				objectID := strings.TrimPrefix(subcmd, "#")
 				count, err := intervals.CountForObject(objectID)
 				if err != nil {
 					fmt.Fprintf(c.term, "Error counting intervals: %v\n", err)
