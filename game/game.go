@@ -312,7 +312,8 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 					}
 
 					// run() and loadRun() handle recording execution time and errors in jsStats
-					if _, _, err := g.loadRun(ctx, ev.Object, call, intervalInfo); err != nil {
+					_, _, err := g.loadRun(ctx, ev.Object, call, intervalInfo)
+					if err != nil {
 						// Skip logging for deleted objects - this is normal when events
 						// are queued for objects that get removed before events fire
 						if !errors.Is(err, os.ErrNotExist) {
@@ -323,7 +324,12 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 
 					// Handle interval re-enqueueing after handler execution
 					if ev.IntervalID != "" {
-						if err := g.reEnqueueInterval(ctx, ev.Object, ev.IntervalID); err != nil {
+						// If object doesn't exist, delete the interval instead of re-enqueueing
+						if errors.Is(err, os.ErrNotExist) {
+							if delErr := g.storage.Intervals().Del(ev.Object, ev.IntervalID); delErr != nil && !errors.Is(delErr, os.ErrNotExist) {
+								log.Printf("deleting orphaned interval %s for missing object %s: %v", ev.IntervalID, ev.Object, delErr)
+							}
+						} else if err := g.reEnqueueInterval(ctx, ev.Object, ev.IntervalID); err != nil {
 							g.jsStats.RecordRecoveryError(ev.Object, ev.IntervalID, err)
 							log.Printf("re-enqueueing interval %s for %s: %v", ev.IntervalID, ev.Object, err)
 						}

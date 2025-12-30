@@ -143,11 +143,12 @@ Import behavior:
 2. Top-level code runs first, then the specific callback is invoked
 3. The `state` object persists between executions; local variables do not
 
-This means initialization code at the top level will run repeatedly. Use the `created` event for one-time initialization:
+**Best Practice**: Put ALL code inside callback handlers. The only top-level statements should be `addCallback()` registrations. Everything else - including `setDescriptions()`, `setExits()`, and any initialization - belongs in the `created` event handler:
 
 ```javascript
-// CORRECT: Use 'created' event for one-time initialization
+// RECOMMENDED: Only addCallback() at top level, everything else in handlers
 addCallback('created', ['emit'], (msg) => {
+    // One-time initialization when object is first created
     state.counter = 0;
     state.intervalId = setInterval(5000, 'tick', {});
     setDescriptions([{Short: 'my object (initialized)'}]);
@@ -159,10 +160,29 @@ addCallback('tick', ['emit'], (msg) => {
 });
 ```
 
+**Why?** Top-level code runs on EVERY callback invocation. This causes:
+- Descriptions/exits being reset (undoing changes made by callbacks)
+- Duplicate intervals (creating new ones every time)
+- Performance issues (running expensive code repeatedly)
+
+Here's what NOT to do:
+
+```javascript
+// BAD: Top-level code runs on every callback invocation!
+setDescriptions([{Short: 'my object'}]);  // Resets descriptions every time
+state.intervalId = setInterval(5000, 'tick', {});  // Creates new interval every time!
+
+addCallback('tick', ['emit'], (msg) => {
+    state.counter = (state.counter || 0) + 1;
+    setDescriptions([{Short: 'my object (' + state.counter + ' ticks)'}]);
+});
+// Result: Descriptions reset to 'my object' before tick runs, and infinite intervals pile up
+```
+
 The `created` event is sent once when an object is first created via `/create`. If you can't use the `created` event (e.g., for objects that predate your code), guard your initialization:
 
 ```javascript
-// ALTERNATIVE: Guard initialization with state check
+// ALTERNATIVE: Guard initialization with state check (for pre-existing objects)
 if (state.initialized === undefined) {
     state.initialized = true;
     state.counter = 0;

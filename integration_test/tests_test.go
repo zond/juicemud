@@ -1237,6 +1237,66 @@ if (state.intervalId === undefined) {
 	tc.removeObject(t, intervalListerID, true)
 }
 
+// TestOrphanedIntervalCleanup tests that intervals are removed when their object is deleted.
+func TestOrphanedIntervalCleanup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis did not complete")
+	}
+
+	// Create an object with a short interval (minimum 5000ms)
+	sourcePath := uniqueSourcePath("orphan_interval")
+	orphanSource := `
+setDescriptions([{Short: 'orphan interval test'}]);
+if (state.intervalId === undefined) {
+	state.intervalId = setInterval(5000, 'tick', {});
+}
+`
+	if err := ts.WriteSource(sourcePath, orphanSource); err != nil {
+		t.Fatalf("failed to create %s: %v", sourcePath, err)
+	}
+
+	objectID, err := tc.createObject(sourcePath)
+	if err != nil {
+		t.Fatalf("create object: %v", err)
+	}
+
+	// Verify interval exists
+	output, ok := tc.sendCommand("/intervals", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/intervals command did not complete")
+	}
+	if !strings.Contains(output, objectID) {
+		t.Fatalf("/intervals should show object ID %s: %q", objectID, output)
+	}
+
+	// Remove the object (this should NOT immediately remove the interval,
+	// but the interval should be cleaned up when it next fires)
+	tc.removeObject(t, objectID, true)
+
+	// Wait for the interval to fire (5 seconds + buffer)
+	time.Sleep(6 * time.Second)
+
+	// Verify interval was cleaned up
+	output, ok = tc.sendCommand("/intervals", defaultWaitTimeout)
+	if !ok {
+		t.Fatal("/intervals command did not complete after cleanup")
+	}
+	if strings.Contains(output, objectID) {
+		t.Fatalf("interval should have been cleaned up after object removal, but found objectID %s: %q", objectID, output)
+	}
+}
+
 // TestCreateRemoveObject tests createObject() and removeObject() JS APIs.
 func TestCreateRemoveObject(t *testing.T) {
 	if testing.Short() {
