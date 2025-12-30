@@ -19,6 +19,10 @@ Instructions for Claude Code when working with this repository.
 - Always make sure the README is up to date with relevant new information, and doesn't contain redundant or outdated
   information.
 - Always test functionality if reasonably possible.
+- Go structs should never have json rename tags (`json:"..."`). The only json tag allowed is if it is something that
+  can be unset or nil, then omitempty is sensible.
+- When creating JSON from Go, always use proper Go structs, not just map[string]any, and as mentioned above, don't
+  rename the JSON fields, leave them as the Go PascalCase names.
 
 ### Integration tests
 - Integration tests should use the SSH interfaces for all interactions with the server, except when it's unreasonably

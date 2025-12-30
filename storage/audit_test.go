@@ -15,10 +15,10 @@ import (
 
 // auditEntry is a test-friendly version of AuditEntry that uses json.RawMessage for Data.
 type auditEntry struct {
-	Time      string          `json:"time"`
-	SessionID string          `json:"session_id,omitempty"`
-	Event     string          `json:"event"`
-	Data      json.RawMessage `json:"data"`
+	Time      string
+	SessionID string `json:",omitempty"`
+	Event     string
+	Data      json.RawMessage
 }
 
 // readAuditLog reads all audit log entries from the storage's audit log file.
@@ -65,7 +65,7 @@ func filterAuditByEvent(entries []auditEntry, event string) []auditEntry {
 }
 
 // parseAuditData parses the Data field of an audit entry into the given struct.
-func parseAuditData(t *testing.T, entry auditEntry, v interface{}) {
+func parseAuditData(t *testing.T, entry auditEntry, v any) {
 	t.Helper()
 	if err := json.Unmarshal(entry.Data, v); err != nil {
 		t.Fatalf("Failed to parse audit data for event %s: %v", entry.Event, err)
@@ -203,19 +203,19 @@ func TestAudit_EntriesAreValidJSON(t *testing.T) {
 
 	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 	for i, line := range lines {
-		var entry map[string]interface{}
+		var entry map[string]any
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			t.Errorf("Line %d is not valid JSON: %v\nContent: %s", i+1, err, line)
 		}
-		// Verify required fields
-		if _, ok := entry["time"]; !ok {
-			t.Errorf("Line %d missing 'time' field", i+1)
+		// Verify required fields (PascalCase, matching Go field names)
+		if _, ok := entry["Time"]; !ok {
+			t.Errorf("Line %d missing 'Time' field", i+1)
 		}
-		if _, ok := entry["event"]; !ok {
-			t.Errorf("Line %d missing 'event' field", i+1)
+		if _, ok := entry["Event"]; !ok {
+			t.Errorf("Line %d missing 'Event' field", i+1)
 		}
-		if _, ok := entry["data"]; !ok {
-			t.Errorf("Line %d missing 'data' field", i+1)
+		if _, ok := entry["Data"]; !ok {
+			t.Errorf("Line %d missing 'Data' field", i+1)
 		}
 	}
 }

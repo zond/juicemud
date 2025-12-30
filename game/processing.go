@@ -78,28 +78,30 @@ func (g *Game) emitJSON(ctx context.Context, at structs.Timestamp, id string, na
 
 // intervalMetadata is embedded in interval event messages.
 type intervalMetadata struct {
-	ID     string `json:"id"`
-	Missed int    `json:"missed"`
+	ID     string
+	Missed int
+}
+
+// intervalMessage wraps user data with interval metadata.
+type intervalMessage struct {
+	Interval intervalMetadata
+	Data     goccy.RawMessage
 }
 
 // enqueueIntervalEvent creates and enqueues an event for an interval.
 // The missedCount indicates how many intervals were missed (e.g., due to server downtime).
 func (g *Game) enqueueIntervalEvent(ctx context.Context, interval *structs.Interval, missedCount int) error {
-	// Parse the original event data
-	var data map[string]any
-	if err := goccy.Unmarshal([]byte(interval.EventData), &data); err != nil {
-		// If not an object, wrap it
-		data = map[string]any{"_data": goccy.RawMessage(interval.EventData)}
-	}
-
-	// Add interval metadata
-	data["_interval"] = intervalMetadata{
-		ID:     interval.IntervalID,
-		Missed: missedCount,
+	// Create the message with interval metadata and user data
+	msg := intervalMessage{
+		Interval: intervalMetadata{
+			ID:     interval.IntervalID,
+			Missed: missedCount,
+		},
+		Data: goccy.RawMessage(interval.EventData),
 	}
 
 	// Marshal the combined message
-	message, err := goccy.Marshal(data)
+	message, err := goccy.Marshal(msg)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}

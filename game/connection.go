@@ -244,7 +244,7 @@ func (c *Connection) scan() error {
 // This is a convenience for users - JS processing always continues regardless.
 // messageContent is the payload for message events.
 type messageContent struct {
-	Text string `json:"text"`
+	Text string
 }
 
 func (c *Connection) handleEmitEvent(call *structs.Call) error {

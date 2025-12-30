@@ -3975,7 +3975,7 @@ func TestMessageEvent(t *testing.T) {
 
 	// Send a message event to self
 	testMessage := "Hello from message event!"
-	if err := tc.sendLine(fmt.Sprintf(`/emit #%s message emit {"text":"%s"}`, selfID, testMessage)); err != nil {
+	if err := tc.sendLine(fmt.Sprintf(`/emit #%s message emit {"Text":"%s"}`, selfID, testMessage)); err != nil {
 		t.Fatalf("failed to send /emit: %v", err)
 	}
 

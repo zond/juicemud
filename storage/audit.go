@@ -22,8 +22,8 @@ type AuditLogger struct {
 // AuditRef identifies a user by both ID and name for audit logging.
 // ID is a pointer to distinguish between "ID is 0" and "no ID" (nil for system).
 type AuditRef struct {
-	ID   *int64 `json:"id,omitempty"`
-	Name string `json:"name"`
+	ID   *int64 `json:",omitempty"`
+	Name string
 }
 
 // Ref creates an AuditRef with the given ID and name.
@@ -43,66 +43,66 @@ type AuditData interface {
 
 // AuditEntry represents a single audit log entry.
 type AuditEntry struct {
-	Time      string    `json:"time"`
-	SessionID string    `json:"session_id,omitempty"`
-	Event     string    `json:"event"`
-	Data      AuditData `json:"data"`
+	Time      string
+	SessionID string `json:",omitempty"`
+	Event     string
+	Data      AuditData
 }
 
 // AuditUserCreate is logged when a new user registers.
 type AuditUserCreate struct {
-	User   AuditRef `json:"user"`
-	Remote string   `json:"remote"`
+	User   AuditRef
+	Remote string
 }
 
 func (AuditUserCreate) auditData() {}
 
 // AuditUserLogin is logged on successful login.
 type AuditUserLogin struct {
-	User   AuditRef `json:"user"`
-	Remote string   `json:"remote"`
+	User   AuditRef
+	Remote string
 }
 
 func (AuditUserLogin) auditData() {}
 
 // AuditSessionEnd is logged when a session ends (disconnect/logout).
 type AuditSessionEnd struct {
-	User   AuditRef `json:"user"`
-	Remote string   `json:"remote"`
+	User   AuditRef
+	Remote string
 }
 
 func (AuditSessionEnd) auditData() {}
 
 // AuditLoginFailed is logged on failed login attempt.
 type AuditLoginFailed struct {
-	User   AuditRef `json:"user"`
-	Remote string   `json:"remote"`
+	User   AuditRef
+	Remote string
 }
 
 func (AuditLoginFailed) auditData() {}
 
 // AuditWizardGrant is logged when wizard privileges are granted to a user.
 type AuditWizardGrant struct {
-	Target  AuditRef `json:"target"`  // user receiving wizard privileges
-	GrantedBy AuditRef `json:"granted_by"` // wizard who granted the privileges
+	Target    AuditRef // user receiving wizard privileges
+	GrantedBy AuditRef // wizard who granted the privileges
 }
 
 func (AuditWizardGrant) auditData() {}
 
 // AuditWizardRevoke is logged when wizard privileges are revoked from a user.
 type AuditWizardRevoke struct {
-	Target    AuditRef `json:"target"`     // user losing wizard privileges
-	RevokedBy AuditRef `json:"revoked_by"` // wizard who revoked the privileges
+	Target    AuditRef // user losing wizard privileges
+	RevokedBy AuditRef // wizard who revoked the privileges
 }
 
 func (AuditWizardRevoke) auditData() {}
 
 // AuditServerConfigChange is logged when the server configuration is modified.
 type AuditServerConfigChange struct {
-	ChangedBy AuditRef `json:"changed_by"` // wizard who made the change
-	Path      string   `json:"path"`       // dot-separated path that was changed
-	OldValue  string   `json:"old_value"`  // JSON representation of old value
-	NewValue  string   `json:"new_value"`  // JSON representation of new value
+	ChangedBy AuditRef // wizard who made the change
+	Path      string   // dot-separated path that was changed
+	OldValue  string   // JSON representation of old value
+	NewValue  string   // JSON representation of new value
 }
 
 func (AuditServerConfigChange) auditData() {}

@@ -191,6 +191,13 @@ addCallback('greet', ['command'], (msg) => {
 - `action`: Actions directed at sibling objects (other objects in the same location). Content: `{name: "...", line: "..."}`
 - `emit`: System infrastructure events with arbitrary JSON content depending on the source
 
+**Special Event Types**: Some event names have built-in behavior:
+- `message`: When received by a player object, prints the `Text` field to their terminal. Useful for NPC dialogue, announcements, etc:
+```javascript
+// Send a message to a player
+emit(playerId, 'message', {Text: 'The wizard nods at you.'});
+```
+
 **Inter-Object Communication**: Objects can communicate using `emit()` and `emitToLocation()`:
 
 ```javascript
@@ -382,8 +389,18 @@ Key differences from `setTimeout`:
 - Minimum interval is 5000ms (5 seconds)
 - Maximum 10 intervals per object
 - Use `/intervals` wizard command to view active intervals
+- Interval events wrap your data: access via `msg.Data` (your original message) and `msg.Interval.ID`, `msg.Interval.Missed` (missed count from server downtime)
 
-**Debugging**: Wizards can attach to an object's console with `/debug #objectid` to see `log()` output, and detach with `/undebug #objectid`.
+**Debugging**: Wizards can attach to an object's console with `/debug #objectid` to see `log()` output, and detach with `/undebug #objectid`. When you attach, the last 64 log messages (up to 10 minutes old) are displayed first, so you can see what happened before you connected.
+
+**Direct Output**: Use `print(message)` to write directly to a player's terminal (only works for user objects with connections):
+```javascript
+addCallback('greet', ['command'], (msg) => {
+    print('Hello, adventurer!');  // Printed directly to the player's terminal
+});
+```
+
+Note: `print()` outputs immediately without formatting, while `log()` goes to the debug console. Use `print()` for player-facing messages and `log()` for debugging.
 
 **Skill/Challenge System**: Objects have skills with theoretical/practical levels, recharge times, and forgetting mechanics. Descriptions and exits can require skill challenges to perceive or use. See `docs/skill-system.md` for the underlying math.
 
@@ -476,11 +493,16 @@ Objects only receive events they've registered callbacks for with the matching t
 
 **Wizard Commands**: Wizard users (User.Wizard = true) get additional `/`-prefixed commands:
 - Object management: `/create`, `/inspect`, `/move`, `/remove`, `/enter`, `/exit`
-- State management: `/setstate` (modify object state JSON)
+- State management: `/setstate` (modify object state JSON), `/skills` (view/update skills)
+- Events: `/emit` (send events to objects)
 - Debugging: `/debug`, `/undebug`
 - Source files: `/ls`
 - Monitoring: `/stats`, `/intervals`, `/flushstats`
 - Admin: `/addwiz`, `/delwiz`
+
+**Target Keywords**: Many wizard commands accept a target. Special keywords:
+- `self` - targets your own object (equivalent to `/inspect self` instead of finding your ID)
+- `#<id>` - targets by object ID directly
 
 **Inspecting Objects**:
 - `/inspect [target] [PATH]` - View object data, optionally drilling into a specific path
@@ -504,6 +526,34 @@ Examples:
 ```
 
 If the configured spawn location doesn't exist, new users fall back to genesis.
+
+**Managing Skills**:
+- `/skills [target]` - View all skills for an object
+- `/skills [target] <skillname> <theoretical> <practical>` - Set skill levels
+
+Examples:
+```
+/skills                           # Show your own skills
+/skills #abc123                   # Show skills for object
+/skills #abc123 perception 50 30  # Set perception: theoretical=50, practical=30
+/skills self stealth 100 80       # Set your own stealth skill
+```
+
+**Emitting Events**:
+- `/emit <target> <eventName> <tag> <message>` - Send an event to an object
+
+Parameters:
+- `target`: Object ID (e.g., `#abc123` or `self`)
+- `eventName`: Event type (e.g., `tick`, `message`, `customEvent`)
+- `tag`: One of `emit`, `command`, or `action`
+- `message`: JSON content
+
+Examples:
+```
+/emit #abc123 tick emit {}                    # Trigger a tick event
+/emit #abc123 message emit {"Text":"Hello!"}  # Send a message to player
+/emit self customEvent emit {"foo":"bar"}     # Emit to yourself
+```
 
 ## Dependencies
 
