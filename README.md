@@ -547,14 +547,15 @@ Examples:
 
 If the configured spawn location doesn't exist, new users fall back to genesis.
 
-**Skill Configs**: Game-wide skill parameters (forget rate, recharge time) can be configured via JavaScript and are persisted in the server config:
+**Skill Configs**: Game-wide skill parameters can be configured via JavaScript and are persisted in the server config:
 
 ```javascript
 // Get current config for a skill (returns null if not configured)
 var config = getSkillConfig('perception');
 if (config) {
-    log('Perception forget rate:', config.Forget);
-    log('Perception recharge time:', config.Recharge);
+    log('Forget:', config.Forget);      // Seconds until skill decays
+    log('Recharge:', config.Recharge);  // Seconds for full XP gain
+    log('Duration:', config.Duration);  // Seconds for deterministic results
 }
 
 // Set skill config using compare-and-swap for safe concurrent updates
@@ -564,12 +565,21 @@ if (config) {
 // - Returns true if the swap succeeded, false if current value didn't match
 
 // Create a new skill config (fails if already exists)
-var created = casSkillConfig('stealth', null, {Forget: 3600, Recharge: 1000});
+var created = casSkillConfig('stealth', null, {
+    Forget: 3600,    // Skill decays after 1 hour of no use
+    Recharge: 1000,  // Full XP gain requires 1000 seconds between uses
+    Duration: 60     // Same check repeats same result for 60 seconds
+});
 
 // Update an existing config (fails if current doesn't match expected)
 var oldConfig = getSkillConfig('stealth');
 var updated = casSkillConfig('stealth', oldConfig, {Forget: 7200, Recharge: oldConfig.Recharge});
 ```
+
+Config fields (all in seconds):
+- **Forget**: Time after last use before skill starts decaying (default: skill-dependent)
+- **Recharge**: Time between uses for full XP gain - using skills faster gives diminishing returns (default: 6 minutes)
+- **Duration**: Window during which repeated skill checks produce the same result for the same user/skill/target combination. Useful for perception checks that shouldn't flicker. Set to 0 for fully random checks each time.
 
 Skill configs are typically set in `boot.js` at server startup and persist across restarts.
 
