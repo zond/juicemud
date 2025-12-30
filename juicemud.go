@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"iter"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -159,10 +160,7 @@ func (s *SyncMap[K, V]) Clone() map[K]V {
 func (s *SyncMap[K, V]) Replace(m map[K]V) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.m = map[K]V{}
-	for k, v := range m {
-		s.m[k] = v
-	}
+	s.m = maps.Clone(m)
 }
 
 func (s *SyncMap[K, V]) MarshalJSON() ([]byte, error) {

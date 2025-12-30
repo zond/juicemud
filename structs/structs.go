@@ -117,6 +117,32 @@ func (o *Object) HasCallback(name string, tag string) bool {
 	return found
 }
 
+// UpdateState atomically reads, modifies, and writes the object's state as a typed value.
+// The state is deserialized into T, passed to the update function, and serialized back.
+// The object is locked during the entire operation.
+func UpdateState[T any](obj *Object, update func(*T) error) error {
+	obj.Lock()
+	defer obj.Unlock()
+
+	var data T
+	if obj.Unsafe.State != "" && obj.Unsafe.State != "{}" {
+		if err := goccy.Unmarshal([]byte(obj.Unsafe.State), &data); err != nil {
+			return err
+		}
+	}
+
+	if err := update(&data); err != nil {
+		return err
+	}
+
+	newState, err := goccy.Marshal(data)
+	if err != nil {
+		return err
+	}
+	obj.Unsafe.State = string(newState)
+	return nil
+}
+
 // FindExit returns a pointer to a copy of the exit leading to destination, or nil if not found.
 // The returned pointer is heap-allocated and safe to store beyond the Object's lifetime.
 func (o *Object) FindExit(destination string) *Exit {
@@ -797,6 +823,61 @@ func (s *SkillConfigStore) CompareAndSwap(name string, old *SkillConfig, new *Sk
 // Set unconditionally sets a skill config (for initialization/testing).
 func (s *SkillConfigStore) Set(name string, config SkillConfig) {
 	s.m.Set(name, config)
+}
+
+// Replace replaces all skill configs with the provided map.
+// This should only be called during initialization (e.g., loadSkillConfigs at startup)
+// before any concurrent JS execution, as it does not acquire per-key locks.
+func (s *SkillConfigStore) Replace(configs map[string]SkillConfig) {
+	s.m.Replace(configs)
+}
+
+// CompareAndSwapThen atomically updates a skill config and runs a callback if successful.
+// The callback runs while still holding the per-key lock, ensuring atomicity.
+// If the callback returns an error, the change is reverted.
+// Returns (swapped bool, err from callback if swapped and callback failed).
+//
+// LOCK ORDERING: The callback may acquire other locks (e.g., root object lock for persistence).
+// To avoid deadlocks, never hold the root object lock when calling SkillConfig methods.
+func (s *SkillConfigStore) CompareAndSwapThen(name string, old *SkillConfig, new *SkillConfig, then func() error) (bool, error) {
+	var swapped bool
+	var err error
+	s.m.WithLock(name, func() {
+		current, exists := s.m.GetHas(name)
+
+		// Check if current state matches expected old state
+		if old == nil {
+			if exists {
+				return
+			}
+		} else {
+			if !exists || current != *old {
+				return
+			}
+		}
+
+		// Current state matches - perform the update
+		if new == nil {
+			s.m.Del(name)
+		} else {
+			s.m.Set(name, *new)
+		}
+		swapped = true
+
+		// Run the callback while still holding the lock
+		if then != nil {
+			if err = then(); err != nil {
+				// Revert the change
+				if old == nil {
+					s.m.Del(name)
+				} else {
+					s.m.Set(name, *old)
+				}
+				swapped = false
+			}
+		}
+	})
+	return swapped, err
 }
 
 var (

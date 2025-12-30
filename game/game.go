@@ -182,6 +182,7 @@ type ServerConfig struct {
 	Spawn struct {
 		Container string
 	}
+	SkillConfigs map[string]structs.SkillConfig
 }
 
 // getServerConfig loads the server config from the root object's state.
@@ -201,6 +202,20 @@ func (g *Game) getServerConfig(ctx context.Context) (*ServerConfig, error) {
 	return config, nil
 }
 
+// updateServerConfig atomically reads, modifies, and writes the server config.
+// The update function receives the current config and should modify it in place.
+// The root object is locked during the entire operation.
+func (g *Game) updateServerConfig(ctx context.Context, update func(*ServerConfig)) error {
+	root, err := g.storage.AccessObject(ctx, emptyID, nil)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	return structs.UpdateState(root, func(config *ServerConfig) error {
+		update(config)
+		return nil
+	})
+}
+
 // getSpawnLocation returns the configured spawn location for new users.
 // Falls back to genesis if not configured or if configured location doesn't exist.
 func (g *Game) getSpawnLocation(ctx context.Context) string {
@@ -218,6 +233,22 @@ func (g *Game) getSpawnLocation(ctx context.Context) string {
 		return genesisID
 	}
 	return config.Spawn.Container
+}
+
+// loadSkillConfigs loads skill configs from the root object and populates the in-memory store.
+// Called at startup to restore skill configurations.
+func (g *Game) loadSkillConfigs(ctx context.Context) error {
+	config, err := g.getServerConfig(ctx)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	if config.SkillConfigs != nil {
+		structs.SkillConfigs.Replace(config.SkillConfigs)
+		if len(config.SkillConfigs) > 0 {
+			log.Printf("Loaded %d skill configs from server config", len(config.SkillConfigs))
+		}
+	}
+	return nil
 }
 
 // New creates a new Game instance.
@@ -361,6 +392,11 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 
 	// Recover intervals from persistent storage
 	if err := g.RecoverIntervals(ctx); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+
+	// Load skill configs from root object state
+	if err := g.loadSkillConfigs(ctx); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 

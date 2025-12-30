@@ -491,7 +491,7 @@ func (g *Game) loadNeighbourhoodAt(ctx context.Context, loc string) (*structs.Ne
 // 1. Only wizards can create/edit source files (sources are stored on the filesystem)
 // 2. Wizards are trusted to configure the game
 // 3. Skill configs are game balance settings, not security-sensitive
-func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
+func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
 	// getSkillConfig(name) -> config or null
 	callbacks["getSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
@@ -546,7 +546,22 @@ func (g *Game) addGlobalCallbacks(_ context.Context, callbacks js.Callbacks) {
 			newConfig = &new
 		}
 
-		swapped := structs.SkillConfigs.CompareAndSwap(name, oldConfig, newConfig)
+		swapped, persistErr := structs.SkillConfigs.CompareAndSwapThen(name, oldConfig, newConfig, func() error {
+			// Persist to root object state while holding the lock
+			return g.updateServerConfig(ctx, func(serverConfig *ServerConfig) {
+				if serverConfig.SkillConfigs == nil {
+					serverConfig.SkillConfigs = make(map[string]structs.SkillConfig)
+				}
+				if newConfig == nil {
+					delete(serverConfig.SkillConfigs, name)
+				} else {
+					serverConfig.SkillConfigs[name] = *newConfig
+				}
+			})
+		})
+		if persistErr != nil {
+			return rc.Throw("casSkillConfig: failed to persist config: %v", persistErr)
+		}
 		res, err := rc.JSFromGo(swapped)
 		if err != nil {
 			return rc.Throw("trying to convert result: %v", err)
