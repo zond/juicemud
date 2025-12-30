@@ -537,7 +537,7 @@ Examples:
 /setstate #abc123 Name "test"  # Set string state value
 ```
 
-**Server Configuration**: The root object (ID `""`) stores server-wide configuration in its state. To configure the spawn location for new users:
+**Server Configuration**: The root object (ID `""`) stores server-wide configuration in its state, including spawn location and skill configs. To configure the spawn location for new users:
 
 ```
 /inspect # State               # View current server config
@@ -546,6 +546,32 @@ Examples:
 ```
 
 If the configured spawn location doesn't exist, new users fall back to genesis.
+
+**Skill Configs**: Game-wide skill parameters (forget rate, recharge time) can be configured via JavaScript and are persisted in the server config:
+
+```javascript
+// Get current config for a skill (returns null if not configured)
+var config = getSkillConfig('perception');
+if (config) {
+    log('Perception forget rate:', config.Forget);
+    log('Perception recharge time:', config.Recharge);
+}
+
+// Set skill config using compare-and-swap for safe concurrent updates
+// casSkillConfig(name, expectedOldConfig, newConfig) -> boolean
+// - Pass null as oldConfig to create (only succeeds if doesn't exist)
+// - Pass null as newConfig to delete (only succeeds if oldConfig matches)
+// - Returns true if the swap succeeded, false if current value didn't match
+
+// Create a new skill config (fails if already exists)
+var created = casSkillConfig('stealth', null, {Forget: 3600, Recharge: 1000});
+
+// Update an existing config (fails if current doesn't match expected)
+var oldConfig = getSkillConfig('stealth');
+var updated = casSkillConfig('stealth', oldConfig, {Forget: 7200, Recharge: oldConfig.Recharge});
+```
+
+Skill configs are typically set in `boot.js` at server startup and persist across restarts.
 
 **Managing Skills**:
 - `/skills [target]` - View all skills for an object
