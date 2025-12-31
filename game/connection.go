@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -856,6 +857,12 @@ func (c *Connection) loginUser() error {
 		} else {
 			// Successful login - clear any rate limit for this user
 			c.game.loginRateLimiter.clearFailure(user.Name)
+			// Update last login time
+			user.SetLastLogin(time.Now().UTC())
+			if err := c.game.storage.StoreUser(c.ctx, user, true, c.sess.RemoteAddr().String()); err != nil {
+				// Log error but don't fail login - don't expose internal errors to users
+				log.Printf("Failed to update last login for user %s: %v", user.Name, err)
+			}
 			c.user = user
 		}
 	}
@@ -959,6 +966,7 @@ func (c *Connection) createUser() error {
 	obj.Unsafe.SourcePath = userSource
 	obj.Unsafe.Location = c.game.getSpawnLocation(c.ctx)
 	user.Object = obj.Unsafe.Id
+	user.SetLastLogin(time.Now().UTC())
 	if err := c.game.storage.StoreUser(c.ctx, user, false, c.sess.RemoteAddr().String()); err != nil {
 		return juicemud.WithStack(err)
 	}

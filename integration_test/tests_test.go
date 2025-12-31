@@ -4615,3 +4615,131 @@ addCallback('testprint', ['command'], (msg) => {
 		t.Fatalf("print() should output 'This is a second line.' to terminal, got: %q", output)
 	}
 }
+
+// TestStatsUsersSummary tests the USERS section in /stats summary.
+func TestStatsUsersSummary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+
+	// Run /stats and verify USERS section appears
+	output, ok := tc.sendCommand("/stats", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/stats did not complete: %q", output)
+	}
+
+	// Check for USERS section with expected fields
+	if !strings.Contains(output, "USERS") {
+		t.Errorf("/stats should show USERS section: %q", output)
+	}
+	if !strings.Contains(output, "Total:") {
+		t.Errorf("/stats USERS should show Total count: %q", output)
+	}
+	if !strings.Contains(output, "Wizards:") {
+		t.Errorf("/stats USERS should show Wizards count: %q", output)
+	}
+	if !strings.Contains(output, "Owners:") {
+		t.Errorf("/stats USERS should show Owners count: %q", output)
+	}
+	if !strings.Contains(output, "Online:") {
+		t.Errorf("/stats USERS should show Online count: %q", output)
+	}
+}
+
+// TestStatsUsersCommand tests the /stats users subcommand.
+func TestStatsUsersCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+
+	// Test basic /stats users command
+	output, ok := tc.sendCommand("/stats users", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/stats users did not complete: %q", output)
+	}
+
+	// Check for table headers
+	if !strings.Contains(output, "Name") {
+		t.Errorf("/stats users should show Name column: %q", output)
+	}
+	if !strings.Contains(output, "Role") {
+		t.Errorf("/stats users should show Role column: %q", output)
+	}
+	if !strings.Contains(output, "Last Login") {
+		t.Errorf("/stats users should show Last Login column: %q", output)
+	}
+
+	// Check that the wizard user appears in the list
+	if !strings.Contains(output, "testuser") {
+		t.Errorf("/stats users should show testuser: %q", output)
+	}
+
+	// Test filtering by wizards
+	output, ok = tc.sendCommand("/stats users wizards", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/stats users wizards did not complete: %q", output)
+	}
+	if !strings.Contains(output, "testuser") {
+		t.Errorf("/stats users wizards should show testuser: %q", output)
+	}
+
+	// Test with limit
+	output, ok = tc.sendCommand("/stats users name 5", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/stats users name 5 did not complete: %q", output)
+	}
+	// Just verify it completed successfully
+	if strings.Contains(output, "Error") {
+		t.Errorf("/stats users name 5 should not show error: %q", output)
+	}
+}
+
+// TestLastLoginTracking tests that last login time is tracked.
+func TestLastLoginTracking(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+
+	// Create a new user for this test (username limited to 16 chars)
+	username := fmt.Sprintf("login%d", time.Now().Unix()%100000)
+	password := "testpass123"
+
+	tc, err := createUser(testServer.SSHAddr(), username, password)
+	if err != nil {
+		t.Fatalf("Failed to create test user: %v", err)
+	}
+	tc.Close()
+
+	// Load the user and verify LastLogin is set (it's set on account creation)
+	user, err := testServer.Storage().LoadUser(ctx, username)
+	if err != nil {
+		t.Fatalf("Failed to load user: %v", err)
+	}
+	if user.LastLogin().IsZero() {
+		t.Errorf("LastLogin should be set after account creation")
+	}
+	firstLogin := user.LastLogin()
+
+	// Wait for at least 1 second so Unix timestamp changes
+	time.Sleep(1100 * time.Millisecond)
+	tc, err = loginUser(testServer.SSHAddr(), username, password)
+	if err != nil {
+		t.Fatalf("Failed to login: %v", err)
+	}
+	tc.Close()
+
+	// Verify LastLogin was updated
+	user, err = testServer.Storage().LoadUser(ctx, username)
+	if err != nil {
+		t.Fatalf("Failed to load user after re-login: %v", err)
+	}
+	if !user.LastLogin().After(firstLogin) {
+		t.Errorf("LastLogin should be updated after re-login: first=%v, second=%v", firstLogin, user.LastLogin())
+	}
+}

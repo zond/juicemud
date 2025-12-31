@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
@@ -674,6 +675,25 @@ type User struct {
 	Owner        bool
 	Wizard       bool
 	Object       string
+	LastLoginAt  int64 `json:",omitempty" sqly:"index"` // Unix timestamp of last login (0 = never)
+}
+
+// LastLogin returns the last login time as a time.Time.
+// Returns zero time if user has never logged in.
+func (u *User) LastLogin() time.Time {
+	if u.LastLoginAt == 0 {
+		return time.Time{}
+	}
+	return time.Unix(u.LastLoginAt, 0).UTC()
+}
+
+// SetLastLogin sets the last login time from a time.Time.
+func (u *User) SetLastLogin(t time.Time) {
+	if t.IsZero() {
+		u.LastLoginAt = 0
+	} else {
+		u.LastLoginAt = t.Unix()
+	}
 }
 
 type contextKey int
@@ -721,6 +741,103 @@ func AuthenticateUser(ctx context.Context, u *User) context.Context {
 func (s *Storage) LoadUser(ctx context.Context, name string) (*User, error) {
 	user := &User{}
 	if err := getSQL(ctx, s.sql, user, "SELECT * FROM User WHERE Name = ?", name); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return user, nil
+}
+
+// UserSortField specifies which field to sort users by.
+type UserSortField int
+
+const (
+	UserSortByName         UserSortField = iota // Alphabetical by username
+	UserSortByID                                // By database ID (creation order)
+	UserSortByLastLogin                         // Most recent login first
+	UserSortByLastLoginAsc                      // Least recent login first (stale accounts)
+)
+
+// UserFilter specifies which users to include.
+type UserFilter int
+
+const (
+	UserFilterAll     UserFilter = iota // All users
+	UserFilterOwners                    // Only owners
+	UserFilterWizards                   // Only wizards (includes owners since owners have Wizard=true)
+	UserFilterPlayers                   // Only non-wizards
+)
+
+// ListUsers returns users matching the filter, sorted by the specified field, limited to n results.
+// If limit <= 0, returns all matching users.
+func (s *Storage) ListUsers(ctx context.Context, filter UserFilter, sortBy UserSortField, limit int) ([]User, error) {
+	var whereClause string
+	switch filter {
+	case UserFilterOwners:
+		whereClause = "WHERE Owner = 1"
+	case UserFilterWizards:
+		whereClause = "WHERE Wizard = 1"
+	case UserFilterPlayers:
+		whereClause = "WHERE Wizard = 0"
+	default:
+		whereClause = ""
+	}
+
+	var orderBy string
+	switch sortBy {
+	case UserSortByName:
+		orderBy = "Name ASC"
+	case UserSortByID:
+		orderBy = "Id ASC"
+	case UserSortByLastLogin:
+		orderBy = "LastLoginAt DESC"
+	case UserSortByLastLoginAsc:
+		orderBy = "LastLoginAt ASC"
+	default:
+		orderBy = "Name ASC"
+	}
+
+	query := fmt.Sprintf("SELECT * FROM User %s ORDER BY %s", whereClause, orderBy)
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	var users []User
+	if err := sqlx.SelectContext(ctx, s.sql, &users, query); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return users, nil
+}
+
+// CountUsers returns the number of users matching the filter.
+func (s *Storage) CountUsers(ctx context.Context, filter UserFilter) (int, error) {
+	var whereClause string
+	switch filter {
+	case UserFilterOwners:
+		whereClause = "WHERE Owner = 1"
+	case UserFilterWizards:
+		whereClause = "WHERE Wizard = 1"
+	case UserFilterPlayers:
+		whereClause = "WHERE Wizard = 0"
+	default:
+		whereClause = ""
+	}
+
+	query := fmt.Sprintf("SELECT COUNT(*) FROM User %s", whereClause)
+	var count int
+	if err := sqlx.GetContext(ctx, s.sql, &count, query); err != nil {
+		return 0, juicemud.WithStack(err)
+	}
+	return count, nil
+}
+
+// GetMostRecentLogin returns the user with the most recent login time.
+// Returns nil if no users have logged in yet.
+func (s *Storage) GetMostRecentLogin(ctx context.Context) (*User, error) {
+	user := &User{}
+	err := getSQL(ctx, s.sql, user, "SELECT * FROM User WHERE LastLoginAt > 0 ORDER BY LastLoginAt DESC LIMIT 1")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	return user, nil

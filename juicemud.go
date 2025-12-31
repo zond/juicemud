@@ -254,6 +254,13 @@ func (s *SyncMap[K, V]) Swap(key K, oldValue V, newValue V) bool {
 	return false
 }
 
+// Len returns the number of entries in the map.
+func (s *SyncMap[K, V]) Len() int {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return len(s.m)
+}
+
 func (l *SyncMap[K, V]) WithLock(key K, f func()) {
 	l.Lock(key)
 	defer l.Unlock(key)

@@ -503,6 +503,20 @@ func (c *Connection) wizCommands() commands {
 						}
 					}
 
+					// User statistics
+					fmt.Fprintln(c.term, "\nUSERS")
+					totalUsers, _ := c.game.storage.CountUsers(c.ctx, storage.UserFilterAll)
+					wizardCount, _ := c.game.storage.CountUsers(c.ctx, storage.UserFilterWizards)
+					ownerCount, _ := c.game.storage.CountUsers(c.ctx, storage.UserFilterOwners)
+					onlineCount := c.game.connectionByObjectID.Len()
+					fmt.Fprintf(c.term, "  Total: %d    Wizards: %d    Owners: %d\n", totalUsers, wizardCount, ownerCount)
+					if recentUser, err := c.game.storage.GetMostRecentLogin(c.ctx); err == nil && recentUser != nil {
+						ago := time.Since(recentUser.LastLogin()).Truncate(time.Second)
+						fmt.Fprintf(c.term, "  Online: %d    Last login: %v ago (%s)\n", onlineCount, ago, recentUser.Name)
+					} else {
+						fmt.Fprintf(c.term, "  Online: %d\n", onlineCount)
+					}
+
 				case "errors":
 					// Sub-subcommands: summary (default), categories, locations, recent
 					errSubcmd := "summary"
@@ -917,6 +931,97 @@ func (c *Connection) wizCommands() commands {
 					}
 					t.Print()
 
+				case "users":
+					filter := storage.UserFilterAll
+					sortBy := storage.UserSortByName
+					n := 20
+					argIdx := 2
+
+					// Parse filter (optional, first argument)
+					if len(parts) > argIdx {
+						switch parts[argIdx] {
+						case "all":
+							filter = storage.UserFilterAll
+							argIdx++
+						case "owners":
+							filter = storage.UserFilterOwners
+							argIdx++
+						case "wizards":
+							filter = storage.UserFilterWizards
+							argIdx++
+						case "players":
+							filter = storage.UserFilterPlayers
+							argIdx++
+						}
+					}
+
+					// Parse sort (optional)
+					if len(parts) > argIdx {
+						switch parts[argIdx] {
+						case "name":
+							sortBy = storage.UserSortByName
+							argIdx++
+						case "id":
+							sortBy = storage.UserSortByID
+							argIdx++
+						case "login", "recent":
+							sortBy = storage.UserSortByLastLogin
+							argIdx++
+						case "stale", "oldest":
+							sortBy = storage.UserSortByLastLoginAsc
+							argIdx++
+						default:
+							// Might be a number for limit
+							if parsed, err := strconv.Atoi(parts[argIdx]); err == nil && parsed > 0 {
+								n = parsed
+								argIdx++
+							}
+						}
+					}
+
+					// Parse limit (optional)
+					if len(parts) > argIdx {
+						if parsed, err := strconv.Atoi(parts[argIdx]); err == nil && parsed > 0 {
+							n = parsed
+						}
+					}
+
+					users, err := c.game.storage.ListUsers(c.ctx, filter, sortBy, n)
+					if err != nil {
+						fmt.Fprintf(c.term, "Error: %v\n", err)
+						return nil
+					}
+					if len(users) == 0 {
+						fmt.Fprintln(c.term, "No users found.")
+						return nil
+					}
+
+					total, _ := c.game.storage.CountUsers(c.ctx, filter)
+					fmt.Fprintf(c.term, "Users (%d shown, %d total):\n", len(users), total)
+
+					t := table.New("Name", "Role", "Object", "Last Login", "Online").WithWriter(c.term)
+					for _, user := range users {
+						role := ""
+						if user.Owner {
+							role = "owner"
+						} else if user.Wizard {
+							role = "wizard"
+						}
+
+						online := ""
+						if _, found := c.game.connectionByObjectID.GetHas(user.Object); found {
+							online = "*"
+						}
+
+						lastLoginStr := "never"
+						if !user.LastLogin().IsZero() {
+							lastLoginStr = user.LastLogin().Format("2006-01-02 15:04")
+						}
+
+						t.AddRow(user.Name, role, user.Object, lastLoginStr, online)
+					}
+					t.Print()
+
 				case "reset":
 					stats.Reset()
 					fmt.Fprintln(c.term, "Statistics reset.")
@@ -931,6 +1036,7 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "  objects [sort] [n]         Top n objects (sort: time|execs|slow|errors|errorrate)")
 					fmt.Fprintln(c.term, "  object <id>                Detailed stats for specific object")
 					fmt.Fprintln(c.term, "  intervals [sort] [n]       Top n intervals (sort: time|execs|slow|errors|errorrate)")
+					fmt.Fprintln(c.term, "  users [filter] [sort] [n]  List users (filter: all|owners|wizards|players; sort: name|id|login|stale)")
 					fmt.Fprintln(c.term, "  reset                      Clear all statistics")
 				}
 				return nil
