@@ -421,66 +421,34 @@ func (c *Connection) wizCommands() commands {
 		},
 		{
 			names: m("/tree"),
-			f: func(c *Connection, s string) error {
-				parts, err := shellwords.SplitPosix(s)
-				if err != nil {
-					return juicemud.WithStack(err)
-				}
+			f: c.identifyingCommand(defaultLoc, 1, func(c *Connection, _ *structs.Object, rest string, targets ...*structs.Object) error {
+				target := targets[0]
 
-				// Parse flags
+				// Parse flags from rest string: -r [depth]
 				recursive := false
 				maxDepth := 5 // default recursive depth
-				targetID := "" // empty = current location
 
-				for i := 1; i < len(parts); i++ {
-					switch parts[i] {
-					case "-r", "--recursive":
+				args := strings.Fields(rest)
+				for i := 0; i < len(args); i++ {
+					if args[i] == "-r" || args[i] == "--recursive" {
 						recursive = true
 						// Check if next arg is a number (depth), bounded 1-100
-						if i+1 < len(parts) {
-							if d, err := strconv.Atoi(parts[i+1]); err == nil && d > 0 && d <= 100 {
+						if i+1 < len(args) {
+							if d, err := strconv.Atoi(args[i+1]); err == nil && d > 0 && d <= 100 {
 								maxDepth = d
-								i++
 							}
 						}
-					default:
-						// Must be target object ID
-						targetID = strings.TrimPrefix(parts[i], "#")
-					}
-				}
-
-				// Get root object
-				var root *structs.Object
-				if targetID == "" {
-					// Get user's current location
-					self, err := c.game.accessObject(c.ctx, c.user.Object)
-					if err != nil {
-						return juicemud.WithStack(err)
-					}
-					locID := self.GetLocation()
-					if locID == "" {
-						fmt.Fprintln(c.term, "You are not in any location.")
-						return nil
-					}
-					root, err = c.game.storage.AccessObject(c.ctx, locID, nil)
-					if err != nil {
-						return juicemud.WithStack(err)
-					}
-				} else {
-					root, err = c.game.storage.AccessObject(c.ctx, targetID, nil)
-					if err != nil {
-						return juicemud.WithStack(err)
 					}
 				}
 
 				// Print tree
 				if recursive {
-					c.printTreeRecursive(root, "", true, maxDepth, 0)
+					c.printTreeRecursive(target, "", true, maxDepth, 0)
 				} else {
-					c.printTreeFlat(root)
+					c.printTreeFlat(target)
 				}
 				return nil
-			},
+			}),
 		},
 		{
 			names: m("/stats"),
@@ -500,7 +468,7 @@ func (c *Connection) wizCommands() commands {
 				switch subcmd {
 				case "summary", "dashboard":
 					g := stats.GlobalSnapshot()
-					fmt.Fprintf(c.term, "JS Statistics (uptime: %s)\n\n", g.Uptime.Round(time.Second))
+					fmt.Fprintf(c.term, "Server Status (uptime: %s)\n\n", g.Uptime.Round(time.Second))
 
 					fmt.Fprintln(c.term, "EXECUTIONS")
 					fmt.Fprintf(c.term, "  Total: %d    Rate: %.2f/s (1m: %.1f/s, 1h: %.0f/s)\n",
@@ -556,6 +524,23 @@ func (c *Connection) wizCommands() commands {
 						fmt.Fprintf(c.term, "  Online: %d    Last login: %v ago (%s)\n", onlineCount, ago, recentUser.Name)
 					} else {
 						fmt.Fprintf(c.term, "  Online: %d\n", onlineCount)
+					}
+
+					// Storage health
+					fmt.Fprintln(c.term, "\nSTORAGE")
+					health := c.game.storage.FlushHealth()
+					if health.Healthy() {
+						flushAgo := "never"
+						if !health.LastFlushAt.IsZero() {
+							flushAgo = time.Since(health.LastFlushAt).Truncate(time.Second).String() + " ago"
+						}
+						fmt.Fprintf(c.term, "  Flush: OK (%s)\n", flushAgo)
+					} else {
+						fmt.Fprint(c.term, "  Flush: FAILING")
+						if health.LastError != nil {
+							fmt.Fprintf(c.term, " - %v", health.LastError)
+						}
+						fmt.Fprintln(c.term)
 					}
 
 				case "errors":

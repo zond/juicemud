@@ -144,12 +144,12 @@ func TestStatsCommand(t *testing.T) {
 		{
 			name:     "default shows summary",
 			cmd:      "/stats",
-			contains: []string{"JS Statistics", "EXECUTIONS", "ERRORS"},
+			contains: []string{"Server Status", "EXECUTIONS", "ERRORS", "USERS", "STORAGE"},
 		},
 		{
 			name:     "summary subcommand",
 			cmd:      "/stats summary",
-			contains: []string{"JS Statistics"},
+			contains: []string{"Server Status"},
 		},
 		{
 			name:     "errors subcommand",
@@ -4763,26 +4763,29 @@ func TestTreeCommand(t *testing.T) {
 	if !ok {
 		t.Fatalf("/tree did not complete: %q", output)
 	}
-	// Should show object ID format
+	// Should show object ID format (#id  name)
 	if !strings.Contains(output, "#") {
 		t.Errorf("/tree should show object IDs with #: %q", output)
 	}
 
-	// Test /tree with specific object ID (use genesis which is the spawn)
-	// First get the user's location by inspecting self
-	inspectOutput, ok := tc.sendCommand("/inspect", defaultWaitTimeout)
+	// Test /tree on root object (empty ID)
+	output, ok = tc.sendCommand("/tree #", defaultWaitTimeout)
 	if !ok {
-		t.Fatalf("/inspect did not complete: %q", inspectOutput)
+		t.Fatalf("/tree # did not complete: %q", output)
+	}
+	// Root object should show genesis or similar top-level objects
+	if !strings.Contains(output, "#") {
+		t.Errorf("/tree # should show object IDs: %q", output)
 	}
 
-	// Test /tree -r shows recursive output
-	output, ok = tc.sendCommand("/tree -r 2", defaultWaitTimeout)
+	// Test /tree with -r flag (target first, then flags)
+	output, ok = tc.sendCommand("/tree # -r 2", defaultWaitTimeout)
 	if !ok {
-		t.Fatalf("/tree -r did not complete: %q", output)
+		t.Fatalf("/tree # -r 2 did not complete: %q", output)
 	}
-	// Should show at least the root object
+	// Should show tree structure
 	if !strings.Contains(output, "#") {
-		t.Errorf("/tree -r should show object IDs: %q", output)
+		t.Errorf("/tree # -r should show object IDs: %q", output)
 	}
 }
 
@@ -4808,13 +4811,13 @@ func TestLsTreeOutput(t *testing.T) {
 		t.Errorf("/ls / should show item count: %q", output)
 	}
 
-	// Test /ls -r shows recursive output
-	output, ok = tc.sendCommand("/ls -r 2 /", defaultWaitTimeout)
+	// Test /ls with -r flag shows recursive output (path first, then flags)
+	output, ok = tc.sendCommand("/ls / -r 2", defaultWaitTimeout)
 	if !ok {
-		t.Fatalf("/ls -r did not complete: %q", output)
+		t.Fatalf("/ls / -r did not complete: %q", output)
 	}
 	// Should have tree indentation for subdirectories
 	if !strings.Contains(output, "│") && !strings.Contains(output, "├──") {
-		t.Errorf("/ls -r should show nested tree structure: %q", output)
+		t.Errorf("/ls / -r should show nested tree structure: %q", output)
 	}
 }

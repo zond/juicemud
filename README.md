@@ -398,7 +398,7 @@ When you attach, the last 64 log messages (up to 10 minutes old) are displayed.
 
 ```
 /ls [path]              List source files in directory (tree-style)
-/ls -r [depth] [path]   Recursive listing (default depth: 10)
+/ls [path] -r [depth]   Recursive listing (default depth: 10)
 ```
 
 **Output format:**
@@ -410,7 +410,8 @@ When you attach, the last 64 log messages (up to 10 minutes old) are displayed.
 
 ```
 /tree [target]            Show contents of object (default: current location)
-/tree -r [depth] [target] Recursive tree view (default depth: 5)
+/tree [target] -r [depth] Recursive tree view (default depth: 5)
+/tree #                   Show contents of root object
 ```
 
 **Output format:**
