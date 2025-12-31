@@ -1026,6 +1026,26 @@ func (c *Connection) wizCommands() commands {
 					stats.Reset()
 					fmt.Fprintln(c.term, "Statistics reset.")
 
+				case "flush":
+					health := c.game.storage.FlushHealth()
+					if health.Healthy() {
+						fmt.Fprintln(c.term, "Flush status: OK")
+						if !health.LastFlushAt.IsZero() {
+							fmt.Fprintf(c.term, "Last successful flush: %v ago\n", time.Since(health.LastFlushAt).Truncate(time.Second))
+						}
+					} else {
+						fmt.Fprintln(c.term, "Flush status: FAILING")
+						if !health.LastFlushAt.IsZero() {
+							fmt.Fprintf(c.term, "Last successful flush: %v ago\n", time.Since(health.LastFlushAt).Truncate(time.Second))
+						}
+						if health.LastError != nil {
+							fmt.Fprintf(c.term, "Last error: %v\n", health.LastError)
+						}
+						if !health.LastErrorAt.IsZero() {
+							fmt.Fprintf(c.term, "Last failure: %v ago\n", time.Since(health.LastErrorAt).Truncate(time.Second))
+						}
+					}
+
 				default:
 					fmt.Fprintln(c.term, "usage: /stats [subcommand]")
 					fmt.Fprintln(c.term, "  summary                    Dashboard view (default)")
@@ -1037,6 +1057,7 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "  object <id>                Detailed stats for specific object")
 					fmt.Fprintln(c.term, "  intervals [sort] [n]       Top n intervals (sort: time|execs|slow|errors|errorrate)")
 					fmt.Fprintln(c.term, "  users [filter] [sort] [n]  List users (filter: all|owners|wizards|players; sort: name|id|login|stale)")
+					fmt.Fprintln(c.term, "  flush                      Show database flush health status")
 					fmt.Fprintln(c.term, "  reset                      Clear all statistics")
 				}
 				return nil
@@ -1164,29 +1185,6 @@ func (c *Connection) wizCommands() commands {
 				}
 				fmt.Fprintf(c.term, "Intervals for object %s (%d total):\n", objectID, count)
 				t.Print()
-				return nil
-			},
-		},
-		{
-			names: m("/flushstats"),
-			f: func(c *Connection, s string) error {
-				health := c.game.storage.FlushHealth()
-				if health.Healthy() {
-					fmt.Fprintln(c.term, "Flush status: OK")
-					if !health.LastFlushAt.IsZero() {
-						fmt.Fprintf(c.term, "Last successful flush: %v ago\n", time.Since(health.LastFlushAt).Truncate(time.Second))
-					}
-				} else {
-					fmt.Fprintln(c.term, "Flush status: FAILING")
-					if !health.LastFlushAt.IsZero() {
-						fmt.Fprintf(c.term, "Last successful flush: %v ago\n", time.Since(health.LastFlushAt).Truncate(time.Second))
-					} else {
-						fmt.Fprintln(c.term, "Last successful flush: never")
-					}
-					fmt.Fprintf(c.term, "Consecutive errors: %d\n", health.ConsecErrors)
-					fmt.Fprintf(c.term, "Current backoff: %v\n", health.CurrentBackoff)
-					fmt.Fprintf(c.term, "Last error: %v\n", health.LastError)
-				}
 				return nil
 			},
 		},

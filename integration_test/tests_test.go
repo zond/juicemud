@@ -177,6 +177,12 @@ func TestStatsCommand(t *testing.T) {
 			// Output is either "No slow executions recorded." or "[HH:MM:SS] #objID path Xms"
 			either: []string{"No slow executions", "ms"},
 		},
+		{
+			name:     "flush subcommand",
+			cmd:      "/stats flush",
+			contains: []string{"Flush status:"},
+			either:   []string{"OK", "FAILING"},
+		},
 	}
 
 	for _, tt := range tests {

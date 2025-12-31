@@ -11,7 +11,7 @@ A MUD (Multi-User Dungeon) game server written in Go, featuring JavaScript-based
 - Sophisticated skill system with forgetting mechanics and challenge-based access control
 - Argon2id password hashing for secure credential storage
 
-## Build and Run
+## Quick Start
 
 ```bash
 # Build the server
@@ -25,62 +25,47 @@ go build -o juicemud-admin ./bin/admin
 
 # Run all tests
 go test ./...
-
-# Run a single test
-go test -v ./structs -run TestLevel
-
-# Run tests in a specific package
-go test -v ./storage/dbm
-
-# Generate code from schema (after modifying structs/schema.benc)
-go generate ./structs
 ```
 
-## Architecture
+---
+
+## Architecture & Persistence
+
+### System Overview
 
 ```
-                                    ┌─────────────────┐
-                                    │   bin/server    │
-                                    │    main.go      │
-                                    └────────┬────────┘
-                                             │
-                                    ┌────────▼────────┐
-                                    │     server      │
-                                    │   Server.New()  │
-                                    └────────┬────────┘
-                                             │
-                                    ┌────────▼────────┐
-                                    │   SSH Server    │
-                                    │   (port 15000)  │
-                                    └────────┬────────┘
-                                             │
-                                    ┌────────▼────────┐
-                                    │      game       │
-                                    │ HandleSession() │
-                                    └────────┬────────┘
-                                             │
-                                    ┌────────▼────────┐
-                                    │   Connection    │
-                                    │  (player I/O)   │
-                                    └────────┬────────┘
-                                             │
-                                    ┌────────▼────────┐
-                                    │     storage     │
-                                    │   Storage{}     │
-                                    └────────┬────────┘
-                                             │
-         ┌───────────────────┬───────────────┴───────────────┐
-         │                   │                               │
-┌────────▼────────┐ ┌────────▼────────┐             ┌────────▼────────┐
-│   SQLite (db)   │ │  tkrzw (hash)   │             │  tkrzw (tree)   │
-│     users       │ │    objects      │             │     events      │
-└─────────────────┘ └─────────────────┘             │    (queue)      │
-                                                    └─────────────────┘
-                    ┌─────────────────┐
-                    │   Filesystem    │
-                    │   <dir>/src/    │
-                    │  (JS sources)   │
-                    └─────────────────┘
+                        ┌─────────────────────────────────┐
+                        │       Players (SSH :15000)      │
+                        └───────────────┬─────────────────┘
+                                        │
+                        ┌───────────────▼─────────────────┐
+                        │          Game Engine            │
+                        │                                 │
+                        │  • Player sessions & commands   │
+                        │  • Object execution & events    │
+                        │  • Movement & skill checks      │
+                        └───────────────┬─────────────────┘
+                                        │
+                        ┌───────────────▼─────────────────┐
+                        │          JS Runtime             │
+                        │         (V8 pool)               │
+                        │                                 │
+                        │  • Executes object callbacks    │
+                        │  • 200ms timeout per execution  │
+                        │  • State persists as JSON       │
+                        └───────────────┬─────────────────┘
+                                        │
+┌───────────────────────────────────────┴───────────────────────────────────────┐
+│                              Storage Layer                                    │
+│                                                                               │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  │
+│  │    SQLite     │  │  tkrzw hash   │  │  tkrzw tree   │  │  Filesystem   │  │
+│  │               │  │               │  │               │  │               │  │
+│  │  • Users      │  │  • Objects    │  │  • Events     │  │  • JS sources │  │
+│  │  • Audit logs │  │    (by ID)    │  │    (by time)  │  │    (src/)     │  │
+│  └───────────────┘  └───────────────┘  └───────────────┘  └───────────────┘  │
+│                                                                               │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Core Components
@@ -107,556 +92,54 @@ go generate ./structs
 - Objects run JavaScript source files that register callbacks via `addCallback(eventType, tags, handler)`
 - State persists between executions as JSON
 - 200ms timeout per execution
-- Supports imports via `// @import` directive (see below)
+- Supports imports via `// @import` directive
 
-### Key Concepts
+### Persistence Layer
 
-**JavaScript Imports**: Source files can import other source files using the `// @import` directive:
+JuiceMUD uses three different storage backends, each chosen for its specific strengths:
 
-```javascript
-// /lib/util.js - A shared library
-var util = util || {};
-util.greet = function(name) { return 'Hello, ' + name + '!'; };
-```
+#### SQLite (`storage.db`)
+Relational storage for structured data with query requirements:
+- **Users**: Authentication credentials, roles (owner/wizard), associated object IDs, last login timestamps
+- **Audit logs**: Timestamped records of significant events (logins, object changes, admin actions)
 
-```javascript
-// /mobs/dog.js - Imports the utility library
-// @import /lib/util.js
-// @import ./base.js      // Relative import from same directory
-// @import ../lib/math.js // Relative import from parent directory
+SQLite provides ACID transactions and SQL queries for user management operations like listing users by role or finding inactive accounts.
 
-addCallback('bark', ['action'], (msg) => {
-    log(util.greet('World'));
-});
-```
+#### tkrzw Hash Database (`objects.tkh`)
+High-performance key-value storage for objects:
+- **Key**: Object ID (base64-encoded unique identifier)
+- **Value**: Binary-serialized object data (benc format)
 
-Import behavior:
-- Imports are resolved at source load time (build-time concatenation)
-- Dependencies are included in topological order (imported code comes first)
-- Circular imports are detected and produce an error
-- Diamond dependencies are handled correctly (each file included once)
-- Modifying any file in the import chain triggers a refresh
+Hash database provides O(1) lookups ideal for the primary access pattern: loading an object by ID. Objects are serialized using benc (binary encoding) for compact storage and fast deserialization.
 
-**Script Execution Model**: Understanding how scripts run is crucial for writing correct object code:
+#### tkrzw Tree Database (`events.tkt`)
+Ordered key-value storage for the event queue:
+- **Key**: Timestamp + event ID (ensures chronological ordering)
+- **Value**: Scheduled callback data (target object, event type, payload)
 
-1. The **entire script** runs every time any callback is invoked (not just the callback function)
-2. Top-level code runs first, then the specific callback is invoked
-3. The `state` object persists between executions; local variables do not
+Tree database maintains sorted order, enabling efficient "get all events before time X" queries for the scheduler. Used for `setTimeout()` and `setInterval()` callbacks.
 
-**Best Practice**: Put ALL code inside callback handlers. The only top-level statements should be `addCallback()` registrations. Everything else - including `setDescriptions()`, `setExits()`, and any initialization - belongs in the `created` event handler:
+#### Filesystem (`src/`)
+JavaScript source files stored as regular files:
+- Direct editing with any text editor or IDE
+- Version control friendly (git, etc.)
+- Supports versioned directories with symlinks for atomic deployments
 
-```javascript
-// RECOMMENDED: Only addCallback() at top level, everything else in handlers
-addCallback('created', ['emit'], (msg) => {
-    // One-time initialization when object is first created
-    state.counter = 0;
-    state.intervalId = setInterval(5000, 'tick', {});
-    setDescriptions([{Short: 'my object (initialized)'}]);
-});
+Source files are loaded on demand and cached. The loader resolves `// @import` directives and concatenates dependencies in topological order.
 
-addCallback('tick', ['emit'], (msg) => {
-    state.counter++;
-    setDescriptions([{Short: 'my object (' + state.counter + ' ticks)'}]);
-});
-```
+### Data Flow
 
-**Why?** Top-level code runs on EVERY callback invocation. This causes:
-- Descriptions/exits being reset (undoing changes made by callbacks)
-- Duplicate intervals (creating new ones every time)
-- Performance issues (running expensive code repeatedly)
+1. **Player connects** via SSH, authenticates against SQLite user table
+2. **Player's object** is loaded from tkrzw hash DB
+3. **Command received** triggers JavaScript execution:
+   - Source loaded from filesystem (with imports resolved)
+   - Object state deserialized from stored JSON
+   - V8 executes the script, callback runs
+   - Modified state serialized back to object
+   - Object persisted to tkrzw hash DB
+4. **Scheduled events** are polled from tkrzw tree DB and dispatched
 
-Here's what NOT to do:
-
-```javascript
-// BAD: Top-level code runs on every callback invocation!
-setDescriptions([{Short: 'my object'}]);  // Resets descriptions every time
-state.intervalId = setInterval(5000, 'tick', {});  // Creates new interval every time!
-
-addCallback('tick', ['emit'], (msg) => {
-    state.counter = (state.counter || 0) + 1;
-    setDescriptions([{Short: 'my object (' + state.counter + ' ticks)'}]);
-});
-// Result: Descriptions reset to 'my object' before tick runs, and infinite intervals pile up
-```
-
-The `created` event is sent once when an object is first created via `/create`. If you can't use the `created` event (e.g., for objects that predate your code), guard your initialization:
-
-```javascript
-// ALTERNATIVE: Guard initialization with state check (for pre-existing objects)
-if (state.initialized === undefined) {
-    state.initialized = true;
-    state.counter = 0;
-    state.intervalId = setInterval(5000, 'tick', {});
-    setDescriptions([{Short: 'my object (initialized)'}]);
-}
-
-addCallback('tick', ['emit'], (msg) => {
-    state.counter++;
-    setDescriptions([{Short: 'my object (' + state.counter + ' ticks)'}]);
-});
-```
-
-**Event System**: Objects communicate through events. Objects register callbacks with `addCallback(eventType, tags, handler)`:
-
-```javascript
-// Register a callback for the "greet" event with the "command" tag
-addCallback('greet', ['command'], (msg) => {
-    // Update the object's description to show what happened
-    setDescriptions([{Short: 'greeter (just greeted ' + msg.line + ')'}]);
-});
-```
-
-**Event Tags** determine how events are routed:
-- `command`: Commands from a player to their own object. Content: `{name: "...", line: "..."}`
-- `action`: Actions directed at sibling objects (other objects in the same location). Content: `{name: "...", line: "..."}`
-- `emit`: System infrastructure events with arbitrary JSON content depending on the source
-
-**Special Event Types**: Some event names have built-in behavior:
-- `message`: When received by a player object, prints the `Text` field to their terminal. Useful for NPC dialogue, announcements, etc:
-```javascript
-// Send a message to a player
-emit(playerId, 'message', {Text: 'The wizard nods at you.'});
-```
-
-**Inter-Object Communication**: Objects can communicate using `emit()` and `emitToLocation()`:
-
-```javascript
-// Emit to a specific object by ID
-emit(targetId, 'ping', {message: 'hello'});
-
-// Emit with skill challenge - target only receives if they pass
-emit(targetId, 'whisper', {secret: 'hidden'}, [
-    {Skill: 'perception', Level: 50}
-]);
-
-// Broadcast to all objects at a location
-emitToLocation(getLocation(), 'announcement', {msg: 'Hello everyone!'});
-
-// Broadcast with challenge - only skilled objects receive
-emitToLocation(getLocation(), 'telepathy', {thought: 'secret'}, [
-    {Skill: 'psychic', Level: 100}
-]);
-
-// Receive emitted events
-addCallback('ping', ['emit'], (msg) => {
-    log('Received ping:', msg.message);
-});
-```
-
-Challenge format uses PascalCase to match Go structs: `{Skill: string, Level: number, Message?: string}`. Challenge checks have side effects - recipient skills may improve or decay.
-
-**Object Manipulation**: Use `moveObject(objectId, destinationId)` to programmatically move objects:
-```javascript
-// Move an NPC to a new room
-moveObject(npcId, targetRoomId);
-
-// Get the current location of the running object
-var currentRoom = getLocation();
-
-// Get the content (child objects) of the running object
-var inventory = getContent();
-```
-
-Note: `moveObject()` validates containment rules and prevents cycles (an object cannot contain itself directly or indirectly).
-
-**Object Creation and Removal**: Use `createObject(sourcePath, locationId)` and `removeObject(objectId)` to dynamically spawn and despawn objects:
-```javascript
-// Spawner creates a coin in the current room
-addCallback('spawn', ['action'], (msg) => {
-    var coinId = createObject('/items/coin.js', getLocation());
-    state.spawnedCoins.push(coinId);
-});
-
-// Cleanup spawned coins
-addCallback('cleanup', ['action'], (msg) => {
-    for (var id of state.spawnedCoins) {
-        removeObject(id);
-    }
-    state.spawnedCoins = [];
-});
-
-// Self-removing object (e.g., temporary effect)
-addCallback('expire', ['emit'], (msg) => {
-    removeObject(getId());  // Object removes itself
-});
-
-// New objects receive a 'created' event
-addCallback('created', ['emit'], (msg) => {
-    state.creatorId = msg.creatorId;
-    setDescriptions([{Short: 'newly spawned item'}]);
-});
-```
-
-Notes:
-- `createObject()` is rate-limited to 10 creations per minute per object to prevent abuse
-- `removeObject()` cannot remove non-empty containers (must remove contents first)
-- `removeObject()` cannot remove the calling object's current location
-- Objects can remove themselves (useful for expiring effects, consumed items, etc.)
-
-**Movement and Container Events**: When objects move between locations, two types of events are generated:
-
-1. **`movement`** events are sent to objects that successfully *detect* the moving object. These are subject to skill challenges - only objects passing perception checks receive them. Use for game/roleplay purposes where detection abilities matter:
-```javascript
-addCallback('movement', ['emit'], (msg) => {
-    // msg.Object: the object that moved (as perceived by receiver)
-    // msg.Source: old location ID (or null if created)
-    // msg.Destination: new location ID (or null if removed)
-    if (msg.Object && msg.Destination) {
-        log('Detected arrival:', msg.Object.Id);
-    }
-});
-```
-
-2. **`received`** and **`transmitted`** events are sent directly to containers when their content changes. These are hardwired notifications, NOT subject to skill challenges - containers always receive them regardless of detection abilities. Use for programmatic bookkeeping:
-```javascript
-// Sent to container when it gains content
-addCallback('received', ['emit'], (msg) => {
-    log('Container received:', msg.Object.Id);
-});
-
-// Sent to container when it loses content
-addCallback('transmitted', ['emit'], (msg) => {
-    log('Container lost:', msg.Object.Id);
-});
-```
-
-3. **`exitFailed`** events are sent to the room (container) when someone fails a skill challenge on an exit. The challenge's `Message` field (if set) is automatically printed to the user who failed. Use the event to announce the failure to others in the room:
-```javascript
-addCallback('exitFailed', ['emit'], (msg) => {
-    // msg.subject: the object that failed the exit challenge
-    // msg.exit: the exit that was attempted
-    // msg.score: the total challenge score (negative = failed)
-    // msg.primaryFailure: the challenge that failed worst (has Skill, Level, Message)
-    var name = msg.subject.Descriptions[0].Short;
-    var exitName = msg.exit.Descriptions[0].Short;
-    emitToLocation(getLocation(), 'announce', {
-        message: name + ' tries to go ' + exitName + ', but fails miserably.'
-    });
-});
-```
-
-**Movement Rendering**: When players observe objects moving, they see descriptive messages like "A rat scurries south" or "A ghost drifts in from north". This rendering is controlled by the `Movement` field on objects:
-
-```javascript
-// Simple case: use default rendering with custom verb
-setMovement({Active: true, Verb: 'scurries'});  // "A rat scurries south"
-setMovement({Active: true, Verb: 'slithers'});  // "A snake slithers in from east"
-
-// Default for new objects: {Active: true, Verb: 'moves'}
-```
-
-For advanced cases, set `Active: false` and handle the `renderMovement` event yourself. The event includes the observer's perspective on the movement:
-```javascript
-setMovement({Active: false, Verb: ''});
-
-addCallback('renderMovement', ['emit'], (msg) => {
-    // msg.Observer: ID of the player observing this movement
-    // msg.Source: {Here: true} if observer's room, {Exit: 'north'} if visible neighbor, or null
-    // msg.Destination: same format as Source
-
-    var text;
-    if (msg.Source && msg.Source.Here && msg.Destination && msg.Destination.Exit) {
-        text = 'The ghost fades away ' + msg.Destination.Exit + '...';
-    } else if (msg.Destination && msg.Destination.Here && msg.Source && msg.Source.Exit) {
-        text = 'A chill runs down your spine as a ghost drifts in from ' + msg.Source.Exit + '.';
-    } else if (msg.Destination && msg.Destination.Here) {
-        text = 'A ghost materializes before you!';
-    } else {
-        text = 'You sense a ghostly presence nearby.';
-    }
-
-    // Send the rendered message back to the observer
-    emit(msg.Observer, 'movementRendered', {Message: text});
-});
-```
-
-**Object Identification**: Commands that target objects (like `look`, action commands) use pattern matching against Short descriptions:
-- **Word matching**: `tome` matches "dusty tome", `torch` matches "burning torch"
-- **Glob patterns**: `dust*` matches "dusty", `*orch` matches "torch"
-- **Full description**: `"dusty tome"` matches exactly (use quotes for multi-word patterns)
-- **Indexed selection**: When multiple objects match, use `0.torch`, `1.torch` to select which one
-- **Wizard ID syntax**: Wizards can use `#objectid` to target by internal ID
-
-**Delayed Execution**: Use `setTimeout(ms, eventName, message)` to schedule a one-time event to be delivered later:
-```javascript
-// Schedule a "tick" event to be delivered in 1000ms
-setTimeout(1000, 'tick', {count: 1});
-
-// Handle the delayed event
-addCallback('tick', ['emit'], (msg) => {
-    setDescriptions([{Short: 'timer (count: ' + msg.count + ')'}]);
-    // Schedule the next tick
-    setTimeout(1000, 'tick', {count: msg.count + 1});
-});
-```
-
-**Recurring Execution**: Use `setInterval(ms, eventName, message)` for persistent recurring events that survive server restarts:
-```javascript
-// Start a heartbeat every 5 seconds (returns interval ID)
-var heartbeatId = setInterval(5000, 'heartbeat', {});
-
-// Handle the recurring event
-addCallback('heartbeat', ['emit'], (msg) => {
-    log('Heartbeat at ' + new Date().toISOString());
-});
-
-// Stop the interval when no longer needed
-clearInterval(heartbeatId);
-```
-
-Key differences from `setTimeout`:
-- Intervals persist to storage and survive server restarts
-- Minimum interval is 5000ms (5 seconds)
-- Maximum 10 intervals per object
-- Use `/intervals` wizard command to view active intervals
-- Interval events wrap your data: access via `msg.Data` (your original message) and `msg.Interval.ID`, `msg.Interval.Missed` (missed count from server downtime)
-
-**Debugging**: Wizards can attach to an object's console with `/debug #objectid` to see `log()` output, and detach with `/undebug #objectid`. When you attach, the last 64 log messages (up to 10 minutes old) are displayed first, so you can see what happened before you connected.
-
-**Direct Output**: Use `print(message)` to write directly to a player's terminal (only works for user objects with connections):
-```javascript
-addCallback('greet', ['command'], (msg) => {
-    print('Hello, adventurer!');  // Printed directly to the player's terminal
-});
-```
-
-Note: `print()` outputs immediately without formatting, while `log()` goes to the debug console. Use `print()` for player-facing messages and `log()` for debugging.
-
-**Skill/Challenge System**: Objects have skills with theoretical/practical levels, recharge times, and forgetting mechanics. Descriptions and exits can require skill challenges to perceive or use. See `docs/skill-system.md` for the underlying math.
-
-**Description Challenges**: Each description can have skill challenges that must be passed to perceive it:
-
-```javascript
-setDescriptions([
-    {
-        Short: 'ordinary rock',
-        Long: 'A plain gray rock.',
-        // No challenges - always visible
-    },
-    {
-        Short: 'hidden gem',
-        Long: 'A sparkling gem concealed in the shadows.',
-        Challenges: [{Skill: 'perception', Level: 50}],
-    },
-    {
-        Short: 'ancient runes',
-        Long: 'Faint magical runes are etched into the surface.',
-        Challenges: [{Skill: 'perception', Level: 30}, {Skill: 'arcana', Level: 20}],
-    },
-]);
-```
-
-How description visibility works:
-- Descriptions are visible if they have no challenges OR if the sum of challenge results is positive
-- At display time, the first *visible* description's `Short` is used as the object's name
-- All visible `Long` texts are concatenated when examining
-- Multiple challenges on one description are summed (must pass overall)
-- Note: `Object.Name()` internally returns the first description unconditionally; challenge filtering only happens when rendering views
-
-Use cases:
-- **Hidden objects**: Require Perception to notice at all
-- **Disguises**: First description is the disguise, second requires Insight to see through
-- **Graduated detail**: Basic description always visible, expert analysis requires skill
-
-**Exit Challenges**: Exits have two types of challenges:
-
-```javascript
-setExits([
-    {
-        Descriptions: [{Short: 'north'}],
-        Destination: 'room-abc123',
-        // No challenges - anyone can use and see through
-    },
-    {
-        Descriptions: [{Short: 'locked door'}],
-        Destination: 'room-def456',
-        // UseChallenges: must pass to traverse the exit
-        UseChallenges: [{Skill: 'strength', Level: 50, Message: 'The door is too heavy to open.'}],
-    },
-    {
-        Descriptions: [{Short: 'foggy passage'}],
-        Destination: 'room-ghi789',
-        // TransmitChallenges: added difficulty to perceive things through this exit
-        TransmitChallenges: [{Skill: 'perception', Level: 30}],
-    },
-]);
-```
-
-- **`UseChallenges`**: Checked when a player tries to move through the exit. On failure, the `Message` is printed and an `exitFailed` event is sent to the room.
-- **`TransmitChallenges`**: Added to description challenges when viewing neighboring rooms via `scan` or detecting movement through the exit. Makes distant objects harder to perceive through foggy/dark/narrow passages.
-
-Exit descriptions can also have challenges (for secret doors):
-```javascript
-setExits([{
-    Descriptions: [{
-        Short: 'hidden passage',
-        Challenges: [{Skill: 'perception', Level: 80}],
-    }],
-    Destination: 'secret-room',
-}]);
-```
-
-**File System**: JavaScript sources are stored directly on the filesystem in `<dir>/src/`. Wizards can browse and edit these files using standard text editors or IDEs.
-
-**Player Commands**: All users have access to:
-- `look` or `l`: View current room, or `look <target>` to examine a specific object
-- `scan`: View current room and neighboring rooms via exits
-- Direction shortcuts: `n`, `s`, `e`, `w`, `ne`, `nw`, `se`, `sw`, `u`, `d` expand to `north`, `south`, etc. when matching exits
-
-**Command Resolution**: When a player types a command, it's processed in this order (stopping at the first handler that returns a truthy value):
-1. **Player's object** receives it as a `command` event (if registered via `addCallback('name', ['command'], ...)`)
-2. **Current room** receives it as an `action` event (if registered via `addCallback('name', ['action'], ...)`)
-3. **Exits** are checked - if an exit's name matches, the player moves through it
-4. **Sibling objects** in the room receive it as an `action` event (checked in order)
-
-Objects only receive events they've registered callbacks for with the matching tag. For example, `trigger logger` only invokes the logger's callback if it registered `addCallback('trigger', ['action'], ...)`.
-
-**Wizard Commands**: Wizard users (User.Wizard = true) get additional `/`-prefixed commands:
-- Object management: `/create`, `/inspect`, `/move`, `/remove`, `/enter`, `/exit`
-- State management: `/setstate` (modify object state JSON), `/skills` (view/update skills)
-- Events: `/emit` (send events to objects)
-- Debugging: `/debug`, `/undebug`
-- Source files: `/ls`
-- Monitoring: `/stats`, `/intervals`, `/flushstats`
-- Admin: `/addwiz`, `/delwiz`
-
-**Target Keywords**: Many wizard commands accept a target. Special keywords:
-- `self` - targets your own object (equivalent to `/inspect self` instead of finding your ID)
-- `#<id>` - targets by object ID directly
-
-**Inspecting Objects**:
-- `/inspect [target] [PATH]` - View object data, optionally drilling into a specific path
-
-Examples:
-```
-/inspect                       # Show your own object
-/inspect #abc123               # Show entire object
-/inspect #abc123 State         # Show just the State field
-/inspect #abc123 Skills.combat # Drill into nested data
-/setstate #abc123 Foo.Bar 42   # Set nested state value
-/setstate #abc123 Name "test"  # Set string state value
-```
-
-**Server Configuration**: The root object (ID `""`) stores server-wide configuration in its state, including spawn location and skill configs. To configure the spawn location for new users:
-
-```
-/inspect # State               # View current server config
-/setstate # Spawn.Container genesis  # Set spawn to genesis room
-/setstate # Spawn.Container <room-id>  # Set spawn to a specific room ID
-```
-
-If the configured spawn location doesn't exist, new users fall back to genesis.
-
-**Skill Configs**: Game-wide skill parameters can be configured via JavaScript and are persisted in the server config:
-
-```javascript
-// Get current config for a skill (returns null if not configured)
-var config = getSkillConfig('perception');
-if (config) {
-    log('Forget:', config.Forget);      // Seconds until skill decays
-    log('Recharge:', config.Recharge);  // Seconds for full XP gain
-    log('Duration:', config.Duration);  // Seconds for deterministic results
-}
-
-// Set skill config using compare-and-swap for safe concurrent updates
-// casSkillConfig(name, expectedOldConfig, newConfig) -> boolean
-// - Pass null as oldConfig to create (only succeeds if doesn't exist)
-// - Pass null as newConfig to delete (only succeeds if oldConfig matches)
-// - Returns true if the swap succeeded, false if current value didn't match
-
-// Create a new skill config (fails if already exists)
-var created = casSkillConfig('stealth', null, {
-    Forget: 3600,    // Skill decays after 1 hour of no use
-    Recharge: 1000,  // Full XP gain requires 1000 seconds between uses
-    Duration: 60     // Same check repeats same result for 60 seconds
-});
-
-// Update an existing config (fails if current doesn't match expected)
-var oldConfig = getSkillConfig('stealth');
-var updated = casSkillConfig('stealth', oldConfig, {Forget: 7200, Recharge: oldConfig.Recharge});
-```
-
-Config fields (all in seconds):
-- **Forget**: Time after last use before skill starts decaying (default: skill-dependent)
-- **Recharge**: Time between uses for full XP gain - using skills faster gives diminishing returns (default: 6 minutes)
-- **Duration**: Window during which repeated skill checks produce the same result for the same user/skill/target combination. Useful for perception checks that shouldn't flicker. Set to 0 for fully random checks each time.
-
-Skill configs are typically set in `boot.js` at server startup and persist across restarts.
-
-**Managing Skills**:
-- `/skills [target]` - View all skills for an object
-- `/skills [target] <skillname> <theoretical> <practical>` - Set skill levels
-
-Examples:
-```
-/skills                           # Show your own skills
-/skills #abc123                   # Show skills for object
-/skills #abc123 perception 50 30  # Set perception: theoretical=50, practical=30
-/skills self stealth 100 80       # Set your own stealth skill
-```
-
-**Emitting Events**:
-- `/emit <target> <eventName> <tag> <message>` - Send an event to an object
-
-Parameters:
-- `target`: Object ID (e.g., `#abc123` or `self`)
-- `eventName`: Event type (e.g., `tick`, `message`, `customEvent`)
-- `tag`: One of `emit`, `command`, or `action`
-- `message`: JSON content
-
-Examples:
-```
-/emit #abc123 tick emit {}                    # Trigger a tick event
-/emit #abc123 message emit {"Text":"Hello!"}  # Send a message to player
-/emit self customEvent emit {"foo":"bar"}     # Emit to yourself
-```
-
-## Dependencies
-
-**Required system libraries:**
-- tkrzw C++ library (for tkrzw-go)
-- V8 headers and libraries (for v8go)
-
-**Code generation:**
-- bencgen: Code generator for binary serialization (install separately for schema changes)
-
-## Administration
-
-The server exposes a Unix domain socket for runtime administration at `<dir>/control.sock`. The `juicemud-admin` CLI tool communicates with this socket.
-
-### Source Versioning
-
-JavaScript sources can be organized into version directories for zero-downtime updates:
-
-```
-<dir>/src/
-├── current -> v2/     # Symlink to active version
-├── v1/                # Previous version
-└── v2/                # Current version
-```
-
-The server follows the `src/current` symlink at startup. To deploy a new version:
-
-1. Create a new version directory (e.g., `v3/`) with updated sources
-2. Update the symlink: `ln -sfn v3 src/current`
-3. Validate and switch atomically:
-   ```bash
-   juicemud-admin switch-sources
-   ```
-
-The `switch-sources` command resolves symlinks, validates all source files referenced by existing objects exist in the new directory, and only switches if validation passes. If sources are missing, it reports them:
-
-```
-Error: missing source files:
-  /room.js (3 objects)
-  /player.js (1 objects)
-```
-
-Options:
-- `juicemud-admin switch-sources src/v3` - switch to a specific path
-- `juicemud-admin -socket /path/to/control.sock switch-sources` - use a different socket
-
-## Project Structure
+### Project Structure
 
 ```
 juicemud/
@@ -679,3 +162,829 @@ juicemud/
 ├── structs/                 # Object definitions
 └── juicemud.go              # Shared utilities
 ```
+
+---
+
+## Running the Server
+
+### Dependencies
+
+**Required system libraries:**
+- tkrzw C++ library (for tkrzw-go)
+- V8 headers and libraries (for v8go)
+
+**Code generation:**
+- bencgen: Code generator for binary serialization (install separately for schema changes)
+
+### Server Configuration
+
+The root object (ID `""`) stores server-wide configuration in its state:
+
+```
+/inspect # State               # View current server config
+/setstate # Spawn.Container genesis  # Set spawn location for new users
+```
+
+**Spawn Location**: Where new users appear. Falls back to "genesis" if not set or invalid.
+
+**Skill Configs**: Game-wide skill parameters. See the JavaScript API section for `getSkillConfig()` and `casSkillConfig()`.
+
+### Administration
+
+The server exposes a Unix domain socket for runtime administration at `<dir>/control.sock`. Use the `juicemud-admin` CLI:
+
+```bash
+# Switch to new source version (validates first)
+juicemud-admin switch-sources
+
+# Switch to specific path
+juicemud-admin switch-sources src/v3
+
+# Use different socket
+juicemud-admin -socket /path/to/control.sock switch-sources
+```
+
+### Source Versioning & Development Workflow
+
+#### Recommended Setup
+
+For a production MUD, sources should be version-controlled (e.g., on GitHub). Wizards develop locally using their own checkouts and private test worlds, then submit pull requests that propagate to production:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Development Workflow                             │
+│                                                                         │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                 │
+│  │  Wizard A   │    │  Wizard B   │    │  Wizard C   │                 │
+│  │             │    │             │    │             │                 │
+│  │ Local test  │    │ Local test  │    │ Local test  │                 │
+│  │ world + src │    │ world + src │    │ world + src │                 │
+│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘                 │
+│         │                  │                  │                        │
+│         └────────┬─────────┴─────────┬────────┘                        │
+│                  │   Pull Requests   │                                 │
+│                  ▼                   ▼                                 │
+│         ┌─────────────────────────────────────┐                        │
+│         │           GitHub Repo               │                        │
+│         │         (main branch)               │                        │
+│         └──────────────────┬──────────────────┘                        │
+│                            │ git pull / deploy script                  │
+│                            ▼                                           │
+│         ┌─────────────────────────────────────┐                        │
+│         │       Production Server             │                        │
+│         │                                     │                        │
+│         │  src/v1/  src/v2/  src/v3/ ...     │                        │
+│         │              ▲                      │                        │
+│         │              └── current symlink    │                        │
+│         └─────────────────────────────────────┘                        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Local Development
+
+Each wizard runs their own JuiceMUD instance with a private test world:
+
+```bash
+# Clone the source repo
+git clone git@github.com:yourmud/world-source.git
+
+# Run a local test server (uses local src/ directory)
+./juicemud -dir ./testworld -src ./world-source
+
+# Develop, test, iterate...
+# Changes to world-source/*.js take effect on next object execution
+```
+
+Wizards can experiment freely without affecting production or other developers.
+
+#### Version Directories
+
+Production servers organize sources into version directories for atomic updates:
+
+```
+<dir>/src/
+├── current -> v42/    # Symlink to active version
+├── v41/               # Previous version (rollback target)
+└── v42/               # Current version
+```
+
+The server follows the `src/current` symlink at startup.
+
+#### Deployment Process
+
+When new code is merged to main:
+
+```bash
+# 1. Pull latest sources into a new version directory
+cd /var/juicemud/src
+git clone --depth 1 git@github.com:yourmud/world-source.git v43
+
+# 2. Update the symlink
+ln -sfn v43 current
+
+# 3. Tell the running server to switch (validates first)
+juicemud-admin switch-sources
+```
+
+The `switch-sources` command:
+1. **Validates** all source files referenced by existing objects exist in the new directory
+2. **Switches** the active source directory if validation passes
+3. **Reloads lazily** - objects get their new code when next executed, not all at once
+
+If sources are missing, the switch is rejected:
+
+```
+Error: missing source files:
+  /room.js (3 objects)
+  /player.js (1 objects)
+```
+
+This prevents deploying broken code that would leave objects without their scripts.
+
+#### Rollback
+
+If issues are discovered after deployment:
+
+```bash
+# Point symlink back to previous version
+ln -sfn v41 current
+
+# Tell server to switch back
+juicemud-admin switch-sources
+```
+
+Objects will lazily reload their previous code on next execution.
+
+---
+
+## Wizard Commands Reference
+
+Wizard users (User.Wizard = true) get additional `/`-prefixed commands. Regular players have access to basic commands like `look`, `scan`, and movement.
+
+### Target Syntax
+
+Many commands accept a target argument:
+- **Pattern matching**: `torch` matches objects with "torch" in their Short description
+- **Glob patterns**: `dust*` matches "dusty", `*orch` matches "torch"
+- **Quoted phrases**: `"dusty tome"` matches the full phrase
+- **Indexed selection**: `0.torch`, `1.torch` when multiple objects match
+- **Object ID**: `#abc123` targets by internal ID
+- **Self**: `self` targets your own object
+
+### Object Management
+
+```
+/create <sourcePath>           Create object from source file at current location
+/inspect [target] [PATH]       View object data, optionally drill into a path
+/move <target> <destination>   Move object to new location
+/remove <target>               Delete an object (must be empty)
+/enter <target>                Move yourself into an object
+/exit                          Move yourself to parent container
+```
+
+**Inspect examples:**
+```
+/inspect                       # Show your own object
+/inspect #abc123               # Show entire object
+/inspect #abc123 State         # Show just the State field
+/inspect #abc123 Skills.combat # Drill into nested data
+```
+
+### State Management
+
+```
+/setstate <target> <path> <value>   Set a value in object state
+/skills [target]                    View all skills for an object
+/skills [target] <skill> <th> <pr>  Set skill levels (theoretical, practical)
+```
+
+**Examples:**
+```
+/setstate #abc123 Foo.Bar 42        # Set nested state value
+/setstate #abc123 Name "test"       # Set string value (use quotes)
+/skills                             # Show your own skills
+/skills #abc123 perception 50 30    # Set perception: theoretical=50, practical=30
+```
+
+### Events
+
+```
+/emit <target> <event> <tag> <json>   Send an event to an object
+```
+
+**Parameters:**
+- `target`: Object ID (`#abc123` or `self`)
+- `event`: Event type (e.g., `tick`, `message`)
+- `tag`: One of `emit`, `command`, or `action`
+- `json`: Message content as JSON
+
+**Examples:**
+```
+/emit #abc123 tick emit {}                    # Trigger a tick event
+/emit #abc123 message emit {"Text":"Hello!"}  # Send message to player
+/emit self customEvent emit {"foo":"bar"}     # Emit to yourself
+```
+
+### Debugging
+
+```
+/debug <target>      Attach to object's debug console (see log() output)
+/undebug <target>    Detach from debug console
+```
+
+When you attach, the last 64 log messages (up to 10 minutes old) are displayed.
+
+### Source Files
+
+```
+/ls [path]           List source files in directory
+```
+
+### Monitoring
+
+```
+/stats                              Show server statistics summary (alias: dashboard)
+/stats errors [sub]                 Error stats (sub: summary|categories|locations|recent)
+/stats perf [sub]                   Performance stats (sub: summary|scripts|slow)
+/stats scripts [sort] [n]           Top n scripts (sort: time|execs|slow|errors|errorrate)
+/stats script <path>                Detailed stats for specific script
+/stats objects [sort] [n]           Top n objects (sort: time|execs|slow|errors|errorrate)
+/stats object <id>                  Detailed stats for specific object
+/stats intervals [sort] [n]         Top n intervals (sort: time|execs|slow|errors|errorrate)
+/stats users [filter] [sort] [n]    List users
+/stats flush                        Show database flush health status
+/stats reset                        Clear all statistics
+/intervals [target]                 View active intervals for object
+```
+
+**User listing options:**
+- Filters: `all` (default), `owners`, `wizards`, `players`
+- Sort: `name` (default), `id`, `login` (most recent), `stale` (least recent)
+
+### Administration
+
+```
+/addwiz <username>    Grant wizard privileges
+/delwiz <username>    Revoke wizard privileges
+/deluser <username>   Delete a user account (removes user and their object)
+```
+
+### Player Commands
+
+All users (not just wizards) have access to:
+
+```
+look [target]         View current room, or examine specific object (alias: l)
+scan                  View current room and neighboring rooms
+<direction>           Move through exit (n, s, e, w, ne, nw, se, sw, u, d)
+```
+
+Direction shortcuts expand automatically: `n` becomes `north`, etc.
+
+---
+
+## JavaScript API Reference
+
+Objects are scripted in JavaScript. Each object has a source file that registers callbacks to handle events.
+
+### Core Functions
+
+#### `addCallback(eventType, tags, handler)`
+Register a callback for an event type.
+
+```javascript
+addCallback('greet', ['command'], (msg) => {
+    print('Hello!');
+});
+```
+
+**Parameters:**
+- `eventType`: String - event name to handle
+- `tags`: Array - routing tags: `['command']`, `['action']`, or `['emit']`
+- `handler`: Function - receives message object
+
+#### `removeCallback(eventType)`
+Unregister a callback for an event type.
+
+```javascript
+removeCallback('greet');  // Stop handling 'greet' events
+```
+
+#### `log(...args)`
+Write to the debug console (viewable with `/debug`).
+
+```javascript
+log('Debug info:', someValue);
+```
+
+#### `print(message)`
+Write directly to player's terminal. Only works for objects with connected players.
+
+```javascript
+print('You feel a chill...');
+```
+
+### Object Properties
+
+Most object properties have both getter and setter functions (e.g., `getDescriptions()` / `setDescriptions()`). The setters modify the object; getters return the current value.
+
+#### `state`
+Persistent object state. Survives between callback invocations and server restarts.
+
+```javascript
+state.counter = (state.counter || 0) + 1;
+```
+
+#### `getId()`
+Returns the current object's ID.
+
+#### `getLocation()`
+Returns the ID of the object's container (location).
+
+#### `getContent()`
+Returns array of IDs of objects contained by this object.
+
+#### `getNeighbourhood()`
+Returns the object's neighbourhood: its location, neighbouring locations (via exits), and content. Useful for AI/NPC logic that needs spatial awareness.
+
+```javascript
+var hood = getNeighbourhood();
+// hood.Location - ID of container
+// hood.Neighbours - array of {Exit, Location} for adjacent rooms
+// hood.Content - array of object IDs inside this object
+```
+
+#### `getDescriptions()` / `setDescriptions(descriptions)`
+Get or set the object's descriptions.
+
+```javascript
+setDescriptions([
+    {
+        Short: 'rusty sword',
+        Long: 'A sword covered in rust.',
+        Challenges: [{Skill: 'perception', Level: 30}]  // Optional
+    }
+]);
+```
+
+#### `getExits()` / `setExits(exits)`
+Get or set the object's exits (for rooms).
+
+```javascript
+setExits([
+    {
+        Descriptions: [{Short: 'north'}],
+        Destination: 'room-id-here',
+        UseChallenges: [{Skill: 'strength', Level: 50, Message: 'Too heavy!'}],
+        TransmitChallenges: [{Skill: 'perception', Level: 20}]
+    }
+]);
+```
+
+#### `getMovement()` / `setMovement(movement)`
+Get or set how movement is rendered when this object moves.
+
+```javascript
+setMovement({Active: true, Verb: 'scurries'});  // "A rat scurries south"
+setMovement({Active: false, Verb: ''});          // Handle renderMovement yourself
+```
+
+#### `getSkills()` / `setSkills(skills)`
+Get or set the object's skills. Skills are a map of skill name to skill data.
+
+```javascript
+var skills = getSkills();
+// skills['perception'] = {Theoretical: 50, Practical: 30, ...}
+```
+
+#### `getLearning()` / `setLearning(enabled)`
+Get or set whether the object learns from skill checks (improves/decays skills).
+
+```javascript
+setLearning(false);  // Disable skill improvement for this object
+```
+
+#### `getSourcePath()` / `setSourcePath(path)`
+Get or set the object's JavaScript source file path.
+
+```javascript
+var path = getSourcePath();  // e.g., "/mobs/rat.js"
+```
+
+### Communication
+
+#### `emit(targetId, eventType, message, [challenges])`
+Send an event to a specific object.
+
+```javascript
+emit(targetId, 'ping', {data: 'hello'});
+
+// With skill challenge - target only receives if they pass
+emit(targetId, 'whisper', {secret: 'hidden'}, [
+    {Skill: 'perception', Level: 50}
+]);
+```
+
+#### `emitToLocation(locationId, eventType, message, [challenges])`
+Broadcast an event to all objects at a location.
+
+```javascript
+emitToLocation(getLocation(), 'announcement', {text: 'Hello everyone!'});
+```
+
+### Object Lifecycle
+
+#### `createObject(sourcePath, locationId)`
+Create a new object. Returns the new object's ID. Rate-limited to 10/minute per object.
+
+```javascript
+var coinId = createObject('/items/coin.js', getLocation());
+```
+
+#### `removeObject(objectId)`
+Remove an object. Cannot remove non-empty containers or the calling object's location.
+
+```javascript
+removeObject(coinId);
+removeObject(getId());  // Object removes itself
+```
+
+#### `moveObject(objectId, destinationId)`
+Move an object to a new location. Validates containment rules.
+
+```javascript
+moveObject(npcId, targetRoomId);
+```
+
+### Timing
+
+#### `setTimeout(ms, eventType, message)`
+Schedule a one-time event.
+
+```javascript
+setTimeout(5000, 'delayed', {info: 'data'});
+```
+
+#### `setInterval(ms, eventType, message)`
+Schedule a recurring event. Returns interval ID. Minimum 5000ms, max 10 per object.
+
+```javascript
+var id = setInterval(5000, 'heartbeat', {});
+```
+
+Interval events wrap your data:
+- `msg.Data` - your original message
+- `msg.Interval.ID` - interval identifier
+- `msg.Interval.Missed` - count of missed executions (server downtime)
+
+#### `clearInterval(intervalId)`
+Stop a recurring interval.
+
+```javascript
+clearInterval(state.heartbeatId);
+```
+
+### Skill Configuration
+
+#### `getSkillConfig(skillName)`
+Get configuration for a skill. Returns null if not configured.
+
+```javascript
+var config = getSkillConfig('perception');
+// config.Forget - seconds until decay
+// config.Recharge - seconds for full XP gain
+// config.Duration - seconds for deterministic results
+```
+
+#### `casSkillConfig(skillName, oldConfig, newConfig)`
+Compare-and-swap skill configuration. Returns true if successful.
+
+```javascript
+// Create new config (oldConfig = null)
+casSkillConfig('stealth', null, {Forget: 3600, Recharge: 1000, Duration: 60});
+
+// Update existing config
+var old = getSkillConfig('stealth');
+casSkillConfig('stealth', old, {Forget: 7200, Recharge: old.Recharge, Duration: old.Duration});
+
+// Delete config (newConfig = null)
+casSkillConfig('stealth', old, null);
+```
+
+### Data Structures
+
+#### Challenge
+```javascript
+{Skill: 'perception', Level: 50, Message: 'You fail to notice.'}
+```
+- `Skill`: String - skill name
+- `Level`: Number - difficulty (0-100+)
+- `Message`: String (optional) - shown on failure
+
+#### Description
+```javascript
+{Short: 'golden key', Long: 'A small golden key.', Challenges: [...]}
+```
+- `Short`: String - brief name (shown in lists)
+- `Long`: String - detailed description (shown on examine)
+- `Challenges`: Array (optional) - skill checks to perceive
+
+#### Exit
+```javascript
+{
+    Descriptions: [{Short: 'north', Long: 'A dark passage.'}],
+    Destination: 'room-id',
+    UseChallenges: [...],      // Must pass to traverse
+    TransmitChallenges: [...]  // Added when viewing through exit
+}
+```
+
+---
+
+## MUD Scripting Guide
+
+This section covers best practices and patterns for writing effective object scripts.
+
+### Script Execution Model
+
+**Critical concept**: The *entire script* runs every time any callback is invoked, not just the callback function.
+
+1. Top-level code executes first
+2. Then the specific callback is invoked
+3. The `state` object persists; local variables do not
+
+**Best Practice**: Put ALL code inside callback handlers. Top-level statements should only be `addCallback()` registrations.
+
+```javascript
+// CORRECT: Only addCallback() at top level
+addCallback('created', ['emit'], (msg) => {
+    state.counter = 0;
+    state.intervalId = setInterval(5000, 'tick', {});
+    setDescriptions([{Short: 'my object'}]);
+});
+
+addCallback('tick', ['emit'], (msg) => {
+    state.counter++;
+    setDescriptions([{Short: 'my object (' + state.counter + ' ticks)'}]);
+});
+```
+
+```javascript
+// WRONG: Top-level code runs on EVERY callback!
+setDescriptions([{Short: 'my object'}]);  // Resets every time!
+state.intervalId = setInterval(5000, 'tick', {});  // Creates infinite intervals!
+
+addCallback('tick', ['emit'], (msg) => {
+    state.counter = (state.counter || 0) + 1;
+    setDescriptions([{Short: 'my object (' + state.counter + ' ticks)'}]);
+});
+// Result: Descriptions reset before tick runs, intervals pile up forever
+```
+
+**For pre-existing objects** that can't use the `created` event, guard initialization:
+
+```javascript
+if (state.initialized === undefined) {
+    state.initialized = true;
+    state.counter = 0;
+    state.intervalId = setInterval(5000, 'tick', {});
+}
+```
+
+### Event System
+
+Events are how objects communicate. Register handlers with `addCallback(eventType, tags, handler)`.
+
+#### Event Tags
+
+Tags determine how events are routed:
+
+| Tag | Source | Use Case |
+|-----|--------|----------|
+| `command` | Player typing a command | Player abilities, inventory actions |
+| `action` | Sibling objects in same location | Interactive objects, NPCs |
+| `emit` | System or other objects via `emit()` | Timers, inter-object messaging |
+
+#### Command Resolution Order
+
+When a player types a command:
+
+1. **Player's object** receives it as `command` event
+2. **Current room** receives it as `action` event
+3. **Exits** are checked for matching names
+4. **Sibling objects** receive it as `action` event (in order)
+
+First handler returning truthy stops the chain.
+
+#### Special Events
+
+| Event | When Sent | Content |
+|-------|-----------|---------|
+| `created` | Object first created via `/create` or `createObject()` | `{creatorId: '...'}` |
+| `connected` | Player logs in or is created | `{remote, username, object, cause}` (cause: "login" or "create") |
+| `message` | Sent to player object | `{Text: '...'}` prints to terminal |
+| `movement` | Object detected moving (skill-checked) | `{Object, Source, Destination}` |
+| `received` | Container gains content (guaranteed) | `{Object}` |
+| `transmitted` | Container loses content (guaranteed) | `{Object}` |
+| `exitFailed` | Someone fails exit challenge | `{subject, exit, score, primaryFailure}` |
+| `renderMovement` | Custom movement rendering | `{Observer, Source, Destination}` |
+
+### JavaScript Imports
+
+Source files can import other files:
+
+```javascript
+// @import /lib/util.js
+// @import ./local.js        // Relative to current file
+// @import ../shared/lib.js  // Parent directory
+
+addCallback('test', ['command'], (msg) => {
+    util.doSomething();  // Function from imported file
+});
+```
+
+**Import behavior:**
+- Resolved at load time (concatenation)
+- Topological order (dependencies first)
+- Circular imports cause errors
+- Diamond dependencies handled (each file included once)
+
+**Library pattern:**
+```javascript
+// /lib/util.js
+var util = util || {};
+util.greet = function(name) { return 'Hello, ' + name; };
+```
+
+### Skill Challenges
+
+#### Description Challenges
+
+Control what players can perceive:
+
+```javascript
+setDescriptions([
+    {Short: 'ordinary rock', Long: 'A plain gray rock.'},
+    {
+        Short: 'hidden gem',
+        Long: 'A sparkling gem concealed within.',
+        Challenges: [{Skill: 'perception', Level: 50}]
+    }
+]);
+```
+
+- No challenges = always visible
+- Multiple challenges are summed (must pass overall)
+- First visible description's Short is used as the object's name
+
+#### Exit Challenges
+
+```javascript
+setExits([{
+    Descriptions: [{Short: 'heavy door'}],
+    Destination: 'room-id',
+    UseChallenges: [{Skill: 'strength', Level: 60, Message: 'Too heavy!'}],
+    TransmitChallenges: [{Skill: 'perception', Level: 30}]
+}]);
+```
+
+- `UseChallenges`: Must pass to traverse; Message shown on failure
+- `TransmitChallenges`: Added difficulty when viewing through exit
+
+#### Secret Exits
+
+```javascript
+setExits([{
+    Descriptions: [{
+        Short: 'hidden passage',
+        Challenges: [{Skill: 'perception', Level: 80}]
+    }],
+    Destination: 'secret-room'
+}]);
+```
+
+### Common Patterns
+
+#### Spawner
+
+```javascript
+addCallback('created', ['emit'], (msg) => {
+    state.spawned = [];
+});
+
+addCallback('spawn', ['action'], (msg) => {
+    if (state.spawned.length < 5) {
+        var id = createObject('/mobs/rat.js', getLocation());
+        state.spawned.push(id);
+    }
+});
+
+addCallback('cleanup', ['action'], (msg) => {
+    for (var id of state.spawned) {
+        removeObject(id);
+    }
+    state.spawned = [];
+});
+```
+
+#### NPC with Dialogue
+
+```javascript
+addCallback('talk', ['action'], (msg) => {
+    emit(msg.source, 'message', {Text: 'The merchant nods at you.'});
+});
+
+addCallback('movement', ['emit'], (msg) => {
+    if (msg.Destination && msg.Object) {
+        emit(msg.Object.Id, 'message', {Text: 'Welcome to my shop!'});
+    }
+});
+```
+
+#### Self-Removing Effect
+
+```javascript
+addCallback('created', ['emit'], (msg) => {
+    state.targetId = msg.Data.targetId;
+    setTimeout(30000, 'expire', {});
+});
+
+addCallback('expire', ['emit'], (msg) => {
+    emit(state.targetId, 'message', {Text: 'The effect wears off.'});
+    removeObject(getId());
+});
+```
+
+#### Room with Exit Failure Announcement
+
+```javascript
+addCallback('exitFailed', ['emit'], (msg) => {
+    var name = msg.subject.Descriptions[0].Short;
+    var exitName = msg.exit.Descriptions[0].Short;
+    emitToLocation(getId(), 'message', {
+        Text: name + ' struggles with the ' + exitName + ' but fails.'
+    });
+});
+```
+
+#### Custom Movement Rendering
+
+```javascript
+setMovement({Active: false, Verb: ''});
+
+addCallback('renderMovement', ['emit'], (msg) => {
+    var text;
+    if (msg.Source && msg.Source.Here) {
+        text = 'The ghost fades into the ' + msg.Destination.Exit + '...';
+    } else if (msg.Destination && msg.Destination.Here) {
+        text = 'A chill runs down your spine as a ghost materializes.';
+    }
+    emit(msg.Observer, 'movementRendered', {Message: text});
+});
+```
+
+---
+
+## Developing JuiceMUD
+
+Information for contributors working on the Go codebase.
+
+### Running Tests
+
+```bash
+# All tests
+go test ./...
+
+# Single test
+go test -v ./structs -run TestLevel
+
+# Specific package
+go test -v ./storage/dbm
+
+# Integration tests only
+go test -v ./integration_test
+```
+
+### Code Generation
+
+Object schemas are defined in `structs/schema.benc` and compiled with bencgen:
+
+```bash
+go generate ./structs
+```
+
+This generates `schema.go` (binary serialization) and `decorated.go` (helper methods).
+
+### Project Conventions
+
+See `CLAUDE.md` for detailed coding conventions, including:
+- JSON struct tags (no field renames, only `omitempty`)
+- Integration test guidelines (use SSH interfaces)
+- Documentation requirements
+
+### Key Internal Types
+
+- `structs.Object` - Core object type with state, descriptions, exits, skills
+- `storage.Storage` - Main storage interface
+- `game.Connection` - Player session handler
+- `js.Pool` - V8 isolate pool for JavaScript execution
