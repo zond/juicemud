@@ -107,6 +107,15 @@ type AuditServerConfigChange struct {
 
 func (AuditServerConfigChange) auditData() {}
 
+// AuditUserDelete is logged when a user is deleted.
+type AuditUserDelete struct {
+	User      AuditRef // user being deleted
+	DeletedBy AuditRef // owner who deleted the user
+	ObjectID  string   // the user's game object ID (if deleted)
+}
+
+func (AuditUserDelete) auditData() {}
+
 // NewAuditLogger creates a new audit logger writing to the specified file
 // with automatic log rotation.
 func NewAuditLogger(path string) *AuditLogger {

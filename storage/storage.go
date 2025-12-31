@@ -739,6 +739,30 @@ func (s *Storage) StoreUser(ctx context.Context, user *User, overwrite bool, rem
 	return nil
 }
 
+// DeleteUser removes a user from the database.
+// Only owners can delete users. Cannot delete owners or yourself.
+// Returns the deleted user so caller can clean up related resources (game object, connection).
+func (s *Storage) DeleteUser(ctx context.Context, username string) (*User, error) {
+	caller, ok := AuthenticatedUser(ctx)
+	if !ok || !caller.Owner {
+		return nil, errors.New("only owners can delete users")
+	}
+	user, err := s.LoadUser(ctx, username)
+	if err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	if user.Owner {
+		return nil, errors.New("cannot delete an owner")
+	}
+	if user.Id == caller.Id {
+		return nil, errors.New("cannot delete yourself")
+	}
+	if _, err := s.sql.ExecContext(ctx, "DELETE FROM User WHERE Id = ?", user.Id); err != nil {
+		return nil, juicemud.WithStack(err)
+	}
+	return user, nil
+}
+
 // SetUserWizard sets the Wizard flag for a user.
 // Only owners can modify wizard status.
 func (s *Storage) SetUserWizard(ctx context.Context, username string, wizard bool) error {

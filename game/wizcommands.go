@@ -77,6 +77,66 @@ func (c *Connection) wizCommands() commands {
 			},
 		},
 		{
+			names: m("/deluser"),
+			f: func(c *Connection, s string) error {
+				if !c.user.Owner {
+					fmt.Fprintln(c.term, "Only owners can delete users.")
+					return nil
+				}
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+				if len(parts) != 2 {
+					fmt.Fprintln(c.term, "usage: /deluser <username>")
+					return nil
+				}
+				username := parts[1]
+
+				// Delete user from database (also validates permissions)
+				user, err := c.game.storage.DeleteUser(c.ctx, username)
+				if err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+
+				// Delete the game object first, before closing their connection.
+				// This avoids a race condition where session cleanup tries to
+				// interact with a concurrently deleted object.
+				objectDeleted := false
+				if user.Object != "" {
+					obj, err := c.game.storage.AccessObject(c.ctx, user.Object, nil)
+					if err != nil {
+						fmt.Fprintf(c.term, "Warning: could not access game object #%s: %v\n", user.Object, err)
+					} else if err := c.game.removeObject(c.ctx, obj); err != nil {
+						fmt.Fprintf(c.term, "Warning: failed to delete game object: %v\n", err)
+					} else {
+						objectDeleted = true
+					}
+				}
+
+				// Close their active connection if they're logged in
+				if conn, found := c.game.connectionByObjectID.GetHas(user.Object); found {
+					fmt.Fprintln(conn.term, "Your account has been deleted by an administrator.")
+					conn.sess.Close()
+				}
+
+				// Audit log the deletion
+				c.game.storage.AuditLog(c.ctx, "USER_DELETE", storage.AuditUserDelete{
+					User:      storage.Ref(user.Id, user.Name),
+					DeletedBy: storage.Ref(c.user.Id, c.user.Name),
+					ObjectID:  user.Object,
+				})
+
+				if objectDeleted {
+					fmt.Fprintf(c.term, "Deleted user %q and their game object #%s\n", username, user.Object)
+				} else {
+					fmt.Fprintf(c.term, "Deleted user %q\n", username)
+				}
+				return nil
+			},
+		},
+		{
 			names: m("/move"),
 			f: c.identifyingCommand(defaultNone, 0, func(c *Connection, self *structs.Object, _ string, targets ...*structs.Object) error {
 				if len(targets) == 1 {
