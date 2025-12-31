@@ -3480,9 +3480,9 @@ setDescriptions([{
 	if !ok {
 		t.Fatal("/ls / command did not complete")
 	}
-	// Root should contain standard directories
-	if !strings.Contains(lsRootOutput, "dir") {
-		t.Fatalf("/ls / should show directories: %q", lsRootOutput)
+	// Root should show tree-style output with directories (trailing /)
+	if !strings.Contains(lsRootOutput, "/") || !strings.Contains(lsRootOutput, "items)") {
+		t.Fatalf("/ls / should show tree-style output with directories: %q", lsRootOutput)
 	}
 
 	// Test /ls on a subdirectory (create one first with a nested source)
@@ -4747,5 +4747,74 @@ func TestLastLoginTracking(t *testing.T) {
 	}
 	if !user.LastLogin().After(firstLogin) {
 		t.Errorf("LastLogin should be updated after re-login: first=%v, second=%v", firstLogin, user.LastLogin())
+	}
+}
+
+// TestTreeCommand tests the /tree wizard command for viewing object hierarchy.
+func TestTreeCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+
+	// Test basic /tree shows current location contents
+	output, ok := tc.sendCommand("/tree", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/tree did not complete: %q", output)
+	}
+	// Should show object ID format
+	if !strings.Contains(output, "#") {
+		t.Errorf("/tree should show object IDs with #: %q", output)
+	}
+
+	// Test /tree with specific object ID (use genesis which is the spawn)
+	// First get the user's location by inspecting self
+	inspectOutput, ok := tc.sendCommand("/inspect", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/inspect did not complete: %q", inspectOutput)
+	}
+
+	// Test /tree -r shows recursive output
+	output, ok = tc.sendCommand("/tree -r 2", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/tree -r did not complete: %q", output)
+	}
+	// Should show at least the root object
+	if !strings.Contains(output, "#") {
+		t.Errorf("/tree -r should show object IDs: %q", output)
+	}
+}
+
+// TestLsTreeOutput tests the /ls command with tree-style output.
+func TestLsTreeOutput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+
+	// Test /ls on root directory shows tree-style output
+	output, ok := tc.sendCommand("/ls /", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/ls / did not complete: %q", output)
+	}
+	// Tree output uses tree characters
+	if !strings.Contains(output, "├──") && !strings.Contains(output, "└──") {
+		t.Errorf("/ls / should use tree-style characters: %q", output)
+	}
+	// Should show item count
+	if !strings.Contains(output, "items)") {
+		t.Errorf("/ls / should show item count: %q", output)
+	}
+
+	// Test /ls -r shows recursive output
+	output, ok = tc.sendCommand("/ls -r 2 /", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("/ls -r did not complete: %q", output)
+	}
+	// Should have tree indentation for subdirectories
+	if !strings.Contains(output, "│") && !strings.Contains(output, "├──") {
+		t.Errorf("/ls -r should show nested tree structure: %q", output)
 	}
 }

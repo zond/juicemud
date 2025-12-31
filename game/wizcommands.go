@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -366,78 +367,118 @@ func (c *Connection) wizCommands() commands {
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				if len(parts) < 2 {
-					parts = append(parts, "/")
-				}
-				t := table.New("Path", "Type", "Objects").WithWriter(c.term)
-				for _, rawPart := range parts[1:] {
-					// Normalize path for consistent display and querying
-					part := filepath.Clean(rawPart)
-					fullPath, err := c.game.storage.SafeSourcePath(part)
-					if err != nil {
-						t.AddRow(part, "error", err.Error())
-						continue
+
+				// Parse flags
+				recursive := false
+				maxDepth := 10 // default recursive depth for source trees
+				targetPath := "/"
+
+				for i := 1; i < len(parts); i++ {
+					switch parts[i] {
+					case "-r", "--recursive":
+						recursive = true
+						// Check if next arg is a number (depth), bounded 1-100
+						if i+1 < len(parts) {
+							if d, err := strconv.Atoi(parts[i+1]); err == nil && d > 0 && d <= 100 {
+								maxDepth = d
+								i++
+							}
+						}
+					default:
+						targetPath = parts[i]
 					}
-					info, err := os.Stat(fullPath)
-					if errors.Is(err, os.ErrNotExist) {
-						t.AddRow(part, "not found", "")
-						continue
-					} else if err != nil {
+				}
+
+				// Normalize path
+				targetPath = filepath.Clean(targetPath)
+				fullPath, err := c.game.storage.SafeSourcePath(targetPath)
+				if err != nil {
+					fmt.Fprintf(c.term, "Error: %v\n", err)
+					return nil
+				}
+
+				info, err := os.Stat(fullPath)
+				if errors.Is(err, os.ErrNotExist) {
+					fmt.Fprintf(c.term, "Path not found: %s\n", targetPath)
+					return nil
+				} else if err != nil {
+					return juicemud.WithStack(err)
+				}
+
+				if info.IsDir() {
+					// Directory listing
+					if recursive {
+						c.printSourceTreeRecursive(targetPath, fullPath, "", true, maxDepth, 0)
+					} else {
+						c.printSourceTreeFlat(targetPath, fullPath)
+					}
+				} else {
+					// Single file - show objects using it
+					c.printSourceFile(targetPath)
+				}
+				return nil
+			},
+		},
+		{
+			names: m("/tree"),
+			f: func(c *Connection, s string) error {
+				parts, err := shellwords.SplitPosix(s)
+				if err != nil {
+					return juicemud.WithStack(err)
+				}
+
+				// Parse flags
+				recursive := false
+				maxDepth := 5 // default recursive depth
+				targetID := "" // empty = current location
+
+				for i := 1; i < len(parts); i++ {
+					switch parts[i] {
+					case "-r", "--recursive":
+						recursive = true
+						// Check if next arg is a number (depth), bounded 1-100
+						if i+1 < len(parts) {
+							if d, err := strconv.Atoi(parts[i+1]); err == nil && d > 0 && d <= 100 {
+								maxDepth = d
+								i++
+							}
+						}
+					default:
+						// Must be target object ID
+						targetID = strings.TrimPrefix(parts[i], "#")
+					}
+				}
+
+				// Get root object
+				var root *structs.Object
+				if targetID == "" {
+					// Get user's current location
+					self, err := c.game.accessObject(c.ctx, c.user.Object)
+					if err != nil {
 						return juicemud.WithStack(err)
 					}
-
-					if info.IsDir() {
-						// List directory contents
-						entries, err := os.ReadDir(fullPath)
-						if err != nil {
-							return juicemud.WithStack(err)
-						}
-						t.AddRow(part+"/", "dir", "")
-						for _, entry := range entries {
-							// Normalize and validate the constructed path
-							entryPath := filepath.Clean(filepath.Join(part, entry.Name()))
-							if _, err := c.game.storage.SafeSourcePath(entryPath); err != nil {
-								// Skip entries with invalid paths (shouldn't happen normally)
-								continue
-							}
-							entryType := "file"
-							displayPath := entryPath
-							if entry.IsDir() {
-								entryType = "dir"
-								displayPath += "/"
-							}
-							// Count objects using this source
-							objCount := 0
-							if !entry.IsDir() {
-								objCount, _ = c.game.storage.CountSourceObjects(c.ctx, entryPath)
-							}
-							objStr := ""
-							if objCount > 0 {
-								objStr = fmt.Sprintf("%d", objCount)
-							}
-							t.AddRow(displayPath, entryType, objStr)
-						}
-					} else {
-						// Single file
-						objCount, _ := c.game.storage.CountSourceObjects(c.ctx, part)
-						objStr := ""
-						if objCount > 0 {
-							objStr = fmt.Sprintf("%d", objCount)
-						}
-						t.AddRow(part, "file", objStr)
-						// Show which objects use this source
-						if objCount > 0 {
-							fmt.Fprint(c.term, "\nUsed by:\n")
-							for id, err := range c.game.storage.EachSourceObject(c.ctx, part) {
-								if err != nil {
-									return juicemud.WithStack(err)
-								}
-								fmt.Fprintf(c.term, "  %q\n", id)
-							}
-						}
+					locID := self.GetLocation()
+					if locID == "" {
+						fmt.Fprintln(c.term, "You are not in any location.")
+						return nil
+					}
+					root, err = c.game.storage.AccessObject(c.ctx, locID, nil)
+					if err != nil {
+						return juicemud.WithStack(err)
+					}
+				} else {
+					root, err = c.game.storage.AccessObject(c.ctx, targetID, nil)
+					if err != nil {
+						return juicemud.WithStack(err)
 					}
 				}
-				t.Print()
+
+				// Print tree
+				if recursive {
+					c.printTreeRecursive(root, "", true, maxDepth, 0)
+				} else {
+					c.printTreeFlat(root)
+				}
 				return nil
 			},
 		},
@@ -1468,4 +1509,231 @@ func setPath(data map[string]any, path string, value any) error {
 	}
 	current[parts[len(parts)-1]] = value
 	return nil
+}
+
+// loadAndSortChildren loads and sorts child objects by name.
+func (c *Connection) loadAndSortChildren(obj *structs.Object) []*structs.Object {
+	content := obj.GetContent()
+	children := make([]*structs.Object, 0, len(content))
+
+	for id := range content {
+		child, err := c.game.storage.AccessObject(c.ctx, id, nil)
+		if err == nil {
+			children = append(children, child)
+		}
+	}
+
+	// Sort by name for consistent output
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].Name() < children[j].Name()
+	})
+
+	return children
+}
+
+// printTreeFlat prints immediate children of an object.
+func (c *Connection) printTreeFlat(obj *structs.Object) {
+	name := obj.Name()
+	content := obj.GetContent()
+
+	if len(content) == 0 {
+		fmt.Fprintf(c.term, "#%s  %s (empty)\n", obj.GetId(), name)
+		return
+	}
+
+	fmt.Fprintf(c.term, "#%s  %s (%d items)\n", obj.GetId(), name, len(content))
+
+	children := c.loadAndSortChildren(obj)
+	for i, child := range children {
+		prefix := "├── "
+		if i == len(children)-1 {
+			prefix = "└── "
+		}
+		fmt.Fprintf(c.term, "%s#%s  %s\n", prefix, child.GetId(), child.Name())
+	}
+}
+
+// printTreeRecursive prints object hierarchy recursively.
+func (c *Connection) printTreeRecursive(obj *structs.Object, indent string, isLast bool, maxDepth, currentDepth int) {
+	name := obj.Name()
+
+	// Print current node
+	if currentDepth == 0 {
+		fmt.Fprintf(c.term, "#%s  %s\n", obj.GetId(), name)
+	} else {
+		connector := "├── "
+		if isLast {
+			connector = "└── "
+		}
+		fmt.Fprintf(c.term, "%s%s#%s  %s\n", indent, connector, obj.GetId(), name)
+	}
+
+	// Stop if at max depth
+	if currentDepth >= maxDepth {
+		return
+	}
+
+	// Print children
+	children := c.loadAndSortChildren(obj)
+	childIndent := indent
+	if currentDepth > 0 {
+		if isLast {
+			childIndent += "    "
+		} else {
+			childIndent += "│   "
+		}
+	}
+
+	for i, child := range children {
+		c.printTreeRecursive(child, childIndent, i == len(children)-1, maxDepth, currentDepth+1)
+	}
+}
+
+// printSourceTreeFlat prints immediate children of a source directory.
+func (c *Connection) printSourceTreeFlat(path, fullPath string) {
+	entries, err := os.ReadDir(fullPath)
+	if err != nil {
+		fmt.Fprintf(c.term, "Error reading directory: %v\n", err)
+		return
+	}
+
+	// Filter and sort entries
+	var validEntries []os.DirEntry
+	for _, entry := range entries {
+		entryPath := filepath.Clean(filepath.Join(path, entry.Name()))
+		if _, err := c.game.storage.SafeSourcePath(entryPath); err == nil {
+			validEntries = append(validEntries, entry)
+		}
+	}
+
+	if len(validEntries) == 0 {
+		fmt.Fprintf(c.term, "%s (empty)\n", path)
+		return
+	}
+
+	fmt.Fprintf(c.term, "%s (%d items)\n", path, len(validEntries))
+
+	for i, entry := range validEntries {
+		prefix := "├── "
+		if i == len(validEntries)-1 {
+			prefix = "└── "
+		}
+
+		name := entry.Name()
+		suffix := ""
+		if entry.IsDir() {
+			suffix = "/"
+		} else {
+			entryPath := filepath.Clean(filepath.Join(path, entry.Name()))
+			if objCount, _ := c.game.storage.CountSourceObjects(c.ctx, entryPath); objCount > 0 {
+				suffix = fmt.Sprintf(" (%d)", objCount)
+			}
+		}
+		fmt.Fprintf(c.term, "%s%s%s\n", prefix, name, suffix)
+	}
+}
+
+// printSourceTreeRecursive prints source tree recursively.
+func (c *Connection) printSourceTreeRecursive(path, fullPath, indent string, isLast bool, maxDepth, currentDepth int) {
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return
+	}
+
+	// Print current node
+	name := filepath.Base(path)
+	if currentDepth == 0 {
+		name = path
+	}
+
+	suffix := ""
+	if info.IsDir() {
+		suffix = "/"
+	} else {
+		if objCount, _ := c.game.storage.CountSourceObjects(c.ctx, path); objCount > 0 {
+			suffix = fmt.Sprintf(" (%d)", objCount)
+		}
+	}
+
+	if currentDepth == 0 {
+		fmt.Fprintf(c.term, "%s%s\n", name, suffix)
+	} else {
+		connector := "├── "
+		if isLast {
+			connector = "└── "
+		}
+		fmt.Fprintf(c.term, "%s%s%s%s\n", indent, connector, name, suffix)
+	}
+
+	// Stop if not a directory or at max depth
+	if !info.IsDir() || currentDepth >= maxDepth {
+		return
+	}
+
+	// Read and filter children
+	entries, err := os.ReadDir(fullPath)
+	if err != nil {
+		return
+	}
+
+	var validEntries []os.DirEntry
+	for _, entry := range entries {
+		entryPath := filepath.Clean(filepath.Join(path, entry.Name()))
+		if _, err := c.game.storage.SafeSourcePath(entryPath); err == nil {
+			validEntries = append(validEntries, entry)
+		}
+	}
+
+	// Calculate child indent
+	childIndent := indent
+	if currentDepth > 0 {
+		if isLast {
+			childIndent += "    "
+		} else {
+			childIndent += "│   "
+		}
+	}
+
+	for i, entry := range validEntries {
+		entryPath := filepath.Clean(filepath.Join(path, entry.Name()))
+		entryFullPath := filepath.Join(fullPath, entry.Name())
+		c.printSourceTreeRecursive(entryPath, entryFullPath, childIndent, i == len(validEntries)-1, maxDepth, currentDepth+1)
+	}
+}
+
+// printSourceFile shows a single source file and objects using it.
+func (c *Connection) printSourceFile(path string) {
+	objCount, _ := c.game.storage.CountSourceObjects(c.ctx, path)
+
+	if objCount == 0 {
+		fmt.Fprintf(c.term, "%s (no objects)\n", path)
+		return
+	}
+
+	fmt.Fprintf(c.term, "%s (%d objects)\n", path, objCount)
+
+	// Collect objects using this source
+	var objects []*structs.Object
+	for id, err := range c.game.storage.EachSourceObject(c.ctx, path) {
+		if err != nil {
+			continue
+		}
+		obj, err := c.game.storage.AccessObject(c.ctx, id, nil)
+		if err == nil {
+			objects = append(objects, obj)
+		}
+	}
+
+	// Sort by name
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Name() < objects[j].Name()
+	})
+
+	for i, obj := range objects {
+		prefix := "├── "
+		if i == len(objects)-1 {
+			prefix = "└── "
+		}
+		fmt.Fprintf(c.term, "%s#%s  %s\n", prefix, obj.GetId(), obj.Name())
+	}
 }

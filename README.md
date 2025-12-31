@@ -397,8 +397,25 @@ When you attach, the last 64 log messages (up to 10 minutes old) are displayed.
 ### Source Files
 
 ```
-/ls [path]           List source files in directory
+/ls [path]              List source files in directory (tree-style)
+/ls -r [depth] [path]   Recursive listing (default depth: 10)
 ```
+
+**Output format:**
+- Directories shown with `/` suffix
+- Files show object count in parentheses: `file.js (3)`
+- Single file shows objects using it
+
+### Object Hierarchy
+
+```
+/tree [target]            Show contents of object (default: current location)
+/tree -r [depth] [target] Recursive tree view (default depth: 5)
+```
+
+**Output format:**
+- Shows `#id  name` for each object
+- Uses tree characters for hierarchy (`├──`, `└──`, `│`)
 
 ### Monitoring
 
