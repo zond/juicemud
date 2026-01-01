@@ -45,6 +45,11 @@ const (
 	// The callback should return a movementRenderedResponse with the custom message.
 	renderMovementEventType = "renderMovement"
 
+	// handleMovementEventType is sent to a user's object when they use an exit.
+	// The callback can decide whether to actually move (by calling moveObject) or do something else.
+	// If no callback is registered, normal movement occurs automatically.
+	handleMovementEventType = "handleMovement"
+
 	// messageEventType is sent to objects to display a message.
 	// When received by an object with an active connection, the message is printed to their terminal.
 	// Useful for NPC dialogue, system messages, etc.

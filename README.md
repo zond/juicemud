@@ -806,6 +806,7 @@ First handler returning truthy stops the chain.
 | `transmitted` | Container loses content (guaranteed) | `{Object}` |
 | `exitFailed` | Someone fails exit challenge | `{subject, exit, score, primaryFailure}` |
 | `renderMovement` | Custom movement rendering | `{Observer, Source, Destination}` |
+| `handleMovement` | Player uses exit (after challenge passes) | `{Exit, Score}` |
 
 ### JavaScript Imports
 
@@ -963,6 +964,31 @@ addCallback('renderMovement', ['emit'], (msg) => {
     return {Message: text};
 });
 ```
+
+#### Intercepting Movement (Immobilization)
+
+The `handleMovement` callback lets JS intercept exit commands after the challenge passes.
+If registered, JS decides whether to execute the movement by calling `moveObject()`.
+If no callback or if it errors, default movement occurs.
+
+```javascript
+addCallback('handleMovement', ['emit'], (msg) => {
+    // Check if player is immobilized
+    if (state.immobilized) {
+        print('You struggle but cannot move!');
+        return;  // Don't call moveObject - movement blocked
+    }
+
+    // Allow movement - call moveObject with the exit destination
+    moveObject(getId(), msg.Exit.Destination);
+});
+```
+
+This pattern is useful for:
+- Status effects that prevent movement (stun, root, etc.)
+- Conditional movement (require items, check energy)
+- Movement costs (stamina drain)
+- Custom movement messages
 
 ---
 

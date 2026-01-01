@@ -329,10 +329,7 @@ func (c *Connection) wizCommands() commands {
 				if obj.GetLocation() == target.GetId() {
 					return nil
 				}
-				if err := c.game.moveObject(c.ctx, obj, target.GetId()); err != nil {
-					return juicemud.WithStack(err)
-				}
-				return juicemud.WithStack(c.look())
+				return juicemud.WithStack(c.game.moveObject(c.ctx, obj, target.GetId()))
 			}),
 		},
 		{
@@ -354,10 +351,7 @@ func (c *Connection) wizCommands() commands {
 					fmt.Fprintln(c.term, "Unable to leave the universe.")
 					return nil
 				}
-				if err := c.game.moveObject(c.ctx, obj, loc.GetLocation()); err != nil {
-					return juicemud.WithStack(err)
-				}
-				return juicemud.WithStack(c.look())
+				return juicemud.WithStack(c.game.moveObject(c.ctx, obj, loc.GetLocation()))
 			},
 		},
 		{

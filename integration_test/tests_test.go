@@ -4822,3 +4822,106 @@ func TestLsTreeOutput(t *testing.T) {
 		t.Errorf("/ls / -r should show nested tree structure: %q", output)
 	}
 }
+
+// TestHandleMovementCallback tests that JS can intercept movement via handleMovement callback.
+func TestHandleMovementCallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	tc.ensureInGenesis(t)
+
+	// Save original user.js to restore later
+	originalUserJS, err := ts.ReadSource("/user.js")
+	if err != nil {
+		t.Fatalf("failed to read user.js: %v", err)
+	}
+
+	// Create two rooms with bidirectional exits
+	roomAID, roomBID := createBidirectionalRooms(t, ts, tc, "handlemove", "Handle Room A", "Handle Room B", "east", "west")
+
+	// Enter room A
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", roomAID)); err != nil {
+		t.Fatalf("/enter room A: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter room A did not complete")
+	}
+
+	// Verify we're in room A
+	output, ok := tc.waitForLookMatch("Handle Room A", defaultWaitTimeout)
+	if !ok {
+		t.Fatalf("not in Handle Room A: %q", output)
+	}
+
+	// Test 1: Add handleMovement callback that BLOCKS movement
+	blockingUserJS := originalUserJS + `
+addCallback('handleMovement', ['emit'], (msg) => {
+	print('Movement blocked by JS!');
+	// Don't call moveObject - movement is blocked
+	return true;
+});
+`
+	if err := ts.WriteSource("/user.js", blockingUserJS); err != nil {
+		t.Fatalf("failed to write blocking user.js: %v", err)
+	}
+	defer func() {
+		if err := ts.WriteSource("/user.js", originalUserJS); err != nil {
+			t.Logf("warning: failed to restore user.js: %v", err)
+		}
+	}()
+
+	// Try to move east - should be blocked
+	if err := tc.sendLine("east"); err != nil {
+		t.Fatalf("east command: %v", err)
+	}
+
+	// Wait for the block message
+	blockOutput := tc.readUntil(defaultWaitTimeout, func(s string) bool {
+		return strings.Contains(s, "Movement blocked by JS!")
+	})
+	if !strings.Contains(blockOutput, "Movement blocked by JS!") {
+		t.Fatalf("handleMovement callback should print block message, got: %q", blockOutput)
+	}
+
+	// Verify we're still in room A (movement was blocked)
+	if !tc.waitForLocation("", roomAID, defaultWaitTimeout) {
+		t.Fatal("user should still be in room A after blocked movement")
+	}
+
+	// Test 2: Change to handleMovement callback that ALLOWS movement
+	allowingUserJS := originalUserJS + `
+addCallback('handleMovement', ['emit'], (msg) => {
+	print('Movement allowed by JS!');
+	moveObject(getId(), msg.Exit.Destination);
+	return true;
+});
+`
+	if err := ts.WriteSource("/user.js", allowingUserJS); err != nil {
+		t.Fatalf("failed to write allowing user.js: %v", err)
+	}
+
+	// Try to move east again - should work now
+	if err := tc.sendLine("east"); err != nil {
+		t.Fatalf("east command (allowed): %v", err)
+	}
+
+	// Wait for the allow message AND auto-look output (they come together)
+	allowOutput := tc.readUntil(defaultWaitTimeout, func(s string) bool {
+		return strings.Contains(s, "Movement allowed by JS!") && strings.Contains(s, "Handle Room B")
+	})
+	if !strings.Contains(allowOutput, "Movement allowed by JS!") {
+		t.Fatalf("handleMovement callback should print allow message, got: %q", allowOutput)
+	}
+	if !strings.Contains(allowOutput, "Handle Room B") {
+		t.Fatalf("auto-look should show Handle Room B after movement, got: %q", allowOutput)
+	}
+
+	// Verify we moved to room B
+	if !tc.waitForLocation("", roomBID, defaultWaitTimeout) {
+		t.Fatal("user should be in room B after allowed movement")
+	}
+}

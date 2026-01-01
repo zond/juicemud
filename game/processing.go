@@ -241,6 +241,13 @@ type movementRenderedResponse struct {
 	Message string
 }
 
+// handleMovementRequest is sent to a user's object when they try to use an exit.
+// The callback can decide whether to actually move by calling moveObject(getId(), exit.Destination).
+type handleMovementRequest struct {
+	Exit  *structs.Exit // The exit being used (includes Destination)
+	Score float64       // The challenge score (how well they passed)
+}
+
 // emitMovement notifies all objects that can perceive the moving object about the movement.
 // Also notifies source and destination containers about content changes:
 // - source container receives "transmitted" event (lost content)
@@ -392,7 +399,17 @@ func (g *Game) moveObject(ctx context.Context, obj *structs.Object, destination 
 	if err := g.storage.MoveObject(ctx, obj, destination); err != nil {
 		return juicemud.WithStack(err)
 	}
-	return juicemud.WithStack(g.emitMovement(ctx, obj, &source, &destination))
+	if err := g.emitMovement(ctx, obj, &source, &destination); err != nil {
+		return juicemud.WithStack(err)
+	}
+	// Auto-look for connected users after movement
+	if conn, found := g.connectionByObjectID.GetHas(obj.GetId()); found {
+		if err := conn.look(); err != nil {
+			// Log but don't fail - movement succeeded
+			log.Printf("moveObject: auto-look failed for %s: %v", obj.GetId(), err)
+		}
+	}
+	return nil
 }
 
 func (g *Game) runSource(ctx context.Context, object *structs.Object) error {
@@ -586,8 +603,8 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 	addGetSetPair("Movement", &object.Unsafe.Movement, object, callbacks)
 
 	// --- Object movement ---
-	// moveObject(objectId, destinationId) - safely moves an object using storage.MoveObject
-	// which validates containment, prevents cycles, and atomically updates all references.
+	// moveObject(objectId, destinationId) - safely moves an object and emits movement events.
+	// If the moved object has an active connection, auto-look is triggered after the move.
 	callbacks["moveObject"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 2 || !args[0].IsString() || !args[1].IsString() {
@@ -606,8 +623,8 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		if err != nil {
 			return rc.Throw("moveObject: object %q not found: %v", objectId, err)
 		}
-		// Use storage.MoveObject for safe, validated movement
-		if err := g.storage.MoveObject(ctx, obj, destId); err != nil {
+		// Use g.moveObject for safe movement (handles events and auto-look)
+		if err := g.moveObject(ctx, obj, destId); err != nil {
 			return rc.Throw("moveObject: %v", err)
 		}
 		return nil

@@ -713,11 +713,27 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		if exit.Name() == name || exit.Name() == expandedName {
 			score, primaryFailure := structs.Challenges(exit.UseChallenges).CheckWithDetails(obj, loc.GetId())
 			if score > 0 {
-				if err := c.game.moveObject(c.ctx, obj, exit.Destination); err != nil {
-					return true, juicemud.WithStack(err)
+				// Check if the object has a handleMovement callback
+				if obj.HasCallback(handleMovementEventType, emitEventTag) {
+					// Let JS handle the movement decision
+					// JS can call moveObject(getId(), exit.Destination) if it wants to move
+					_, err := c.game.run(c.ctx, obj, &structs.AnyCall{
+						Name: handleMovementEventType,
+						Tag:  emitEventTag,
+						Content: &handleMovementRequest{
+							Exit:  &exit,
+							Score: score,
+						},
+					}, nil)
+					if err == nil {
+						// JS handled it (moveObject handles auto-look)
+						return true, nil
+					}
+					// JS error - log for debugging, fall through to default movement
+					log.Printf("handleMovement callback error for %s: %v", obj.GetId(), err)
 				}
-				// Auto-look after moving through exit
-				return true, c.look()
+				// Default movement (moveObject handles auto-look)
+				return true, juicemud.WithStack(c.game.moveObject(c.ctx, obj, exit.Destination))
 			}
 			// Challenge failed - print message if available
 			if primaryFailure != nil && primaryFailure.Message != "" {
