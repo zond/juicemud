@@ -1148,7 +1148,7 @@ addCallback('halt', ['action'], (msg) => {
 
 	// Record the pulse count when halted
 	var haltedPulses int
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if strings.Contains(line, "halted at") {
 			parts := strings.Split(line, "halted at ")
 			if len(parts) > 1 {

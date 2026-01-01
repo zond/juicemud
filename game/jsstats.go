@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"regexp"
@@ -1041,10 +1042,7 @@ func (s *JSStats) GlobalSnapshot() GlobalJSSnapshot {
 	}
 
 	// Copy category map
-	byCategory := make(map[ErrorCategory]uint64, len(s.byCategory))
-	for cat, count := range s.byCategory {
-		byCategory[cat] = count
-	}
+	byCategory := maps.Clone(s.byCategory)
 
 	return GlobalJSSnapshot{
 		TotalExecs:  s.totalExecs,
@@ -1151,14 +1149,8 @@ func (s *JSStats) scriptSnapshotLocked(path string, script *ScriptStats) ScriptS
 	}
 
 	// Copy error maps
-	byCategory := make(map[ErrorCategory]uint64, len(script.ByCategory))
-	for cat, count := range script.ByCategory {
-		byCategory[cat] = count
-	}
-	byLocation := make(map[string]uint64, len(script.ByLocation))
-	for loc, count := range script.ByLocation {
-		byLocation[loc] = count
-	}
+	byCategory := maps.Clone(script.ByCategory)
+	byLocation := maps.Clone(script.ByLocation)
 
 	return ScriptSnapshot{
 		SourcePath:    path,
@@ -1275,18 +1267,9 @@ func (s *JSStats) objectSnapshotLocked(id string, obj *ObjectExecStats) ObjectEx
 	}
 
 	// Copy error maps
-	byCategory := make(map[ErrorCategory]uint64, len(obj.ByCategory))
-	for cat, count := range obj.ByCategory {
-		byCategory[cat] = count
-	}
-	byLocation := make(map[string]uint64, len(obj.ByLocation))
-	for loc, count := range obj.ByLocation {
-		byLocation[loc] = count
-	}
-	byScript := make(map[string]uint64, len(obj.ByScript))
-	for script, count := range obj.ByScript {
-		byScript[script] = count
-	}
+	byCategory := maps.Clone(obj.ByCategory)
+	byLocation := maps.Clone(obj.ByLocation)
+	byScript := maps.Clone(obj.ByScript)
 
 	return ObjectExecSnapshot{
 		ObjectID:      id,
@@ -1404,14 +1387,8 @@ func (s *JSStats) intervalSnapshotLocked(id string, interval *IntervalExecStats)
 	}
 
 	// Copy error maps
-	byCategory := make(map[ErrorCategory]uint64, len(interval.ByCategory))
-	for cat, count := range interval.ByCategory {
-		byCategory[cat] = count
-	}
-	byLocation := make(map[string]uint64, len(interval.ByLocation))
-	for loc, count := range interval.ByLocation {
-		byLocation[loc] = count
-	}
+	byCategory := maps.Clone(interval.ByCategory)
+	byLocation := maps.Clone(interval.ByLocation)
 
 	return IntervalExecSnapshot{
 		IntervalID:    id,

@@ -423,7 +423,7 @@ func (c *Connection) wizCommands() commands {
 				maxDepth := 5 // default recursive depth
 
 				args := strings.Fields(rest)
-				for i := 0; i < len(args); i++ {
+				for i := range len(args) {
 					if args[i] == "-r" || args[i] == "--recursive" {
 						recursive = true
 						// Check if next arg is a number (depth), bounded 1-100
