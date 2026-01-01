@@ -126,10 +126,10 @@ type BodyPart struct {
     DamageMultiplier float64  // Damage multiplier (head = 1.5x)
     CritBonus        float64  // Added to crit chance
 
-    // Equipment slot on this body part (one slot type per body part)
-    // e.g., head: "helmet", torso: "chestArmor", rightArm: "weapon"
-    // Use empty string if body part has no equipment slot
-    EquipSlot string
+    // Equipment slots this body part supports (can equip one item from compatible slots)
+    // e.g., head: ["helmet"], leftArm: ["shield", "weapon"], rightArm: ["weapon"]
+    // Empty array if body part has no equipment slots
+    EquipSlots []string
 
     // Unarmed combat (if this body part can attack - e.g., arms can punch, legs can kick)
     // Empty UnarmedDamage = this body part cannot attack unarmed
@@ -152,25 +152,27 @@ BodyConfig{
     ID: "humanoid",
     Parts: []BodyPart{
         {ID: "head", MaxHealth: 50, HitModifier: 20, DamageMultiplier: 1.5, CritBonus: 0.1,
-         EquipSlot: "helmet"},
+         EquipSlots: []string{"helmet"}},
         {ID: "torso", MaxHealth: 100, HitModifier: 0, DamageMultiplier: 1.0,
-         EquipSlot: "chestArmor"},
+         EquipSlots: []string{"chestArmor"}},
         {ID: "rightArm", MaxHealth: 60, HitModifier: 5, DamageMultiplier: 0.8,
-         EquipSlot: "weapon",
+         EquipSlots: []string{"weapon", "glove"},
          UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "right fist"},
         {ID: "leftArm", MaxHealth: 60, HitModifier: 5, DamageMultiplier: 0.8,
-         EquipSlot: "shield",
+         EquipSlots: []string{"shield", "weapon", "glove"},
          UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "left fist"},
         {ID: "rightLeg", MaxHealth: 70, HitModifier: 10, DamageMultiplier: 0.7,
-         EquipSlot: "boots",
+         EquipSlots: []string{"legArmor", "boots"},
          UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "right kick"},
         {ID: "leftLeg", MaxHealth: 70, HitModifier: 10, DamageMultiplier: 0.7,
-         EquipSlot: "boots",
+         EquipSlots: []string{"legArmor", "boots"},
          UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "left kick"},
     },
     DefaultPart: "torso",
 }
 ```
+
+**Note:** Each body part can have multiple compatible slot types, but only ONE item can be equipped per body part. A leftArm with `["shield", "weapon", "glove"]` can hold a shield OR a weapon OR a glove, not all three.
 
 **Example dragon body config (with natural armor for unarmed blocking):**
 ```go
@@ -369,9 +371,12 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
 
 1. **Weapon/Unarmed Check**:
    - If using equipped weapon and weapon health = 0, attack fails (broken weapon)
+   - If **dual-wielding** (weapons in multiple body parts), BOTH weapons attack
    - If no weapon equipped, use **unarmed attacks from ALL body parts** with UnarmedDamage defined
-   - Each body part with UnarmedDamage makes a separate attack (humanoid = 2 fists + 2 kicks = 4 attacks)
+   - Each attacking body part makes a separate attack with its own speed roll
    - Disabled body parts (health = 0) cannot attack
+
+   **Multi-attack balance:** While multi-attack seems powerful, unarmed damage is much lower than weapons, unarmed blocking is difficult without natural armor, and defenders benefit from skill recharge mechanics - repeated defenses against the same attack type become harder, but defenders still get a chance against each incoming attack.
 
 2. **Accuracy Check**:
    - Attacker rolls `AccuracyChallenges.Check()`
@@ -681,6 +686,8 @@ Test scenarios:
 10. **Body part disabled (health = 0)**: Cannot attack or defend with that body part
 11. **All attacking body parts disabled**: Cannot attack unarmed; must equip weapon or flee
 12. **Unarmed block without natural armor**: Body part takes damage from blocking (dragon scales absorb, human arms get hurt)
+13. **Equipment swap mid-combat**: Allowed but takes time (delays next attack); JS can customize swap duration
+14. **Dual-wield**: Both equipped weapons attack; each has its own speed roll and attack cycle
 
 ---
 
@@ -705,10 +712,12 @@ Test scenarios:
 17. **Per-damage-type defense** - Parry, block, and armor challenges vary by damage type
 18. **Message rendering via JS override** - Equipment/combatants can customize all combat messages
 19. **Observer-aware messages** - First/second/third person based on who's observing
-20. **Body-part equipment slots** - Each body part has one equipment slot; armor only protects the body part it's on
+20. **Body-part equipment slots** - Each body part can have multiple compatible slot types, but only one item equipped at a time
 21. **Qualified slot names** - Equipment uses `{bodyPartID}.{slotType}` format for universal body support (humanoids, octopi, dragons)
 22. **Slot-based weapons** - Weapons specify slot type and count needed; multi-slot weapons occupy multiple body parts
-23. **Unarmed multi-attack** - When unarmed, ALL body parts with UnarmedDamage attack simultaneously (fists + kicks)
-24. **Body part health** - Each body part has health; at 0 it's disabled and cannot attack or defend
-25. **Dual health tracking** - Damage applies to both body part AND central health; body parts can be disabled without death
-26. **Unarmed defense** - Parry possible with skill; block requires natural armor (scales, thick hide) or body part takes damage
+23. **Unarmed multi-attack** - When unarmed, ALL body parts with UnarmedDamage attack (each with own speed roll)
+24. **Dual-wield multi-attack** - When wielding weapons in multiple body parts, all weapons attack independently
+25. **Body part health** - Each body part has health; at 0 it's disabled and cannot attack or defend
+26. **Dual health tracking** - Damage applies to both body part AND central health; body parts can be disabled without death
+27. **Unarmed defense** - Parry possible with skill; block requires natural armor (scales, thick hide) or body part takes damage
+28. **Multi-attack defense** - Defender rolls defense for each incoming attack; skill recharge makes repeated defenses harder
