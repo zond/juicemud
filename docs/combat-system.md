@@ -36,10 +36,16 @@ type ObjectDO struct {
     Stamina   float64  // Resource for special moves (reserved for future use)
     MaxStamina float64
 
-    // Equipment: slot name -> equipped object ID
-    // Slot names come from BodyPart.EquipSlots (e.g., "helmet", "chestArmor", "weapon", "shield")
-    // e.g., {"helmet": "obj123", "chestArmor": "obj456", "weapon": "obj789"}
+    // Equipment: qualified slot name -> equipped object ID
+    // Format: "{bodyPartID}.{slotType}" - works for any body configuration
+    // e.g., {"head.helmet": "obj123", "torso.chestArmor": "obj456", "rightArm.weapon": "obj789"}
+    // Multi-slot weapons appear in multiple entries with same object ID:
+    // e.g., {"rightArm.weapon": "greatsword1", "leftArm.weapon": "greatsword1"}
     Equipment map[string]string
+
+    // Body part health: bodyPartID -> current health (only for objects with BodyConfigID)
+    // At 0, body part is disabled and cannot attack or defend
+    BodyPartHealth map[string]float64
 
     // Body and stance (reference global configs)
     BodyConfigID   string  // References BodyConfig (humanoid, quadruped, etc.)
@@ -112,14 +118,18 @@ type BodyPart struct {
     ID               string   // "head", "torso", "leftArm", "tail", etc.
     Description      string   // For look output
 
+    // Body part health (tracked in ObjectDO.BodyPartHealth)
+    MaxHealth float64  // Maximum health for this body part; at 0 = disabled
+
     // Combat targeting modifiers
     HitModifier      float64  // Added to accuracy challenge (head = +20, harder to hit)
     DamageMultiplier float64  // Damage multiplier (head = 1.5x)
     CritBonus        float64  // Added to crit chance
 
-    // Equipment slots on this body part
-    // e.g., head: ["helmet"], torso: ["chestArmor"], rightArm: ["weapon", "glove"], leftArm: ["shield", "weapon", "glove"]
-    EquipSlots []string
+    // Equipment slot on this body part (one slot type per body part)
+    // e.g., head: "helmet", torso: "chestArmor", rightArm: "weapon"
+    // Use empty string if body part has no equipment slot
+    EquipSlot string
 
     // Unarmed combat (if this body part can attack - e.g., arms can punch, legs can kick)
     // Empty UnarmedDamage = this body part cannot attack unarmed
@@ -128,6 +138,11 @@ type BodyPart struct {
     UnarmedAccuracy    Challenges
     UnarmedDamageBonus Challenges
     UnarmedDescription string              // e.g., "fist", "claw", "bite"
+
+    // Unarmed defense (for blocking/parrying without a weapon)
+    // Empty maps = cannot parry/block unarmed; requires natural armor (scales, thick hide) for effective blocking
+    UnarmedParryChallenges map[string]Challenges  // damage type -> challenges (very hard for soft-skinned creatures)
+    UnarmedBlockChallenges map[string]Challenges  // damage type -> challenges (requires natural armor)
 }
 ```
 
@@ -136,21 +151,42 @@ type BodyPart struct {
 BodyConfig{
     ID: "humanoid",
     Parts: []BodyPart{
-        {ID: "head", HitModifier: 20, DamageMultiplier: 1.5, CritBonus: 0.1,
-         EquipSlots: []string{"helmet"}},
-        {ID: "torso", HitModifier: 0, DamageMultiplier: 1.0,
-         EquipSlots: []string{"chestArmor"}},
-        {ID: "rightArm", HitModifier: 5, DamageMultiplier: 0.8,
-         EquipSlots: []string{"weapon", "glove"},
+        {ID: "head", MaxHealth: 50, HitModifier: 20, DamageMultiplier: 1.5, CritBonus: 0.1,
+         EquipSlot: "helmet"},
+        {ID: "torso", MaxHealth: 100, HitModifier: 0, DamageMultiplier: 1.0,
+         EquipSlot: "chestArmor"},
+        {ID: "rightArm", MaxHealth: 60, HitModifier: 5, DamageMultiplier: 0.8,
+         EquipSlot: "weapon",
          UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "right fist"},
-        {ID: "leftArm", HitModifier: 5, DamageMultiplier: 0.8,
-         EquipSlots: []string{"shield", "weapon", "glove"},
+        {ID: "leftArm", MaxHealth: 60, HitModifier: 5, DamageMultiplier: 0.8,
+         EquipSlot: "shield",
          UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "left fist"},
-        {ID: "legs", HitModifier: 10, DamageMultiplier: 0.7,
-         EquipSlots: []string{"legArmor", "boots"},
-         UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "kick"},
+        {ID: "rightLeg", MaxHealth: 70, HitModifier: 10, DamageMultiplier: 0.7,
+         EquipSlot: "boots",
+         UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "right kick"},
+        {ID: "leftLeg", MaxHealth: 70, HitModifier: 10, DamageMultiplier: 0.7,
+         EquipSlot: "boots",
+         UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "left kick"},
     },
     DefaultPart: "torso",
+}
+```
+
+**Example dragon body config (with natural armor for unarmed blocking):**
+```go
+BodyConfig{
+    ID: "dragon",
+    Parts: []BodyPart{
+        {ID: "head", MaxHealth: 150, HitModifier: 25, DamageMultiplier: 2.0, CritBonus: 0.15,
+         UnarmedDamage: map[string]float64{"physical": 30, "fire": 15}, UnarmedDescription: "bite",
+         UnarmedBlockChallenges: map[string]Challenges{"physical": {{Skill: "dragonScale", Level: 5}}}},
+        {ID: "leftForeclaw", MaxHealth: 100, HitModifier: 10, DamageMultiplier: 1.2,
+         UnarmedDamage: map[string]float64{"physical": 20}, UnarmedDescription: "left claw",
+         UnarmedParryChallenges: map[string]Challenges{"physical": {{Skill: "clawFighting", Level: 10}}},
+         UnarmedBlockChallenges: map[string]Challenges{"physical": {{Skill: "dragonScale", Level: 8}}}},
+        // ... more parts: rightForeclaw, body, wings, tail ...
+    },
+    DefaultPart: "body",
 }
 ```
 
@@ -331,9 +367,11 @@ Each config type has a corresponding in-memory store (like `SkillConfigs`) that 
 
 Attacker's **to-hit result** is compared against each defense result. Stance and status effect modifiers are applied throughout.
 
-1. **Weapon Check**:
+1. **Weapon/Unarmed Check**:
    - If using equipped weapon and weapon health = 0, attack fails (broken weapon)
-   - If no weapon equipped, use unarmed attack from a body part with UnarmedDamage defined
+   - If no weapon equipped, use **unarmed attacks from ALL body parts** with UnarmedDamage defined
+   - Each body part with UnarmedDamage makes a separate attack (humanoid = 2 fists + 2 kicks = 4 attacks)
+   - Disabled body parts (health = 0) cannot attack
 
 2. **Accuracy Check**:
    - Attacker rolls `AccuracyChallenges.Check()`
@@ -352,20 +390,25 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Add status effect modifiers
    - -> if `dodgeScore > hitScore`, attack misses entirely
 
-5. **Parry** (per damage type, if weapon health > 0):
+5. **Parry** (per damage type, weapon or unarmed):
+   - Use weapon's `ParryChallenges` if weapon equipped and healthy
+   - Otherwise use defender's body part `UnarmedParryChallenges` (if any - requires skill/natural ability)
    - For each damage type in attack:
      - If `ParryChallenges[damageType]` exists, defender rolls those challenges
      - Add stance's `ParryModifier`
      - If `parryScore > hitScore`, that damage type is parried (no damage for that type)
    - Damage types without parry challenges or failed parries continue to next step
 
-6. **Block** (per damage type, if weapon health > 0):
+6. **Block** (per damage type, weapon or unarmed):
+   - Use weapon's `BlockChallenges` if weapon equipped and healthy
+   - Otherwise use defender's body part `UnarmedBlockChallenges` (if any - requires natural armor)
    - For each remaining (unparried) damage type:
      - If `BlockChallenges[damageType]` exists, defender rolls those challenges
      - Add stance's `BlockModifier`
      - If `blockScore > hitScore`, that damage type is blocked:
        - Damage for that type is negated
-       - Weapon takes degradation: `weaponDamage += blockedAmount * weapon.DegradationRate`
+       - If using weapon: weapon takes degradation: `weaponDamage += blockedAmount * weapon.DegradationRate`
+       - If unarmed: blocking body part takes damage instead (natural armor absorbs hits)
    - Damage types without block challenges or failed blocks continue to next step
 
 7. **Armor Soak** (per damage type, body-part specific):
@@ -384,9 +427,11 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
 9. **Body Part Damage Multiplier**:
    - Apply `bodyPart.DamageMultiplier` to final damage
 
-10. **Apply Damage**:
-    - Reduce defender's Health
-    - If Health <= 0, emit `death` event
+10. **Apply Damage** (to both body part and central health):
+    - Reduce hit body part's health (`BodyPartHealth[bodyPartID]`)
+    - If body part health <= 0, body part is **disabled** (emit `bodyPartDisabled` event)
+    - Reduce defender's central `Health` by same amount
+    - If central Health <= 0, emit `death` event
 
 ### Attack Timing
 
@@ -419,15 +464,17 @@ All combat messages support optional JS override. Go provides default messages, 
 | Event | Renderer Object | Rationale |
 |-------|-----------------|-----------|
 | `renderAttack` | Attacker's **weapon** | Weapon knows its attack style |
-| `renderMiss` | Attacker's **weapon** | "Your sword swings wide" |
+| `renderUnarmedAttack` | **Attacker** | Attacker knows their body's attack style |
+| `renderMiss` | Attacker's **weapon** (or **attacker** if unarmed) | "Your sword swings wide" / "Your fist misses" |
 | `renderDodge` | **Defender** | Defender knows their dodge style |
-| `renderParry` | Defender's **weapon** | Weapon did the parrying |
-| `renderBlock` | Defender's **weapon** | Weapon did the blocking |
-| `renderDamageDealt` | Attacker's **weapon** | "Your blade cuts deep" |
+| `renderParry` | Defender's **weapon** (or **defender** if unarmed) | Weapon/claws did the parrying |
+| `renderBlock` | Defender's **weapon** (or **defender** if unarmed) | Weapon/scales did the blocking |
+| `renderDamageDealt` | Attacker's **weapon** (or **attacker** if unarmed) | "Your blade cuts deep" / "Your claws tear flesh" |
 | `renderDamageReceived` | **Defender** | "Pain sears through you" |
 | `renderArmorSoak` | Defender's **armor** | Armor knows its protection style |
-| `renderCrit` | Attacker's **weapon** | Weapon knows its crit flavor |
+| `renderCrit` | Attacker's **weapon** (or **attacker** if unarmed) | Weapon/body knows its crit flavor |
 | `renderDeath` | **Dying object** | They know their death style |
+| `renderBodyPartDisabled` | **Affected object** | "Your left arm goes limp" |
 | `renderStatusApplied` | **Affected object** | "You feel poisoned" |
 | `renderStatusTick` | **Affected object** | "The poison burns" |
 | `renderStatusExpired` | **Affected object** | "The poison fades" |
@@ -488,7 +535,7 @@ addCallback('renderStatusApplied', ['emit'], (req) => {
 
 | File | Changes |
 |------|---------|
-| `structs/schema.go` | Add to ObjectDO: Health, MaxHealth, Stamina, MaxStamina, Equipment (map), BodyConfigID, StanceConfigID, CombatTargets, StatusEffects |
+| `structs/schema.go` | Add to ObjectDO: Health, MaxHealth, Stamina, MaxStamina, Equipment (map), BodyPartHealth (map), BodyConfigID, StanceConfigID, CombatTargets, StatusEffects |
 | `structs/combat.go` | New file: All config types and their stores |
 | `structs/status.go` | New file: StatusEffect, StatusEffectConfig, lazy cleanup logic |
 | `game/game.go` | Expand ServerConfig, load all configs at startup |
@@ -562,9 +609,9 @@ Key functions:
 - `getStatusEffects()` / `hasStatusEffect(configID)`
 
 **JS events emitted:**
-- Combat: `attackHit`, `attackMissed`, `parried`, `blocked`, `damaged`, `death`, `criticalHit`
+- Combat: `attackHit`, `attackMissed`, `parried`, `blocked`, `damaged`, `death`, `criticalHit`, `bodyPartDisabled`
 - Status: `statusApplied`, `statusExpired`, `statusTick`
-- Render (for message customization): `renderAttack`, `renderMiss`, `renderDodge`, `renderParry`, `renderBlock`, `renderDamageDealt`, `renderDamageReceived`, `renderArmorSoak`, `renderCrit`, `renderDeath`, `renderStatusApplied`, `renderStatusTick`, `renderStatusExpired`
+- Render (for message customization): `renderAttack`, `renderUnarmedAttack`, `renderMiss`, `renderDodge`, `renderParry`, `renderBlock`, `renderDamageDealt`, `renderDamageReceived`, `renderArmorSoak`, `renderCrit`, `renderDeath`, `renderBodyPartDisabled`, `renderStatusApplied`, `renderStatusTick`, `renderStatusExpired`
 
 ### Phase 5: Look Output Enhancement
 
@@ -603,8 +650,12 @@ Test scenarios:
 - Basic attack/defend cycle
 - Body part targeting with modifiers
 - Armor only protects hit body part
-- Unarmed attacks from different body parts
+- Unarmed multi-attack (all body parts attack simultaneously)
+- Unarmed parry/block (with and without natural armor)
 - Multi-slot weapon equipping (two-handed)
+- Body part health tracking and disabling
+- Disabled body part cannot attack/defend
+- Damage flows to both body part and central health
 - Stance changes affecting combat
 - Status effects applying and expiring
 - Status effect ticking
@@ -624,10 +675,12 @@ Test scenarios:
 4. **Self-attack**: Prevent
 5. **Dead target**: Stop combat, emit event
 6. **Server restart**: Recover from CombatTargets, reschedule attacks
-7. **No weapon equipped**: Use unarmed attack from a body part that has UnarmedDamage defined
+7. **No weapon equipped**: Use unarmed attacks from ALL body parts with UnarmedDamage (simultaneous multi-attack)
 8. **No armor on hit body part**: No soak for that body part, full damage taken
 9. **Damage type not in parry/block/armor map**: No defense against that type
-10. **Body part has no unarmed damage**: Cannot attack unarmed with that body part (use different body part or equip weapon)
+10. **Body part disabled (health = 0)**: Cannot attack or defend with that body part
+11. **All attacking body parts disabled**: Cannot attack unarmed; must equip weapon or flee
+12. **Unarmed block without natural armor**: Body part takes damage from blocking (dragon scales absorb, human arms get hurt)
 
 ---
 
@@ -652,6 +705,10 @@ Test scenarios:
 17. **Per-damage-type defense** - Parry, block, and armor challenges vary by damage type
 18. **Message rendering via JS override** - Equipment/combatants can customize all combat messages
 19. **Observer-aware messages** - First/second/third person based on who's observing
-20. **Body-part equipment slots** - Each body part defines what can be equipped there; armor only protects the body part it's on
-21. **Slot-based weapons** - Weapons specify slot type and count needed; multi-slot weapons occupy multiple body parts
-22. **Body-part unarmed attacks** - Each body part can define its own unarmed damage (fists, claws, kicks, bites)
+20. **Body-part equipment slots** - Each body part has one equipment slot; armor only protects the body part it's on
+21. **Qualified slot names** - Equipment uses `{bodyPartID}.{slotType}` format for universal body support (humanoids, octopi, dragons)
+22. **Slot-based weapons** - Weapons specify slot type and count needed; multi-slot weapons occupy multiple body parts
+23. **Unarmed multi-attack** - When unarmed, ALL body parts with UnarmedDamage attack simultaneously (fists + kicks)
+24. **Body part health** - Each body part has health; at 0 it's disabled and cannot attack or defend
+25. **Dual health tracking** - Damage applies to both body part AND central health; body parts can be disabled without death
+26. **Unarmed defense** - Parry possible with skill; block requires natural armor (scales, thick hide) or body part takes damage
