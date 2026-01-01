@@ -229,14 +229,14 @@ type contentChange struct {
 }
 
 // renderMovementRequest is sent to a moving object when Movement.Active is false.
-// The object should emit movementRenderedResponse back to the observer.
+// The callback should return a movementRenderedResponse with the custom message.
 type renderMovementRequest struct {
-	Observer    string               // Observer's object ID to emit response to
+	Observer    string               // Observer's object ID (for reference, not for emit-back)
 	Source      *structs.Perspective // nil if not visible
 	Destination *structs.Perspective // nil if not visible
 }
 
-// movementRenderedResponse is sent back to an observer with the message to display.
+// movementRenderedResponse is returned from a renderMovement callback with the message to display.
 type movementRenderedResponse struct {
 	Message string
 }
@@ -953,17 +953,15 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 // run executes an object's JavaScript source with the given caller event.
 // Loads source, sets up callbacks, runs in V8, and saves resulting state.
 //
-// Returns true if a JavaScript callback was actually invoked for the event,
-// false otherwise. This includes cases where:
-//   - No caller was provided (source refresh only)
-//   - The caller's event type has no registered callback
-//   - The caller's tag doesn't match any registered tag for that event
-//
-// Note: Even if a callback returns null or undefined, the return value is true
+// Returns the JSON return value from the callback (nil if no callback was
+// found/invoked) and any error. Callers can check `value != nil` to determine
+// if a callback was invoked. Note that even if a callback returns null or
+// undefined, the return value is non-nil (it will be the JSON string "null")
 // because a callback was still executed. This distinction matters for command
 // handling where we need to know if the event was "handled" by JavaScript.
+//
 // intervalInfo is optional interval metadata for stats tracking (nil for non-interval events).
-func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller, intervalInfo *IntervalExecInfo) (bool, error) {
+func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.Caller, intervalInfo *IntervalExecInfo) (*string, error) {
 	// Serialize JS execution for this object to prevent concurrent runs from
 	// producing "last writer wins" race conditions on state updates.
 	object.JSLock()
@@ -975,31 +973,31 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 	if caller != nil {
 		call, err := caller.Call()
 		if err != nil {
-			return false, juicemud.WithStack(err)
+			return nil, juicemud.WithStack(err)
 		}
 		if call != nil {
 
 			if call.Tag == emitEventTag {
 				if c, found := g.connectionByObjectID.GetHas(id); found {
 					if err := c.handleEmitEvent(call); err != nil {
-						return false, juicemud.WithStack(err)
+						return nil, juicemud.WithStack(err)
 					}
 				}
 			}
 
 			t, err := g.storage.ResolvedSourceModTime(ctx, sourcePath)
 			if err != nil {
-				return false, juicemud.WithStack(err)
+				return nil, juicemud.WithStack(err)
 			}
 			if object.GetSourceModTime() >= t && !object.HasCallback(call.Name, call.Tag) {
-				return false, nil
+				return nil, nil
 			}
 		}
 	}
 
 	source, modTime, err := g.storage.LoadResolvedSource(ctx, sourcePath)
 	if err != nil {
-		return false, juicemud.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 
 	callbacks := js.Callbacks{}
@@ -1034,7 +1032,7 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 		if errors.As(err, &jserr) {
 			log.New(g.consoleSwitchboard.Writer(id), "", 0).Printf("---- error in %s ----\n%s\n%s", jserr.Location, jserr.Message, jserr.StackTrace)
 		}
-		return false, juicemud.WithStack(err)
+		return nil, juicemud.WithStack(err)
 	}
 
 	object.Lock()
@@ -1043,17 +1041,19 @@ func (g *Game) run(ctx context.Context, object *structs.Object, caller structs.C
 	object.Unsafe.State = res.State
 	object.Unsafe.Callbacks = res.Callbacks
 	object.Unsafe.SourceModTime = modTime
-	return res.Value != nil, nil
+	return res.Value, nil
 }
 
-func (g *Game) loadRun(ctx context.Context, id string, caller structs.Caller, intervalInfo *IntervalExecInfo) (*structs.Object, bool, error) {
+// loadRun loads an object and executes JS for it. Returns the object, the JSON
+// return value from the callback (nil if no callback was found/invoked), and any error.
+func (g *Game) loadRun(ctx context.Context, id string, caller structs.Caller, intervalInfo *IntervalExecInfo) (*structs.Object, *string, error) {
 	object, err := g.storage.AccessObject(ctx, id, nil)
 	if err != nil {
 		// Record pre-run loading error (object not found, etc.)
 		g.jsStats.RecordLoadError(id, err)
-		return nil, false, juicemud.WithStack(err)
+		return nil, nil, juicemud.WithStack(err)
 	}
 	// run() handles its own error recording for JS execution errors
-	found, err := g.run(ctx, object, caller, intervalInfo)
-	return object, found, juicemud.WithStack(err)
+	value, err := g.run(ctx, object, caller, intervalInfo)
+	return object, value, juicemud.WithStack(err)
 }

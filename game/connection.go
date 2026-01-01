@@ -263,12 +263,6 @@ func (c *Connection) handleEmitEvent(call *structs.Call) error {
 			return juicemud.WithStack(err)
 		}
 		return c.renderMovement(m)
-	case movementRenderedEventType:
-		resp := &movementRenderedResponse{}
-		if err := json.Unmarshal([]byte(call.Message), resp); err != nil {
-			return juicemud.WithStack(err)
-		}
-		fmt.Fprintln(c.term, resp.Message)
 	case messageEventType:
 		msg := &messageContent{}
 		if err := json.Unmarshal([]byte(call.Message), msg); err != nil {
@@ -283,7 +277,7 @@ func (c *Connection) handleEmitEvent(call *structs.Call) error {
 
 // renderMovement handles movement rendering for a player connection.
 // If the moved object has Movement.Active, uses fast Go-based rendering with the verb.
-// Otherwise, emits a renderMovement event to the moved object for JS handling.
+// Otherwise, calls the renderMovement callback on the moved object and uses the return value.
 func (c *Connection) renderMovement(m *movement) error {
 	// Compute perspectives from observer's current neighbourhood
 	_, neigh, err := c.game.loadNeighbourhoodOf(c.ctx, c.user.Object)
@@ -324,22 +318,39 @@ func (c *Connection) renderMovement(m *movement) error {
 		// Use default Go-based rendering with verb
 		c.renderDefaultMovement(m, src, dst, verb)
 	} else if m.Object.HasCallback(renderMovementEventType, emitEventTag) {
-		// Emit renderMovement event to the moved object for JS handling
-		if err := c.game.storage.Queue().Push(c.ctx, &structs.AnyEvent{
-			At:     c.game.storage.Queue().Now(),
-			Object: m.Object.GetId(),
-			Caller: &structs.AnyCall{
-				Name: renderMovementEventType,
-				Tag:  emitEventTag,
-				Content: &renderMovementRequest{
-					Observer:    c.user.Object,
-					Source:      src,
-					Destination: dst,
-				},
+		// Call the renderMovement callback directly and use its return value
+		value, err := c.game.run(c.ctx, m.Object, &structs.AnyCall{
+			Name: renderMovementEventType,
+			Tag:  emitEventTag,
+			Content: &renderMovementRequest{
+				Observer:    c.user.Object,
+				Source:      src,
+				Destination: dst,
 			},
-		}); err != nil {
-			return juicemud.WithStack(err)
+		}, nil)
+		if err != nil {
+			// JS error - fall back to default rendering
+			c.renderDefaultMovement(m, src, dst, verb)
+			return nil
 		}
+		if value == nil {
+			// Callback didn't return a value - fall back to default
+			c.renderDefaultMovement(m, src, dst, verb)
+			return nil
+		}
+		// Parse the returned message
+		var resp movementRenderedResponse
+		if err := json.Unmarshal([]byte(*value), &resp); err != nil {
+			// Invalid JSON - fall back to default
+			c.renderDefaultMovement(m, src, dst, verb)
+			return nil
+		}
+		if resp.Message == "" {
+			// Empty message - fall back to default
+			c.renderDefaultMovement(m, src, dst, verb)
+			return nil
+		}
+		fmt.Fprintln(c.term, resp.Message)
 	} else {
 		// Movement.Active is false but no JS callback registered - fall back to default
 		c.renderDefaultMovement(m, src, dst, verb)
@@ -651,7 +662,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		// Can't access own object - this is a real error
 		return false, juicemud.WithStack(err)
 	}
-	found, err = c.game.run(c.ctx, obj, &structs.AnyCall{
+	value, err := c.game.run(c.ctx, obj, &structs.AnyCall{
 		Name: name,
 		Tag:  commandEventTag,
 		Content: map[string]any{
@@ -659,7 +670,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 			"line": line,
 		},
 	}, nil)
-	if found {
+	if value != nil {
 		return true, err
 	}
 	// Continue on errors - broken JS shouldn't block command search.
@@ -674,8 +685,8 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		},
 	}
 
-	loc, found, err := c.game.loadRun(c.ctx, obj.GetLocation(), actionCall, nil)
-	if found {
+	loc, value, err := c.game.loadRun(c.ctx, obj.GetLocation(), actionCall, nil)
+	if value != nil {
 		return true, err
 	}
 	// Continue on errors - broken location JS shouldn't block command search.
@@ -734,8 +745,8 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 	cont := loc.GetContent()
 	delete(cont, o.id)
 	for sibID := range cont {
-		_, found, err = c.game.loadRun(c.ctx, sibID, actionCall, nil)
-		if found {
+		_, value, err = c.game.loadRun(c.ctx, sibID, actionCall, nil)
+		if value != nil {
 			return true, err
 		}
 		// Continue on errors - a broken sibling shouldn't block command processing.

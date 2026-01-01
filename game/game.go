@@ -42,12 +42,8 @@ const (
 	transmittedEventType = "transmitted"
 
 	// renderMovementEventType is sent to a moving object when Movement.Active is false.
-	// The object should handle this and emit movementRenderedEventType back to the observer.
+	// The callback should return a movementRenderedResponse with the custom message.
 	renderMovementEventType = "renderMovement"
-
-	// movementRenderedEventType is sent back to an observer from a moving object
-	// containing the custom movement message to display.
-	movementRenderedEventType = "movementRendered"
 
 	// messageEventType is sent to objects to display a message.
 	// When received by an object with an active connection, the message is printed to their terminal.

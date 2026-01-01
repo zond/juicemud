@@ -947,6 +947,9 @@ addCallback('exitFailed', ['emit'], (msg) => {
 
 #### Custom Movement Rendering
 
+The `renderMovement` callback is called when an object with `Movement.Active = false` moves.
+The callback should return an object with a `Message` property containing the text to display.
+
 ```javascript
 setMovement({Active: false, Verb: ''});
 
@@ -957,7 +960,7 @@ addCallback('renderMovement', ['emit'], (msg) => {
     } else if (msg.Destination && msg.Destination.Here) {
         text = 'A chill runs down your spine as a ghost materializes.';
     }
-    emit(msg.Observer, 'movementRendered', {Message: text});
+    return {Message: text};
 });
 ```
 

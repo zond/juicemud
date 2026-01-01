@@ -2525,6 +2525,7 @@ func TestJSMovementRendering(t *testing.T) {
 	}
 
 	// Create an object that handles its own movement rendering via JS in room A
+	// The renderMovement callback returns a {Message: string} object instead of emitting.
 	jsOrbPath := uniqueSourcePath("js_orb")
 	jsRenderSource := `setDescriptions([{Short: 'glowing orb'}]);
 setMovement({Active: false, Verb: ''});
@@ -2542,7 +2543,7 @@ addCallback('renderMovement', ['emit'], (msg) => {
 	} else {
 		text = 'A glowing orb does something mysterious.';
 	}
-	emit(msg.Observer, 'movementRendered', {Message: text});
+	return {Message: text};
 });
 `
 	if err := ts.WriteSource(jsOrbPath, jsRenderSource); err != nil {
