@@ -33,12 +33,13 @@ type ObjectDO struct {
     // Combat stats
     Health    float64  // Current health (0 = incapacitated/dead)
     MaxHealth float64  // Maximum health
-    Stamina   float64  // Resource for special moves
+    Stamina   float64  // Resource for special moves (reserved for future use)
     MaxStamina float64
 
-    // Equipment references (empty string = none equipped)
-    WeaponID string  // ID of currently equipped weapon object
-    ArmorID  string  // ID of currently equipped armor object
+    // Equipment: slot name -> equipped object ID
+    // Slot names come from BodyPart.EquipSlots (e.g., "helmet", "chestArmor", "weapon", "shield")
+    // e.g., {"helmet": "obj123", "chestArmor": "obj456", "weapon": "obj789"}
+    Equipment map[string]string
 
     // Body and stance (reference global configs)
     BodyConfigID   string  // References BodyConfig (humanoid, quadruped, etc.)
@@ -96,46 +97,89 @@ type StatusEffectConfig struct {
 
 ### BodyConfig
 
-Defines body structure - what parts can be targeted, their modifiers.
+Defines body structure - what parts can be targeted, their modifiers, equipment slots, and unarmed combat capabilities.
 
 ```go
 type BodyConfig struct {
     ID          string  // "humanoid", "quadruped", "serpent", etc.
     Description string
 
-    Parts []BodyPart
+    Parts       []BodyPart
     DefaultPart string  // Which part is targeted by default ("torso")
 }
 
 type BodyPart struct {
     ID               string   // "head", "torso", "leftArm", "tail", etc.
+    Description      string   // For look output
+
+    // Combat targeting modifiers
     HitModifier      float64  // Added to accuracy challenge (head = +20, harder to hit)
     DamageMultiplier float64  // Damage multiplier (head = 1.5x)
     CritBonus        float64  // Added to crit chance
-    Description      string   // For look output
+
+    // Equipment slots on this body part
+    // e.g., head: ["helmet"], torso: ["chestArmor"], rightArm: ["weapon", "glove"], leftArm: ["shield", "weapon", "glove"]
+    EquipSlots []string
+
+    // Unarmed combat (if this body part can attack - e.g., arms can punch, legs can kick)
+    // Empty UnarmedDamage = this body part cannot attack unarmed
+    UnarmedDamage      map[string]float64  // e.g., {"physical": 5} for fist
+    UnarmedSpeed       Challenges
+    UnarmedAccuracy    Challenges
+    UnarmedDamageBonus Challenges
+    UnarmedDescription string              // e.g., "fist", "claw", "bite"
+}
+```
+
+**Example humanoid body config:**
+```go
+BodyConfig{
+    ID: "humanoid",
+    Parts: []BodyPart{
+        {ID: "head", HitModifier: 20, DamageMultiplier: 1.5, CritBonus: 0.1,
+         EquipSlots: []string{"helmet"}},
+        {ID: "torso", HitModifier: 0, DamageMultiplier: 1.0,
+         EquipSlots: []string{"chestArmor"}},
+        {ID: "rightArm", HitModifier: 5, DamageMultiplier: 0.8,
+         EquipSlots: []string{"weapon", "glove"},
+         UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "right fist"},
+        {ID: "leftArm", HitModifier: 5, DamageMultiplier: 0.8,
+         EquipSlots: []string{"shield", "weapon", "glove"},
+         UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "left fist"},
+        {ID: "legs", HitModifier: 10, DamageMultiplier: 0.7,
+         EquipSlots: []string{"legArmor", "boots"},
+         UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "kick"},
+    },
+    DefaultPart: "torso",
 }
 ```
 
 ### StanceConfig
 
-Stances with skill challenges - players can improve at using stances.
+Stances with skill challenges - players can improve at using stances. Higher skill amplifies positive effects and reduces negative effects.
 
 ```go
 type StanceConfig struct {
     ID          string  // "aggressive", "defensive", "evasive"
     Description string
 
-    // Modifiers to combat
+    // Modifiers to combat (base values before skill adjustment)
     AccuracyModifier float64  // Added to accuracy challenges
     DamageModifier   float64  // Damage multiplier
     DodgeModifier    float64  // Added to dodge challenges
     ParryModifier    float64
     BlockModifier    float64
 
-    // Skill challenges for this stance (can improve at stances)
+    // Skill challenges for this stance
+    // Results improve positive modifiers and reduce negative modifiers
+    // e.g., aggressive stance has +accuracy but -dodge; higher skill = more accuracy, less dodge penalty
     StanceChallenges Challenges  // e.g., [{Skill: "aggressiveStance", Level: 5}]
 }
 ```
+
+**Stance skill effect:** When applying stance modifiers, the `StanceChallenges.Check()` result scales them:
+- Positive modifiers: `actualMod = baseMod * (1 + result/100)` (higher skill = bigger bonus)
+- Negative modifiers: `actualMod = baseMod * (1 - result/100)` (higher skill = smaller penalty, clamped to 0)
 
 ### WeaponConfig
 
@@ -145,6 +189,10 @@ Uses existing `Challenges` type (`[]Challenge`) for skill checks. Each Challenge
 type WeaponConfig struct {
     ID          string
     Description string
+
+    // Equipment slot requirements
+    SlotType      string  // Which slot type this weapon uses: "weapon", "shield", etc.
+    SlotsRequired int     // How many of that slot type needed (1=one-handed, 2=two-handed)
 
     // Damage by type (e.g., {"physical": 10, "fire": 5} = 10 physical + 5 fire damage)
     DamageTypes  map[string]float64
@@ -156,10 +204,9 @@ type WeaponConfig struct {
     DamageChallenges   Challenges  // For damage bonus
 
     // Defense capabilities (per damage type - e.g., shield blocks physical well, not fire)
-    CanParry          bool                    // Can redirect attacks (no damage)
-    CanBlock          bool                    // Can absorb damage (weapon takes damage)
-    ParryChallenges   map[string]Challenges   // damage type -> skill challenges for parry
-    BlockChallenges   map[string]Challenges   // damage type -> skill challenges for block
+    // Empty map = cannot parry/block; presence of damage type key = can defend against that type
+    ParryChallenges   map[string]Challenges   // damage type -> skill challenges for parry (redirect, no damage)
+    BlockChallenges   map[string]Challenges   // damage type -> skill challenges for block (absorb, weapon takes damage)
 
     // Durability (0 = indestructible)
     MaxHealth       float64  // Maximum weapon health
@@ -167,7 +214,19 @@ type WeaponConfig struct {
 }
 ```
 
-**Broken weapons:** When weapon health reaches 0, the weapon is useless - it cannot deal damage, parry, or block. It remains equipped but non-functional until repaired.
+**Equipment slot examples:**
+| Weapon | SlotType | SlotsRequired | Notes |
+|--------|----------|---------------|-------|
+| Sword | "weapon" | 1 | One-handed |
+| Greatsword | "weapon" | 2 | Two-handed (needs 2 weapon slots across body parts) |
+| Shield | "shield" | 1 | Goes in shield slot |
+| Tower Shield | "shield" | 2 | Massive shield needing both arms |
+
+**Equipping multi-slot weapons:** When SlotsRequired > 1, the system finds that many body parts with the matching slot type and occupies all of them. A 4-armed creature could dual-wield greatswords.
+
+**Equipment health:** Weapon objects use their own `Health` field (from `ObjectDO`) to track durability. When health reaches 0, the weapon is broken - it cannot deal damage, parry, or block. It remains equipped but non-functional until repaired.
+
+**Repair:** Equipment repair is handled by JS - wizards can implement repair NPCs, repair spells, or other mechanisms as needed.
 
 ### ArmorConfig
 
@@ -175,6 +234,9 @@ type WeaponConfig struct {
 type ArmorConfig struct {
     ID          string
     Description string
+
+    // Equipment slot - which slot type this armor occupies
+    SlotType string  // e.g., "helmet", "chestArmor", "legArmor", "glove", "boots"
 
     // Protection per damage type: damage type -> base reduction ratio
     // e.g., {"physical": 0.5, "fire": 0.1} = 50% physical reduction, 10% fire reduction
@@ -192,7 +254,9 @@ type ArmorConfig struct {
 }
 ```
 
-**Broken armor:** When armor health reaches 0, the armor provides no protection. It remains equipped but non-functional until repaired.
+**Armor and body parts:** When a body part is hit, only armor equipped in that body part's slots provides protection. A helmet only protects the head, chestArmor only protects the torso, etc.
+
+**Equipment health:** Armor objects use their own `Health` field (from `ObjectDO`) to track durability. When health reaches 0, the armor provides no protection. It remains equipped but non-functional until repaired.
 
 ### DamageTypeConfig
 
@@ -268,7 +332,8 @@ Each config type has a corresponding in-memory store (like `SkillConfigs`) that 
 Attacker's **to-hit result** is compared against each defense result. Stance and status effect modifiers are applied throughout.
 
 1. **Weapon Check**:
-   - If attacker's weapon health = 0, attack fails (broken weapon)
+   - If using equipped weapon and weapon health = 0, attack fails (broken weapon)
+   - If no weapon equipped, use unarmed attack from a body part with UnarmedDamage defined
 
 2. **Accuracy Check**:
    - Attacker rolls `AccuracyChallenges.Check()`
@@ -287,25 +352,31 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Add status effect modifiers
    - -> if `dodgeScore > hitScore`, attack misses entirely
 
-5. **Parry** (if weapon.CanParry and weapon health > 0):
-   - For each damage type in attack, check `ParryChallenges[damageType]`
-   - Defender rolls parry challenges
-   - Add stance's `ParryModifier`
-   - -> if `parryScore > hitScore`, attack is parried, no damage
+5. **Parry** (per damage type, if weapon health > 0):
+   - For each damage type in attack:
+     - If `ParryChallenges[damageType]` exists, defender rolls those challenges
+     - Add stance's `ParryModifier`
+     - If `parryScore > hitScore`, that damage type is parried (no damage for that type)
+   - Damage types without parry challenges or failed parries continue to next step
 
-6. **Block** (if weapon.CanBlock and weapon health > 0):
-   - For each damage type in attack, check `BlockChallenges[damageType]`
-   - Defender rolls block challenges
-   - Add stance's `BlockModifier`
-   - -> if `blockScore > hitScore`, attack is blocked:
-     - Damage is negated
-     - Blocking weapon takes degradation: `weaponDamage = blockedDamage * weapon.DegradationRate`
+6. **Block** (per damage type, if weapon health > 0):
+   - For each remaining (unparried) damage type:
+     - If `BlockChallenges[damageType]` exists, defender rolls those challenges
+     - Add stance's `BlockModifier`
+     - If `blockScore > hitScore`, that damage type is blocked:
+       - Damage for that type is negated
+       - Weapon takes degradation: `weaponDamage += blockedAmount * weapon.DegradationRate`
+   - Damage types without block challenges or failed blocks continue to next step
 
-7. **Armor Soak** (if armor health > 0):
-   - For each damage type, reduce by armor's reduction
-   - Apply armor skill challenge result from `ArmorChallenges[damageType]`
-   - Apply degradation: `actualReduction = baseReduction * challengeResult * (armorHealth / armorMaxHealth)`
-   - Armor takes degradation: `armorDamage = soakedDamage * armor.DegradationRate`
+7. **Armor Soak** (per damage type, body-part specific):
+   - Find armor equipped in the **hit body part's** slots
+   - If no armor on that body part, or armor health = 0, skip to next step
+   - For each remaining (unparried, unblocked) damage type:
+     - If `ArmorChallenges[damageType]` exists, apply armor skill challenge
+     - Reduce by armor's `BaseReduction[damageType]`
+     - Apply degradation: `actualReduction = baseReduction * challengeResult * (armorHealth / armorMaxHealth)`
+     - Armor takes degradation: `armorDamage += soakedAmount * armor.DegradationRate`
+   - Damage types not in armor's BaseReduction pass through fully
 
 8. **Critical Multiplier**:
    - If `isCrit` (from step 3), apply `CritDamageMultiplier` to remaining damage
@@ -417,7 +488,7 @@ addCallback('renderStatusApplied', ['emit'], (req) => {
 
 | File | Changes |
 |------|---------|
-| `structs/schema.go` | Add to ObjectDO: Health, MaxHealth, Stamina, MaxStamina, WeaponID, ArmorID, BodyConfigID, StanceConfigID, CombatTargets, StatusEffects |
+| `structs/schema.go` | Add to ObjectDO: Health, MaxHealth, Stamina, MaxStamina, Equipment (map), BodyConfigID, StanceConfigID, CombatTargets, StatusEffects |
 | `structs/combat.go` | New file: All config types and their stores |
 | `structs/status.go` | New file: StatusEffect, StatusEffectConfig, lazy cleanup logic |
 | `game/game.go` | Expand ServerConfig, load all configs at startup |
@@ -477,9 +548,11 @@ Key functions:
 - `getStamina()` / `setStamina(n)` / `getMaxStamina()` / `setMaxStamina(n)`
 
 **Equipment:**
-- `equipWeapon(objectID)` / `equipArmor(objectID)`
-- `unequipWeapon()` / `unequipArmor()`
-- `getWeaponHealth()` / `getArmorHealth()` - check equipment condition
+- `equip(objectID, slotName)` - equip item to a specific slot (validates slot compatibility)
+- `unequip(slotName)` - unequip item from a slot
+- `getEquipped(slotName)` - get object ID equipped in a slot (empty string if none)
+- `getEquipment()` - get all equipped items as `{slotName: objectID, ...}`
+- `getEquipmentHealth(slotName)` - get health of item in slot (for degradation checks)
 
 **Stance:**
 - `setStance(stanceConfigID)` / `getStance()`
@@ -529,6 +602,9 @@ Commands:
 Test scenarios:
 - Basic attack/defend cycle
 - Body part targeting with modifiers
+- Armor only protects hit body part
+- Unarmed attacks from different body parts
+- Multi-slot weapon equipping (two-handed)
 - Stance changes affecting combat
 - Status effects applying and expiring
 - Status effect ticking
@@ -548,16 +624,17 @@ Test scenarios:
 4. **Self-attack**: Prevent
 5. **Dead target**: Stop combat, emit event
 6. **Server restart**: Recover from CombatTargets, reschedule attacks
-7. **No weapon equipped**: Use unarmed defaults (fists - physical damage, no parry/block)
-8. **No armor equipped**: No soak, full damage taken
+7. **No weapon equipped**: Use unarmed attack from a body part that has UnarmedDamage defined
+8. **No armor on hit body part**: No soak for that body part, full damage taken
 9. **Damage type not in parry/block/armor map**: No defense against that type
+10. **Body part has no unarmed damage**: Cannot attack unarmed with that body part (use different body part or equip weapon)
 
 ---
 
 ## Key Design Decisions
 
 1. **Attack skills have no recharge** - Weapon speed skill check controls timing
-2. **Comparative defense** - Attacker's hit score compared against each defense score (dodge > hit = dodged)
+2. **Comparative defense** - Attacker's hit score compared against each defense score (dodge > hit = dodged). Challenge results can be negative (failure) or positive (success) - when comparing, the higher value wins, so a "lesser failure" (-5) beats a "greater failure" (-20)
 3. **Defense chain is sequential** - Dodge -> Parry -> Block -> Armor soak -> Body part multiplier
 4. **Crit determined early** - Crit check happens after accuracy, before defense chain; multiplier applied at end if attack lands
 5. **Parry redirects** (no damage), **Block absorbs** (weapon takes degradation damage)
@@ -575,3 +652,6 @@ Test scenarios:
 17. **Per-damage-type defense** - Parry, block, and armor challenges vary by damage type
 18. **Message rendering via JS override** - Equipment/combatants can customize all combat messages
 19. **Observer-aware messages** - First/second/third person based on who's observing
+20. **Body-part equipment slots** - Each body part defines what can be equipped there; armor only protects the body part it's on
+21. **Slot-based weapons** - Weapons specify slot type and count needed; multi-slot weapons occupy multiple body parts
+22. **Body-part unarmed attacks** - Each body part can define its own unarmed damage (fists, claws, kicks, bites)
