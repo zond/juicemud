@@ -175,10 +175,17 @@ type Connection struct {
 	ctx  context.Context // Derived from sess.Context(), updated with session ID and authenticated user
 }
 
-// func (c *Connection) Linebreak(s string) string {
-// 	result := &bytes.Buffer{}
+const defaultTermWidth = 80
 
-// }
+// TermWidth returns the terminal width in columns.
+// Falls back to defaultTermWidth if PTY info is unavailable.
+func (c *Connection) TermWidth() int {
+	pty, _, ok := c.sess.Pty()
+	if !ok || pty.Window.Width <= 0 {
+		return defaultTermWidth
+	}
+	return pty.Window.Width
+}
 
 func (c *Connection) SelectExec(options map[string]func() error) error {
 	commandNames := make(sort.StringSlice, 0, len(options))
@@ -945,9 +952,10 @@ func (c *Connection) createUser() error {
 			if err != nil {
 				return err
 			}
-			if selection == "abort" {
+			switch selection {
+			case "abort":
 				return juicemud.WithStack(ErrOperationAborted)
-			} else if selection == "y" {
+			case "y":
 				hash, err := hashPassword(password)
 				if err != nil {
 					return juicemud.WithStack(err)
