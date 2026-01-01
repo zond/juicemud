@@ -8,6 +8,7 @@ A flexible, wizard-configurable combat system that:
 - Implements N-to-M combat (can fight multiple targets who may not fight back)
 - Keeps most logic in Go to minimize JS execution
 - Is fully wizard-configurable (skills, weapons, armor, damage types)
+- Supports optional JS override for all combat messages
 
 ## Design Principles
 
@@ -15,6 +16,7 @@ A flexible, wizard-configurable combat system that:
 2. **Go-heavy logic**: Combat calculations in Go, JS only for events/customization
 3. **Wizard-configurable**: All weapons, armor, damage types defined via configs
 4. **Equipment degradation**: Both armor and weapons have health that affects efficacy
+5. **Message customization**: All combat messages support optional JS override with Go defaults
 
 ---
 
@@ -68,13 +70,17 @@ type StatusEffect struct {
 }
 ```
 
-Access to StatusEffects lazily removes expired ones. When removed (expired or explicitly), emits `statusExpired` event. When applied, emits `statusApplied` event.
+**Expiry behavior:**
+- All status effects are checked lazily on access (e.g., `GetStatusEffects()`)
+- Effects with tick intervals are ALSO checked at each tick
+- When expired (by lazy check or tick), emit `statusExpired` and clear any interval
+- When applied, emit `statusApplied`
 
 ### StatusEffectConfig
 
 ```go
 type StatusEffectConfig struct {
-    Name        string
+    ID          string
     Description string
 
     // Modifiers applied while active (used in combat calculations)
@@ -94,7 +100,7 @@ Defines body structure - what parts can be targeted, their modifiers.
 
 ```go
 type BodyConfig struct {
-    Name        string  // "humanoid", "quadruped", "serpent", etc.
+    ID          string  // "humanoid", "quadruped", "serpent", etc.
     Description string
 
     Parts []BodyPart
@@ -102,7 +108,7 @@ type BodyConfig struct {
 }
 
 type BodyPart struct {
-    Name             string   // "head", "torso", "leftArm", "tail", etc.
+    ID               string   // "head", "torso", "leftArm", "tail", etc.
     HitModifier      float64  // Added to accuracy challenge (head = +20, harder to hit)
     DamageMultiplier float64  // Damage multiplier (head = 1.5x)
     CritBonus        float64  // Added to crit chance
@@ -116,7 +122,7 @@ Stances with skill challenges - players can improve at using stances.
 
 ```go
 type StanceConfig struct {
-    Name        string  // "aggressive", "defensive", "evasive"
+    ID          string  // "aggressive", "defensive", "evasive"
     Description string
 
     // Modifiers to combat
@@ -137,7 +143,7 @@ Uses existing `Challenges` type (`[]Challenge`) for skill checks. Each Challenge
 
 ```go
 type WeaponConfig struct {
-    Name        string
+    ID          string
     Description string
 
     // Damage by type (e.g., {"physical": 10, "fire": 5} = 10 physical + 5 fire damage)
@@ -149,42 +155,50 @@ type WeaponConfig struct {
     AccuracyChallenges Challenges  // For hit chance
     DamageChallenges   Challenges  // For damage bonus
 
-    // Defense capabilities
-    CanParry          bool        // Can redirect attacks (no damage)
-    CanBlock          bool        // Can absorb damage (weapon takes damage)
-    ParryChallenges   Challenges  // Skill challenges for parry
-    BlockChallenges   Challenges  // Skill challenges for block
+    // Defense capabilities (per damage type - e.g., shield blocks physical well, not fire)
+    CanParry          bool                    // Can redirect attacks (no damage)
+    CanBlock          bool                    // Can absorb damage (weapon takes damage)
+    ParryChallenges   map[string]Challenges   // damage type -> skill challenges for parry
+    BlockChallenges   map[string]Challenges   // damage type -> skill challenges for block
 
-    // Durability
-    MaxHealth float64  // Weapon durability (0 = indestructible)
+    // Durability (0 = indestructible)
+    MaxHealth       float64  // Maximum weapon health
+    DegradationRate float64  // Multiplier for damage taken when blocking (e.g., 0.1 = 10% of blocked damage)
 }
 ```
+
+**Broken weapons:** When weapon health reaches 0, the weapon is useless - it cannot deal damage, parry, or block. It remains equipped but non-functional until repaired.
 
 ### ArmorConfig
 
 ```go
 type ArmorConfig struct {
-    Name        string
+    ID          string
     Description string
 
-    // Protection: damage type -> base reduction ratio
+    // Protection per damage type: damage type -> base reduction ratio
+    // e.g., {"physical": 0.5, "fire": 0.1} = 50% physical reduction, 10% fire reduction
     BaseReduction map[string]float64
 
-    // Skill challenges (use existing Challenges type)
-    ArmorChallenges Challenges  // Skills affecting armor effectiveness
+    // Skill challenges per damage type (affects armor effectiveness)
+    // e.g., {"physical": [{Skill: "heavyArmor", Level: 10}]}
+    ArmorChallenges map[string]Challenges
 
-    // Durability
-    MaxHealth float64
+    // Durability (0 = indestructible)
+    MaxHealth       float64  // Maximum armor health
+    DegradationRate float64  // Multiplier for damage taken (e.g., 0.05 = 5% of soaked damage)
 
-    // Efficacy = baseReduction * (currentHealth / maxHealth)
+    // Efficacy = baseReduction * armorChallengeResult * (currentHealth / maxHealth)
 }
 ```
+
+**Broken armor:** When armor health reaches 0, the armor provides no protection. It remains equipped but non-functional until repaired.
 
 ### DamageTypeConfig
 
 ```go
 type DamageTypeConfig struct {
-    Name        string  // "physical", "fire", "ice", etc.
+    ID          string  // "physical", "fire", "ice", etc.
     Description string
 }
 ```
@@ -196,11 +210,11 @@ type CombatConfig struct {
     MinAttackInterval time.Duration  // e.g., 1s
     MaxAttackInterval time.Duration  // e.g., 10s
 
-    // Base challenges for defense (added to weapon-specific challenges)
+    // Base challenges for dodge step of defense
     DodgeChallenges Challenges  // e.g., [{Skill: "agility", Level: 5}]
 
     // Critical hits
-    BaseCritChance     float64  // e.g., 0.05 (5%)
+    BaseCritChance       float64  // e.g., 0.05 (5%)
     CritDamageMultiplier float64  // e.g., 2.0
 }
 ```
@@ -216,14 +230,14 @@ type ServerConfig struct {
     Spawn struct {
         Container string
     }
-    SkillConfigs       map[string]SkillConfig
-    WeaponConfigs      map[string]WeaponConfig
-    ArmorConfigs       map[string]ArmorConfig
-    BodyConfigs        map[string]BodyConfig
-    StanceConfigs      map[string]StanceConfig
+    SkillConfigs        map[string]SkillConfig
+    WeaponConfigs       map[string]WeaponConfig
+    ArmorConfigs        map[string]ArmorConfig
+    BodyConfigs         map[string]BodyConfig
+    StanceConfigs       map[string]StanceConfig
     StatusEffectConfigs map[string]StatusEffectConfig
-    DamageTypes        map[string]DamageTypeConfig
-    CombatConfig       CombatConfig
+    DamageTypes         map[string]DamageTypeConfig
+    CombatConfig        CombatConfig
 }
 ```
 
@@ -242,49 +256,66 @@ Each config type has a corresponding in-memory store (like `SkillConfigs`) that 
 2. **Schedule Attack**: Go calculates next attack time via weapon speed skill check
 3. **Attack Resolution**: When timeout fires:
    - Check still in combat
-   - Roll accuracy (hit check)
+   - Check weapon not broken (health > 0)
+   - Roll accuracy and crit
    - If hit, run defense chain
    - Apply damage
    - Schedule next attack
 4. **End Combat**: `stopCombat(targetID)` or incapacitation
 
-### Defense Chain (Comparative)
+### Attack Resolution (Detailed)
 
-Attacker's **to-hit result** is compared against each defense result. Stance and status effect modifiers are applied.
+Attacker's **to-hit result** is compared against each defense result. Stance and status effect modifiers are applied throughout.
 
-1. **Accuracy Check**:
+1. **Weapon Check**:
+   - If attacker's weapon health = 0, attack fails (broken weapon)
+
+2. **Accuracy Check**:
    - Attacker rolls `AccuracyChallenges.Check()`
    - Add body part's `HitModifier` (targeting head is harder)
    - Add stance's `AccuracyModifier`
    - Add status effect modifiers
    - -> `hitScore`
 
-2. **Dodge**:
+3. **Critical Check** (determined early, applied later if attack lands):
+   - Roll against `BaseCritChance + bodyPart.CritBonus`
+   - Store `isCrit` flag for later
+
+4. **Dodge**:
    - Defender rolls `DodgeChallenges.Check()`
    - Add stance's `DodgeModifier`
    - Add status effect modifiers
    - -> if `dodgeScore > hitScore`, attack misses entirely
 
-3. **Parry** (if weapon.CanParry):
-   - Defender rolls `ParryChallenges.Check()`
+5. **Parry** (if weapon.CanParry and weapon health > 0):
+   - For each damage type in attack, check `ParryChallenges[damageType]`
+   - Defender rolls parry challenges
    - Add stance's `ParryModifier`
-   - -> if `parryScore > hitScore`, redirects, no damage
+   - -> if `parryScore > hitScore`, attack is parried, no damage
 
-4. **Block** (if weapon.CanBlock):
-   - Defender rolls `BlockChallenges.Check()`
+6. **Block** (if weapon.CanBlock and weapon health > 0):
+   - For each damage type in attack, check `BlockChallenges[damageType]`
+   - Defender rolls block challenges
    - Add stance's `BlockModifier`
-   - -> if `blockScore > hitScore`, weapon absorbs damage
+   - -> if `blockScore > hitScore`, attack is blocked:
+     - Damage is negated
+     - Blocking weapon takes degradation: `weaponDamage = blockedDamage * weapon.DegradationRate`
 
-5. **Critical Check**:
-   - Roll against `BaseCritChance + bodyPart.CritBonus`
-   - If crit, apply `CritDamageMultiplier`
+7. **Armor Soak** (if armor health > 0):
+   - For each damage type, reduce by armor's reduction
+   - Apply armor skill challenge result from `ArmorChallenges[damageType]`
+   - Apply degradation: `actualReduction = baseReduction * challengeResult * (armorHealth / armorMaxHealth)`
+   - Armor takes degradation: `armorDamage = soakedDamage * armor.DegradationRate`
 
-6. **Armor Soak**:
-   - Reduce damage by armor's reduction for each damage type
-   - Apply degradation: `actualReduction = baseReduction * (armorHealth / armorMaxHealth)`
+8. **Critical Multiplier**:
+   - If `isCrit` (from step 3), apply `CritDamageMultiplier` to remaining damage
 
-7. **Body Part Damage Multiplier**:
+9. **Body Part Damage Multiplier**:
    - Apply `bodyPart.DamageMultiplier` to final damage
+
+10. **Apply Damage**:
+    - Reduce defender's Health
+    - If Health <= 0, emit `death` event
 
 ### Attack Timing
 
@@ -304,6 +335,78 @@ func calculateAttackInterval(attacker *Object, weapon *WeaponConfig, config *Com
     )
     return interval
 }
+```
+
+---
+
+## Message Rendering
+
+All combat messages support optional JS override. Go provides default messages, but equipment and combatants can customize them via callbacks.
+
+### Message Ownership
+
+| Event | Renderer Object | Rationale |
+|-------|-----------------|-----------|
+| `renderAttack` | Attacker's **weapon** | Weapon knows its attack style |
+| `renderMiss` | Attacker's **weapon** | "Your sword swings wide" |
+| `renderDodge` | **Defender** | Defender knows their dodge style |
+| `renderParry` | Defender's **weapon** | Weapon did the parrying |
+| `renderBlock` | Defender's **weapon** | Weapon did the blocking |
+| `renderDamageDealt` | Attacker's **weapon** | "Your blade cuts deep" |
+| `renderDamageReceived` | **Defender** | "Pain sears through you" |
+| `renderArmorSoak` | Defender's **armor** | Armor knows its protection style |
+| `renderCrit` | Attacker's **weapon** | Weapon knows its crit flavor |
+| `renderDeath` | **Dying object** | They know their death style |
+| `renderStatusApplied` | **Affected object** | "You feel poisoned" |
+| `renderStatusTick` | **Affected object** | "The poison burns" |
+| `renderStatusExpired` | **Affected object** | "The poison fades" |
+
+### Rendering Chain
+
+1. Identify renderer object (weapon, armor, or combatant per table above)
+2. Check for `render<EventType>` callback with `emit` tag
+3. If callback exists and returns `{Message: "..."}`, use it
+4. Otherwise use Go default message
+
+### Observer Perspective
+
+Each message is rendered per-observer, allowing first/second/third person variants:
+- "You hit the goblin" (observer = attacker)
+- "The warrior hits you" (observer = defender)
+- "The warrior hits the goblin" (observer = bystander)
+
+### Example: Flaming Sword
+
+```javascript
+// On a flaming sword weapon object:
+addCallback('renderDamageDealt', ['emit'], (req) => {
+    if (req.Observer === req.Attacker) {
+        return {Message: 'Your flaming blade sears ' + req.DefenderName + '!'};
+    } else if (req.Observer === req.Defender) {
+        return {Message: 'The flaming sword burns into your flesh!'};
+    } else {
+        return {Message: req.AttackerName + "'s flaming blade sears " + req.DefenderName + '!'};
+    }
+});
+
+addCallback('renderCrit', ['emit'], (req) => {
+    return {Message: 'The flames explode in a devastating strike!'};
+});
+```
+
+### Example: Status Effect on Creature
+
+```javascript
+// On a creature that can be poisoned:
+addCallback('renderStatusApplied', ['emit'], (req) => {
+    if (req.ConfigID !== 'poison') return null;  // Let Go handle other effects
+
+    if (req.Observer === getId()) {
+        return {Message: 'Venom courses through your veins!'};
+    } else {
+        return {Message: getName() + ' looks sickly as poison takes hold.'};
+    }
+});
 ```
 
 ---
@@ -341,12 +444,13 @@ Key behaviors:
 - **Tick interval handler**: On each tick, first check if effect has expired
   - If expired: remove status effect, clear interval, emit `statusExpired`
   - If not expired: emit `statusTick`, reschedule next tick
+- **Lazy + tick**: All effects checked lazily on access; ticking effects also checked at each tick
 
 ### Phase 3: Combat Core
 
 | File | Changes |
 |------|---------|
-| `game/combat.go` | Combat logic, attack resolution, defense chain |
+| `game/combat.go` | Combat logic, attack resolution, defense chain, message rendering |
 
 Key functions:
 - `startCombat(attackerID, targetID)`
@@ -355,6 +459,7 @@ Key functions:
 - `resolveAttack(attacker, target, bodyPart)` - full defense chain with modifiers
 - `calculateModifiers(object)` - sum stance + status effect modifiers
 - `applyDamage(target, amount, types, bodyPart)`
+- `renderCombatMessage(eventType, renderer, observer, data)` - JS override pattern
 
 ### Phase 4: JS API
 
@@ -374,6 +479,7 @@ Key functions:
 **Equipment:**
 - `equipWeapon(objectID)` / `equipArmor(objectID)`
 - `unequipWeapon()` / `unequipArmor()`
+- `getWeaponHealth()` / `getArmorHealth()` - check equipment condition
 
 **Stance:**
 - `setStance(stanceConfigID)` / `getStance()`
@@ -385,6 +491,7 @@ Key functions:
 **JS events emitted:**
 - Combat: `attackHit`, `attackMissed`, `parried`, `blocked`, `damaged`, `death`, `criticalHit`
 - Status: `statusApplied`, `statusExpired`, `statusTick`
+- Render (for message customization): `renderAttack`, `renderMiss`, `renderDodge`, `renderParry`, `renderBlock`, `renderDamageDealt`, `renderDamageReceived`, `renderArmorSoak`, `renderCrit`, `renderDeath`, `renderStatusApplied`, `renderStatusTick`, `renderStatusExpired`
 
 ### Phase 5: Look Output Enhancement
 
@@ -405,12 +512,12 @@ Body: humanoid (head, torso, arms, legs)
 | `game/wizcommands.go` | Config management commands |
 
 Commands:
-- `/weaponconfig [name] [field] [value]`
-- `/armorconfig [name] [field] [value]`
-- `/bodyconfig [name] [field] [value]`
-- `/stanceconfig [name] [field] [value]`
-- `/statusconfig [name] [field] [value]`
-- `/damagetype [name] [description]`
+- `/weaponconfig [id] [field] [value]`
+- `/armorconfig [id] [field] [value]`
+- `/bodyconfig [id] [field] [value]`
+- `/stanceconfig [id] [field] [value]`
+- `/statusconfig [id] [field] [value]`
+- `/damagetype [id] [description]`
 - `/combatconfig [field] [value]`
 
 ### Phase 7: Integration & Tests
@@ -426,18 +533,24 @@ Test scenarios:
 - Status effects applying and expiring
 - Status effect ticking
 - Equipment degradation
+- Broken equipment behavior
 - Critical hits
+- Message rendering with JS override
+- Message rendering with Go defaults
 
 ---
 
 ## Edge Cases
 
 1. **Target moves**: Continue if reachable, stop if not
-2. **Equipment destroyed**: Auto-unequip, continue unarmed/unarmored
+2. **Equipment destroyed**: Weapon/armor at 0 health becomes non-functional but stays equipped
 3. **Multiple attackers**: Each has independent combat cycle
 4. **Self-attack**: Prevent
 5. **Dead target**: Stop combat, emit event
 6. **Server restart**: Recover from CombatTargets, reschedule attacks
+7. **No weapon equipped**: Use unarmed defaults (fists - physical damage, no parry/block)
+8. **No armor equipped**: No soak, full damage taken
+9. **Damage type not in parry/block/armor map**: No defense against that type
 
 ---
 
@@ -445,16 +558,20 @@ Test scenarios:
 
 1. **Attack skills have no recharge** - Weapon speed skill check controls timing
 2. **Comparative defense** - Attacker's hit score compared against each defense score (dodge > hit = dodged)
-3. **Defense chain is sequential** - Dodge -> Parry -> Block -> Armor soak -> Crit check -> Body part multiplier
-4. **Parry redirects** (no damage), **Block absorbs** (weapon takes damage)
-5. **Equipment degrades** - Efficacy = base * (current/max health)
-6. **Death just emits event** - JS handles respawn/loot/etc.
-7. **Use timeouts, not intervals** - Variable timing based on skill checks
-8. **Use existing Challenges type** - Leverages existing skill system infrastructure
-9. **Status effects are lazy** - Expiry checked on access, not via timers
-10. **Status effects emit events** - `statusApplied`, `statusExpired`, `statusTick`
-11. **Optional timeout = permanent** - Implants are just status effects with no expiry
-12. **Body configs define targetable parts** - Each body plan has different hit zones
-13. **Stances have skill challenges** - Players can improve at using stances
-14. **All configs persist in ServerConfig** - Same pattern as SkillConfigs
-15. **Look shows body plan** - Visible body parts when examining creatures
+3. **Defense chain is sequential** - Dodge -> Parry -> Block -> Armor soak -> Body part multiplier
+4. **Crit determined early** - Crit check happens after accuracy, before defense chain; multiplier applied at end if attack lands
+5. **Parry redirects** (no damage), **Block absorbs** (weapon takes degradation damage)
+6. **Equipment degrades** - Efficacy = base * (current/max health); broken equipment is useless
+7. **Death just emits event** - JS handles respawn/loot/etc.
+8. **Use timeouts, not intervals** - Variable timing based on skill checks
+9. **Use existing Challenges type** - Leverages existing skill system infrastructure
+10. **Status effects: lazy + tick** - All effects checked lazily on access; ticking effects also checked at each tick
+11. **Status effects emit events** - `statusApplied`, `statusExpired`, `statusTick`
+12. **Optional timeout = permanent** - Implants are just status effects with no expiry
+13. **Body configs define targetable parts** - Each body plan has different hit zones
+14. **Stances have skill challenges** - Players can improve at using stances
+15. **All configs persist in ServerConfig** - Same pattern as SkillConfigs
+16. **Look shows body plan** - Visible body parts when examining creatures
+17. **Per-damage-type defense** - Parry, block, and armor challenges vary by damage type
+18. **Message rendering via JS override** - Equipment/combatants can customize all combat messages
+19. **Observer-aware messages** - First/second/third person based on who's observing
