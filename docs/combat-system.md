@@ -12,7 +12,7 @@ A flexible, wizard-configurable combat system that:
 
 ## Design Principles
 
-1. **Leverage existing systems**: Use SkillConfig pattern, Challenge.Check(), timeouts
+1. **Leverage existing systems**: Use SkillConfig pattern, Challenge.Check()
 2. **Go-heavy logic**: Combat calculations in Go, JS only for events/customization
 3. **Wizard-configurable**: All weapons, armor, damage types defined via configs
 4. **Equipment degradation**: Both armor and weapons have health that affects efficacy
@@ -43,9 +43,8 @@ type ObjectDO struct {
     // e.g., {"rightArm.weapon": "greatsword1", "leftArm.weapon": "greatsword1"}
     Equipment map[string]string
 
-    // Body part health: bodyPartID -> current health (only for objects with BodyConfigID)
-    // At 0, body part is disabled and cannot attack or defend
-    BodyPartHealth map[string]float64
+    // Body part state: bodyPartID -> state (only for objects with BodyConfigID)
+    BodyParts map[string]BodyPartState
 
     // Body and stance (reference global configs)
     BodyConfigID   string  // References BodyConfig (humanoid, quadruped, etc.)
@@ -58,6 +57,22 @@ type ObjectDO struct {
 
     // Status effects (lazily cleaned on access)
     StatusEffects []StatusEffect
+
+    // Cover properties (default 0 = not useful as cover)
+    CoverAbsorption      float64  // 0-1, damage absorbed when used as cover
+    CoverAccuracyPenalty float64  // Accuracy penalty to hit someone behind this
+
+    // Cover state (for combatants)
+    InCoverBehind string  // Object ID providing cover (empty = no cover)
+
+    // Ranged weapon state (for weapon objects)
+    CurrentAmmo    int     // Rounds in magazine
+    LoadedAmmoType string  // Which AmmoConfig currently loaded
+    Jammed         bool    // Weapon is jammed
+
+    // Aiming state (for combatants)
+    AimingAt    string     // Target object ID being aimed at
+    AimingSince time.Time  // When aiming started (zero = not aiming); bonus computed lazily
 }
 ```
 
@@ -83,6 +98,28 @@ type StatusEffect struct {
 - When expired (by lazy check or tick), emit `statusExpired` and clear any interval
 - When applied, emit `statusApplied`
 
+### BodyPartState
+
+Tracks the current state of each body part on an object.
+
+```go
+type BodyPartState struct {
+    Health  float64  // Current health; at 0 = disabled
+    Severed bool     // If true, body part has been permanently removed
+}
+```
+
+**Severing mechanics:**
+- A body part can be severed when damage would reduce health significantly below 0 (overkill)
+- Only certain damage types can sever: `slashing`, `piercing` (not `bludgeoning`, `fire`, etc.)
+- Threshold: If `finalDamage > bodyPart.MaxHealth * SeverThreshold` and health was already low
+- When severed:
+  - Emit `bodyPartSevered` event (different from `bodyPartDisabled`)
+  - Any equipment in that body part's slots drops to the ground
+  - The severed body part itself can drop as an object (for gruesome trophies or reattachment)
+- Severed parts cannot be healed normally - requires surgical reattachment or magical regeneration
+- A severed part is also implicitly disabled (can't attack/defend with what isn't there)
+
 ### StatusEffectConfig
 
 ```go
@@ -98,8 +135,24 @@ type StatusEffectConfig struct {
 
     // Whether this is removable (implants might not be)
     Permanent bool  // If true, no ExpiresAt is set when applied
+
+    // Movement control (actualDelay = baseDelay / SpeedFactor)
+    SpeedFactor     float64  // 0=immobile, 0.5=half speed, 1=normal, 2=double speed
+    PreventsActions bool     // Can't attack, use items, etc. (stunned)
 }
 ```
+
+**SpeedFactor examples:**
+| Effect | SpeedFactor | PreventsActions | Notes |
+|--------|-------------|-----------------|-------|
+| stunned | 0 | true | Can't do anything |
+| rooted | 0 | false | Can't move, can still fight |
+| prone | 0 | false | Must stand up first |
+| slowed | 0.5 | false | Half speed (double delay) |
+| wading | 0.67 | false | Waist-deep water |
+| deep_mud | 0.4 | false | Very slow |
+| hasted | 2.0 | false | Double speed (half delay) |
+| crippled_leg | 0.55 | false | Injured limb |
 
 ### BodyConfig
 
@@ -112,6 +165,10 @@ type BodyConfig struct {
 
     Parts       []BodyPart
     DefaultPart string  // Which part is targeted by default ("torso")
+
+    // Cover properties (used when taking cover behind creatures with this body type)
+    CoverAbsorption      float64  // 0-1, damage absorbed
+    CoverAccuracyPenalty float64  // Accuracy penalty to hit someone behind this body
 }
 
 type BodyPart struct {
@@ -246,9 +303,8 @@ type WeaponConfig struct {
     ParryChallenges   map[string]Challenges   // damage type -> skill challenges for parry (redirect, no damage)
     BlockChallenges   map[string]Challenges   // damage type -> skill challenges for block (absorb, weapon takes damage)
 
-    // Durability (0 = indestructible)
-    MaxHealth       float64  // Maximum weapon health
-    DegradationRate float64  // Multiplier for damage taken when blocking (e.g., 0.1 = 10% of blocked damage)
+    // Durability (0 = indestructible; blocking damage is 1:1)
+    MaxHealth float64  // Maximum weapon health
 }
 ```
 
@@ -284,9 +340,8 @@ type ArmorConfig struct {
     // e.g., {"physical": [{Skill: "heavyArmor", Level: 10}]}
     ArmorChallenges map[string]Challenges
 
-    // Durability (0 = indestructible)
-    MaxHealth       float64  // Maximum armor health
-    DegradationRate float64  // Multiplier for damage taken (e.g., 0.05 = 5% of soaked damage)
+    // Durability (0 = indestructible; absorbed damage is 1:1)
+    MaxHealth float64  // Maximum armor health
 
     // Efficacy = baseReduction * armorChallengeResult * (currentHealth / maxHealth)
 }
@@ -300,8 +355,13 @@ type ArmorConfig struct {
 
 ```go
 type DamageTypeConfig struct {
-    ID          string  // "physical", "fire", "ice", etc.
+    ID          string  // "slashing", "piercing", "bludgeoning", "fire", etc.
     Description string
+
+    // Wound effects
+    CanSever       bool  // Can this damage type sever body parts? (slashing, piercing = yes; bludgeoning, fire = no)
+    CanCauseBleeding bool  // Does this damage type cause bleeding wounds? (slashing, piercing = yes)
+    BleedingSeverity float64  // Multiplier for bleeding intensity (0 = none, 1 = normal, 2 = severe)
 }
 ```
 
@@ -318,6 +378,18 @@ type CombatConfig struct {
     // Critical hits
     BaseCritChance       float64  // e.g., 0.05 (5%)
     CritDamageMultiplier float64  // e.g., 2.0
+
+    // Severing
+    SeverThreshold float64  // Overkill multiplier to sever (e.g., 1.5 = 150% of max body part health as overkill)
+    SeverCritBonus float64  // Bonus to sever chance on critical hits (e.g., 0.5 = +50% threshold reduction)
+
+    // Bleeding
+    BleedingThresholds []BleedingThreshold  // Damage thresholds that trigger bleeding
+}
+
+type BleedingThreshold struct {
+    DamagePercent   float64  // % of max health as damage to trigger (e.g., 0.1 = 10% of max health)
+    StatusEffectID  string   // Which bleeding status effect to apply (e.g., "bleeding_light")
 }
 ```
 
@@ -334,12 +406,15 @@ type ServerConfig struct {
     }
     SkillConfigs        map[string]SkillConfig
     WeaponConfigs       map[string]WeaponConfig
+    RangedWeaponConfigs map[string]RangedWeaponConfig
+    AmmoConfigs         map[string]AmmoConfig
     ArmorConfigs        map[string]ArmorConfig
     BodyConfigs         map[string]BodyConfig
     StanceConfigs       map[string]StanceConfig
     StatusEffectConfigs map[string]StatusEffectConfig
     DamageTypes         map[string]DamageTypeConfig
     CombatConfig        CombatConfig
+    MovementConfig      MovementConfig
 }
 ```
 
@@ -354,9 +429,11 @@ Each config type has a corresponding in-memory store (like `SkillConfigs`) that 
 
 ### Attack Cycle
 
+Combat timing uses simple goroutines with sleep (no queue persistence needed - combat doesn't survive server restarts).
+
 1. **Initiate Combat**: `startCombat(targetID)` in JS
-2. **Schedule Attack**: Go calculates next attack time via weapon speed skill check
-3. **Attack Resolution**: When timeout fires:
+2. **Schedule Attack**: Go spawns goroutine that sleeps for attack interval (calculated via weapon speed skill check)
+3. **Attack Resolution**: When goroutine wakes:
    - Check still in combat
    - Check weapon not broken (health > 0)
    - Roll accuracy and crit
@@ -412,7 +489,7 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
      - Add stance's `BlockModifier`
      - If `blockScore > hitScore`, that damage type is blocked:
        - Damage for that type is negated
-       - If using weapon: weapon takes degradation: `weaponDamage += blockedAmount * weapon.DegradationRate`
+       - If using weapon: weapon takes damage equal to blocked amount
        - If unarmed: blocking body part takes damage instead (natural armor absorbs hits)
    - Damage types without block challenges or failed blocks continue to next step
 
@@ -421,9 +498,9 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - If no armor on that body part, or armor health = 0, skip to next step
    - For each remaining (unparried, unblocked) damage type:
      - If `ArmorChallenges[damageType]` exists, apply armor skill challenge
-     - Reduce by armor's `BaseReduction[damageType]`
-     - Apply degradation: `actualReduction = baseReduction * challengeResult * (armorHealth / armorMaxHealth)`
-     - Armor takes degradation: `armorDamage += soakedAmount * armor.DegradationRate`
+     - Calculate reduction: `reduction = baseReduction * challengeResult * (armorHealth / armorMaxHealth)`
+     - Reduce damage by that amount
+     - Armor takes damage equal to absorbed amount (1:1)
    - Damage types not in armor's BaseReduction pass through fully
 
 8. **Critical Multiplier**:
@@ -433,8 +510,18 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Apply `bodyPart.DamageMultiplier` to final damage
 
 10. **Apply Damage** (to both body part and central health):
-    - Reduce hit body part's health (`BodyPartHealth[bodyPartID]`)
-    - If body part health <= 0, body part is **disabled** (emit `bodyPartDisabled` event)
+    - Reduce hit body part's health (`BodyParts[bodyPartID].Health`)
+    - **Severing check**: If damage type has `CanSever` AND body part health went below 0:
+      - Calculate overkill: `overkill = abs(newHealth)`
+      - If `overkill > bodyPart.MaxHealth * SeverThreshold` (reduced by `SeverCritBonus` on crit):
+        - Set `BodyParts[bodyPartID].Severed = true`
+        - Drop equipped items from that body part
+        - Optionally create severed body part object
+        - Emit `bodyPartSevered` event
+      - Else: body part is **disabled** (emit `bodyPartDisabled` event)
+    - **Bleeding check**: If damage type has `CanCauseBleeding`:
+      - Calculate `damagePercent = finalDamage / defender.MaxHealth`
+      - Apply highest matching `BleedingThreshold` status effect (scaled by `BleedingSeverity`)
     - Reduce defender's central `Health` by same amount
     - If central Health <= 0, emit `death` event
 
@@ -534,6 +621,495 @@ addCallback('renderStatusApplied', ['emit'], (req) => {
 
 ---
 
+## Wound System
+
+Combat can inflict persistent wounds via status effects.
+
+### Bleeding
+
+Caused by damage types with `CanCauseBleeding: true`. Bleeding naturally **heals over time** (clotting).
+
+**Example configs:**
+```go
+"bleeding_light":    {TickInterval: 10s, /* 1-2 dmg/tick, heals in ~2min */}
+"bleeding_moderate": {TickInterval: 5s,  ChallengeModifiers: {"accuracy": -5}}
+"bleeding_severe":   {TickInterval: 3s,  ChallengeModifiers: {"accuracy": -10, "dodge": -10}}
+```
+
+**Natural healing:** Bleeding downgrades over time: severe → moderate → light → healed. Medical treatment stops it immediately.
+
+---
+
+## Environmental Effects
+
+Rooms apply status effects to all occupants.
+
+```go
+// On room ObjectDO
+RoomStatusEffects []string  // StatusEffectConfig IDs applied while in room
+```
+
+Effects are applied on entry, removed on exit. Covers combat modifiers, environmental damage, movement penalties, and damage type modifiers (e.g., underwater nullifies fire).
+
+---
+
+## Ranged Combat
+
+Guns, bows, and other ranged weapons. Final damage combines weapon and ammunition.
+
+### RangedWeaponConfig
+
+```go
+type RangedWeaponConfig struct {
+    ID          string
+    Description string
+
+    // Slot requirements
+    SlotType      string  // "weapon"
+    SlotsRequired int     // 1 = pistol, 2 = rifle/bow
+
+    // Range (0 = same room only, 1 = can shoot into adjacent room)
+    MaxRange     int      // Most weapons: 0; rifles: 1
+    RangePenalty float64  // Accuracy penalty when shooting into adjacent room
+
+    // Point blank modifier (applies when in active melee combat with target)
+    // Shotguns/pistols are good up close (+), rifles are awkward (-)
+    PointBlankModifier float64
+
+    // Weapon's damage contribution (added to ammo damage)
+    // For bows: represents draw strength. For guns: usually empty.
+    DamageTypes      map[string]float64
+    DamageChallenges Challenges
+
+    // Skill challenges
+    AccuracyChallenges Challenges
+    FireRateChallenges Challenges
+    MinFireInterval    time.Duration
+    MaxFireInterval    time.Duration
+
+    // Ammunition
+    MagazineSize     int
+    ReloadChallenges Challenges  // Skill reduces reload time
+    BaseReloadTime   time.Duration
+    MinReloadTime    time.Duration
+    CompatibleAmmo   []string  // Which AmmoConfig IDs this weapon can use
+
+    // Fire modes
+    FireModes []FireModeConfig
+
+    // Reliability (all skill-based)
+    JamChallenges   Challenges  // Higher skill = less jamming
+    UnjamChallenges Challenges  // Higher skill = faster unjam
+    BaseUnjamTime   time.Duration
+    MinUnjamTime    time.Duration
+
+    // Durability (0 = indestructible)
+    MaxHealth float64
+}
+
+type FireModeConfig struct {
+    ID               string   // "single", "burst", "auto"
+    ShotsPerTrigger  int      // 1, 3, ~10
+    AccuracyModifier float64  // 0, -15, -40
+    AmmoPerTrigger   int      // Usually = ShotsPerTrigger
+    Description      string
+}
+```
+
+### AmmoConfig
+
+```go
+type AmmoConfig struct {
+    ID          string
+    Description string
+
+    // Ammo's damage contribution (added to weapon damage)
+    DamageTypes      map[string]float64  // e.g., {"piercing": 15}
+    DamageChallenges Challenges
+
+    // Armor interaction
+    ArmorPenetration float64  // 0-1, reduces armor effectiveness
+
+    // Wound effects
+    CanCauseBleeding bool
+    BleedingSeverity float64
+
+    // Special effects
+    StatusEffectID     string   // e.g., "burning" for incendiary
+    StatusEffectChance float64
+}
+```
+
+### Damage Calculation
+
+Final damage = weapon damage + ammo damage (per type):
+
+```go
+// Bow (draw strength) + Arrow
+weapon.DamageTypes: {"piercing": 5}   // Strong bow
+ammo.DamageTypes:   {"piercing": 10}  // Broadhead arrow
+total:              {"piercing": 15}
+
+// Gun (no base damage) + Bullet
+weapon.DamageTypes: {}                 // Gun adds no damage
+ammo.DamageTypes:   {"piercing": 20}   // 9mm round
+total:              {"piercing": 20}
+```
+
+### Range Model
+
+Simple room-based range:
+- **MaxRange 0:** Same room only (pistols, shotguns, SMGs)
+- **MaxRange 1:** Same room + adjacent room through any traversable exit (rifles, bows)
+
+No exit configuration needed. If an exit can be walked through, it can be shot through.
+
+### Point Blank
+
+"Point blank" means **in active melee combat** with the target:
+- Target has you in their CombatTargets AND is using melee weapons/unarmed, OR
+- You have target in your CombatTargets AND are using melee weapons/unarmed
+
+When point blank, PointBlankModifier applies:
+- Shotgun (+25): Devastating at arm's length
+- Pistol (0): Handles close quarters fine
+- Rifle (-15): Awkward, barrel too long
+- Sniper (-40): Nearly impossible to aim
+
+### Aiming
+
+Aiming improves accuracy over time. Bonus computed lazily from `AimingSince`:
+
+```go
+func getAimBonus(shooter *Object, config *CombatConfig) float64 {
+    if shooter.AimingSince.IsZero() {
+        return 0
+    }
+    elapsed := time.Since(shooter.AimingSince)
+    bonus := elapsed.Seconds() * config.AimBonusPerSecond
+    return math.Min(bonus, config.MaxAimBonus)
+}
+```
+
+**Aim is broken by:** taking damage, moving, target moving rooms, being grappled, shooting.
+
+### Jam Mechanics
+
+Jamming is skill-based, not random chance:
+
+```go
+// Jam check per shot (modified by weapon health)
+healthPenalty := (1 - weapon.Health/weapon.MaxHealth) * 50
+jamResult := weapon.JamChallenges.Check(shooter) - healthPenalty
+if jamResult < 0 {
+    weapon.Jammed = true
+}
+
+// Unjam time based on skill
+unjamResult := weapon.UnjamChallenges.Check(shooter)
+unjamTime := BaseUnjamTime - (unjamResult * factor)  // Clamp to MinUnjamTime
+```
+
+### Ranged Defense Chain
+
+1. **Range Check** - Target within MaxRange rooms?
+2. **Accuracy Roll** - AccuracyChallenges.Check()
+   - Subtract: RangePenalty (if shooting into adjacent room)
+   - Add/Subtract: PointBlankModifier (if in active melee with target)
+   - Add/Subtract: FireMode.AccuracyModifier
+   - Add: Aim bonus
+   - Subtract: Target's cover penalty
+   - Add: Body part HitModifier
+3. **Dodge** - Defender rolls with RangedDodgePenalty (bullets are fast)
+4. **Cover** - If behind cover, apply absorption and accuracy penalty
+5. **Block** - Only with shields rated for ranged (rare)
+6. **Armor Soak** - Normal armor chain (ArmorPenetration reduces effectiveness)
+7. **Apply Damage** - Normal (body part, bleeding, severing)
+
+### CombatConfig Additions for Ranged
+
+```go
+type CombatConfig struct {
+    // ... existing fields ...
+
+    // Ranged combat
+    RangedDodgePenalty float64  // Penalty to dodge ranged attacks (e.g., -30)
+    AimBonusPerSecond  float64  // How much aim bonus per second (e.g., +10)
+    MaxAimBonus        float64  // Cap on aim bonus (e.g., +50)
+}
+```
+
+### Example Weapons
+
+| Weapon | Slots | MaxRange | PointBlank | Magazine | Damage |
+|--------|-------|----------|------------|----------|--------|
+| Pistol | 1 | 0 | 0 | 12 | (from ammo) |
+| Shotgun | 2 | 0 | +25 | 6 | (from ammo) |
+| Longbow | 2 | 1 | -30 | 1 | piercing: 8 |
+| Crossbow | 2 | 1 | -15 | 1 | piercing: 12 |
+| Rifle | 2 | 1 | -15 | 30 | (from ammo) |
+
+---
+
+## Cover System
+
+Objects and creatures can provide cover from ranged attacks.
+
+### Cover Properties
+
+On ObjectDO (default 0 = not useful as cover):
+```go
+CoverAbsorption      float64  // 0-1, damage absorbed
+CoverAccuracyPenalty float64  // Penalty to hit someone behind this
+```
+
+On BodyConfig (for using creatures as cover):
+```go
+CoverAbsorption      float64
+CoverAccuracyPenalty float64
+```
+
+### Cover Resolution
+
+```go
+func getCoverValues(obj *Object) (absorption, penalty float64) {
+    // 1. Check object's direct values first
+    if obj.CoverAbsorption > 0 || obj.CoverAccuracyPenalty > 0 {
+        return obj.CoverAbsorption, obj.CoverAccuracyPenalty
+    }
+    // 2. Fall back to body type
+    if obj.BodyConfigID != "" {
+        body := getBodyConfig(obj.BodyConfigID)
+        return body.CoverAbsorption, body.CoverAccuracyPenalty
+    }
+    return 0, 0
+}
+```
+
+### Cover Mechanics
+
+Both properties scale with cover health:
+```go
+effectiveAbsorption := cover.CoverAbsorption * (cover.Health / cover.MaxHealth)
+effectivePenalty := cover.CoverAccuracyPenalty * (cover.Health / cover.MaxHealth)
+```
+
+**Damage to cover:** Cover takes damage equal to absorbed amount (1:1). When cover health = 0, it provides no benefit.
+
+### Using Creatures as Cover
+
+You can take cover behind allies (meatshields) but not enemies:
+
+```go
+func canUseCover(user, cover *Object) bool {
+    // Can't take cover behind someone fighting you
+    if cover.CombatTargets[user.ID] {
+        return false
+    }
+    // Can't take cover behind someone you're attacking
+    if user.CombatTargets[cover.ID] {
+        return false
+    }
+    return true
+}
+```
+
+### Example Cover Values
+
+| Object/Body | Absorption | AccuracyPenalty | Notes |
+|-------------|------------|-----------------|-------|
+| Stone wall | 0.8 | 40 | Very durable |
+| Wooden crate | 0.3 | 20 | Splinters quickly |
+| Overturned table | 0.2 | 15 | Flimsy |
+| humanoid body | 0.2 | 15 | Ally as meatshield |
+| dragon body | 0.6 | 35 | Massive creature |
+
+---
+
+## Stealth & Ambush
+
+Stealth uses the existing Description challenge system. An object is "hidden" from an observer when all its descriptions have challenges that observer fails.
+
+### Hiding
+
+Add perception challenges to all descriptions:
+```go
+Descriptions: []Description{
+    {Content: "A figure lurks in shadows.",
+     Challenges: []Challenge{{Skill: "perception", Level: 15}}},
+}
+```
+
+If observer fails all challenges, they don't see the object (existing `look`/movement rendering handles this).
+
+### Ambush
+
+When hidden attacker initiates combat against target who can't see them:
+- First attack ignores dodge
+- Accuracy bonus (configurable)
+- Auto-crit (configurable)
+
+**Attacking removes stealth challenges** from descriptions, making attacker visible to all.
+
+Being seen by a specific observer (they pass perception) only reveals you **to that observer** - challenges remain for others.
+
+---
+
+## Grappling System
+
+Close-quarters combat for holds, throws, and restraint. Go handles enforcement; JS customizes messages.
+
+### BodyPart Additions
+
+```go
+type BodyPart struct {
+    // ... existing fields ...
+
+    GrappleEffectiveness float64 // Contribution to grapple power (0 = can't grapple)
+}
+```
+
+**Typical totals:** Humanoid = 1.0 (arms 0.4 each, legs 0.1 each), Giant octopus = 4.0 (8 tentacles at 0.5 each)
+
+### Grapple Power Calculation
+
+Total grapple power = sum of `GrappleEffectiveness` for all body parts where:
+- `GrappleEffectiveness > 0`
+- Body part is not disabled (health > 0)
+- Body part is **not wielding a weapon** (no item in "weapon" slot for that body part)
+
+**Skill check:** Each challenge's Level is **multiplied by grapple power** before the Check. A humanoid (1.0 power) uses normal skill levels; an octopus (4.0 power) effectively has 4× the skill levels.
+
+**Examples (humanoid: 2 arms @ 0.4, 2 legs @ 0.1 = 1.0 total):**
+- Unarmed: 1.0 grapple power (full skill)
+- One-handed sword: 0.5 power (one arm + legs)
+- Sword + shield: 0.2 power (only legs)
+- Two-handed sword: 0.2 power (only legs)
+
+**Note:** Shields are WeaponConfig with `SlotType: "weapon"`, so wielding a shield occupies that limb for grappling. Armor (ArmorConfig) does NOT occupy grappling limbs.
+
+### ObjectDO Fields
+
+```go
+GrappledBy string  // Object ID currently grappling this object (empty = free)
+Grappling  string  // Object ID this object is grappling (empty = not grappling)
+```
+
+### Go-Enforced Rules
+
+When grappled (`GrappledBy` is set):
+- **Movement blocked** - Cannot leave room
+- **Two-handed weapons disabled** - Cannot attack with weapons requiring 2+ slots
+- **Dodge ineffective** - Dodge challenges auto-fail; must break free or parry/block
+- **Can only target grappler** - Combat actions restricted to the grappler
+
+When grappling (`Grappling` is set):
+- **Movement blocked** - Cannot leave while holding someone
+- **Grappling limbs occupied** - Limbs contributing to grapple cannot wield weapons
+
+### Grapple Actions
+
+| Action | Effect | Skill Check |
+|--------|--------|-------------|
+| `grapple` | Initiate grapple | GrappleChallenges × power vs target |
+| `hold` | Maintain grapple, prevent escape | GrappleChallenges × power |
+| `choke` | Deal damage over time while holding | GrappleChallenges + damage |
+| `throw` | Release + knockdown + damage | GrappleChallenges × power |
+| `break` | Escape from being grappled | GrappleChallenges × power vs grappler |
+| `reverse` | Escape AND become the grappler | GrappleChallenges × power (harder) |
+| `release` | Voluntarily release target | Automatic |
+
+### CombatConfig Additions
+
+```go
+type CombatConfig struct {
+    // ... existing fields ...
+
+    // Grappling
+    GrappleChallenges Challenges  // Skill challenges for grapple checks (levels × power)
+    GrappleBreakBonus float64     // Bonus to break attempts (defender advantage)
+
+    // Ambush
+    AmbushAccuracyBonus float64  // Accuracy bonus when attacking from stealth
+    AmbushAutoCrit      bool     // First attack from stealth auto-crits
+}
+```
+
+---
+
+## Movement in Combat
+
+Moving while fighting has tradeoffs. No special "flee" state - just movement with combat penalties.
+
+### Core Rules
+
+**While moving in combat:**
+- Cannot attack (busy moving)
+- Cannot parry or block (not defending position)
+- Dodge still works but with CombatMovementDodgePenalty
+- Movement speed determined by MovementChallenges
+
+**Attacks delay movement:** If you attack while moving, your movement is delayed by the attack duration. This creates tactical tradeoffs:
+- Pure flight: move as fast as possible, no offense
+- Fighting retreat: slower but dealing damage
+- Pure pursuit: catch up quickly, no attacks
+- Aggressive pursuit: slower but attacking
+
+### Chase
+
+Chase is implemented in JS. NPCs watch for movement events and follow:
+
+```javascript
+addCallback('objectLeftRoom', ['emit'], (event) => {
+    if (event.Object === getChaseTarget()) {
+        move(event.Direction);  // Following delays our attacks
+    }
+});
+```
+
+This allows wizard-customizable chase behavior: chase range limits, give-up conditions, different AI per NPC type.
+
+### MovementConfig
+
+```go
+type MovementConfig struct {
+    // Movement timing
+    MovementChallenges  Challenges     // Higher skill = less delay
+    BaseMovementDelay   time.Duration  // e.g., 2s
+    MinMovementDelay    time.Duration  // e.g., 0.5s
+
+    // Combat movement
+    CombatMovementDodgePenalty float64  // Penalty to dodge while moving in combat
+
+    // Exit guarding
+    GuardChallenges Challenges  // Skill challenges for guard vs force-through
+}
+```
+
+Movement delay uses goroutines with sleep. Final delay is `baseDelay / SpeedFactor` (from status effects).
+
+---
+
+## Exit Blocking & Guarding
+
+Objects can guard exits to prevent or challenge passage. One exit per object.
+
+### ObjectDO Fields
+
+```go
+GuardingExit string  // Exit direction being guarded (empty = not guarding)
+```
+
+### Movement Flow
+
+1. Object attempts to move through exit
+2. Check if any object in room has `GuardingExit` matching that direction
+3. If guarded: both sides roll `GuardChallenges`
+4. If challenger wins: movement proceeds (guard may get free attack)
+5. If guard wins: movement blocked, optional message
+
+---
+
 ## Implementation Phases
 
 ### Phase 1: Data Model & Config Stores
@@ -578,7 +1154,7 @@ Key behaviors:
 Key functions:
 - `startCombat(attackerID, targetID)`
 - `stopCombat(attackerID, targetID)`
-- `scheduleAttack(attackerID, targetID)` - uses setTimeout
+- `scheduleAttack(attackerID, targetID)` - spawns goroutine with sleep
 - `resolveAttack(attacker, target, bodyPart)` - full defense chain with modifiers
 - `calculateModifiers(object)` - sum stance + status effect modifiers
 - `applyDamage(target, amount, types, bodyPart)`
@@ -679,7 +1255,7 @@ Test scenarios:
 3. **Multiple attackers**: Each has independent combat cycle
 4. **Self-attack**: Prevent
 5. **Dead target**: Stop combat, emit event
-6. **Server restart**: Recover from CombatTargets, reschedule attacks
+6. **Server restart**: CombatTargets persists, so hostiles auto-attack on sight after restart (no timer recovery needed)
 7. **No weapon equipped**: Use unarmed attacks from ALL body parts with UnarmedDamage (simultaneous multi-attack)
 8. **No armor on hit body part**: No soak for that body part, full damage taken
 9. **Damage type not in parry/block/armor map**: No defense against that type
@@ -688,6 +1264,16 @@ Test scenarios:
 12. **Unarmed block without natural armor**: Body part takes damage from blocking (dragon scales absorb, human arms get hurt)
 13. **Equipment swap mid-combat**: Allowed but takes time (delays next attack); JS can customize swap duration
 14. **Dual-wield**: Both equipped weapons attack; each has its own speed roll and attack cycle
+15. **Out of ammo**: Can't fire; must reload
+16. **Weapon jammed**: Can't fire; must clear jam (skill-based time)
+17. **Target behind cover**: Apply cover accuracy penalty and absorption
+18. **Cover destroyed**: When cover health = 0, no benefit; find new cover
+19. **Shooting into adjacent room**: Only if MaxRange >= 1; apply RangePenalty
+20. **Aim interrupted**: Taking damage, moving, or target leaving room clears AimingSince
+21. **Moving while in combat**: Can't attack/parry/block; dodge with penalty
+22. **Attacking while moving**: Delays movement completion
+23. **Chase target escapes**: JS decides when to give up (chase range, timeout, etc.)
+24. **SpeedFactor 0**: Movement completely prevented (stunned, rooted)
 
 ---
 
@@ -697,10 +1283,10 @@ Test scenarios:
 2. **Comparative defense** - Attacker's hit score compared against each defense score (dodge > hit = dodged). Challenge results can be negative (failure) or positive (success) - when comparing, the higher value wins, so a "lesser failure" (-5) beats a "greater failure" (-20)
 3. **Defense chain is sequential** - Dodge -> Parry -> Block -> Armor soak -> Body part multiplier
 4. **Crit determined early** - Crit check happens after accuracy, before defense chain; multiplier applied at end if attack lands
-5. **Parry redirects** (no damage), **Block absorbs** (weapon takes degradation damage)
-6. **Equipment degrades** - Efficacy = base * (current/max health); broken equipment is useless
+5. **Parry redirects** (no damage), **Block absorbs** (weapon takes damage)
+6. **Equipment degrades 1:1** - Blocking/absorbing damage costs equipment health 1:1; efficacy scales with health ratio
 7. **Death just emits event** - JS handles respawn/loot/etc.
-8. **Use timeouts, not intervals** - Variable timing based on skill checks
+8. **Use goroutines with sleep** - Variable timing via skill checks, no persistence needed (CombatTargets handles restart)
 9. **Use existing Challenges type** - Leverages existing skill system infrastructure
 10. **Status effects: lazy + tick** - All effects checked lazily on access; ticking effects also checked at each tick
 11. **Status effects emit events** - `statusApplied`, `statusExpired`, `statusTick`
@@ -721,3 +1307,15 @@ Test scenarios:
 26. **Dual health tracking** - Damage applies to both body part AND central health; body parts can be disabled without death
 27. **Unarmed defense** - Parry possible with skill; block requires natural armor (scales, thick hide) or body part takes damage
 28. **Multi-attack defense** - Defender rolls defense for each incoming attack; skill recharge makes repeated defenses harder
+29. **Ranged damage = weapon + ammo** - Both contribute; bows add draw strength, guns add nothing
+30. **Simple range model** - MaxRange 0 (same room) or 1 (adjacent); no exit configuration needed
+31. **Point blank = active melee** - PointBlankModifier applies when in melee combat with target
+32. **Jam/unjam skill-based** - JamChallenges and UnjamChallenges, not random chance
+33. **Aim bonus from time** - Computed lazily from AimingSince timestamp
+34. **Cover on objects and bodies** - CoverAbsorption + CoverAccuracyPenalty; bodies provide cover via BodyConfig
+35. **Cover degrades 1:1** - Cover takes damage equal to absorbed amount
+36. **Can't cover behind enemies** - Must not be in mutual CombatTargets
+37. **Movement in combat = no attack/parry/block** - Tactical tradeoff for fleeing
+38. **Attacks delay movement** - Can't sprint and fight simultaneously
+39. **Chase in JS** - NPCs implement chase behavior via event callbacks
+40. **SpeedFactor on status effects** - Movement delay divided by SpeedFactor; 0 = immobile
