@@ -12,11 +12,12 @@ A flexible, wizard-configurable combat system that:
 
 ## Design Principles
 
-1. **Leverage existing systems**: Use SkillConfig pattern, Challenge.Check()
+1. **Leverage existing systems**: Use SkillConfig pattern, Challenge.Check(), and skill recharge mechanics (see `docs/skill-system.md` for detailed formulas)
 2. **Go-heavy logic**: Combat calculations in Go, JS only for events/customization
 3. **Wizard-configurable**: All weapons, armor, damage types defined via configs
 4. **Equipment degradation**: Both armor and weapons have health that affects efficacy
 5. **Message customization**: All combat messages support optional JS override with Go defaults
+6. **Skill recharge balance**: Repeated uses of the same skill suffer cumulative fatigue penalties per the recharge system, preventing spam exploits
 
 ---
 
@@ -50,12 +51,16 @@ type ObjectDO struct {
     // Note: Stamina/Focus are consumed by wizard-defined JS actions, not core combat.
     // Core combat only tracks and regenerates these resources.
 
-    // Equipment: qualified slot name -> equipped object ID
-    // Format: "{bodyPartID}.{slotType}" - works for any body configuration
-    // e.g., {"head.helmet": "obj123", "torso.chestArmor": "obj456", "rightArm.weapon": "obj789"}
-    // Multi-slot weapons appear in multiple entries with same object ID:
-    // e.g., {"rightArm.weapon": "greatsword1", "leftArm.weapon": "greatsword1"}
-    Equipment map[string]string
+    // Wielded items: bodyPartID -> wielded object ID (one per body part with CanWield)
+    // e.g., {"rightArm": "sword1", "leftArm": "shield1"}
+    // Two-handed weapons: same object ID in multiple entries
+    // e.g., {"rightArm": "greatsword1", "leftArm": "greatsword1"}
+    Wielding map[string]string
+
+    // Worn items (armor/clothing): bodyPartID -> ordered list of worn object IDs (innermost first)
+    // e.g., {"torso": ["undershirt1", "chainmail1", "plate1"]}
+    // Layering validated by thickness/looseness on equip
+    Wearing map[string][]string
 
     // Body part state: bodyPartID -> state (only for objects with BodyConfigID)
     BodyParts map[string]BodyPartState
@@ -67,7 +72,10 @@ type ObjectDO struct {
     // Combat state
     CombatTargets map[string]bool  // Objects this object is attacking
     CurrentTarget string           // Primary target object ID (for focus)
-    FocusBodyPart string           // Body part being targeted (if any)
+
+    // Body part targeting (see Body Part Targeting section)
+    FocusBodyPart  string  // Body part attacker is targeting (empty = random by HitWeight)
+    DefendBodyPart string  // Body part defender is protecting (empty = no special defense)
 
     // Status effects (lazily cleaned on access)
     StatusEffects []StatusEffect
@@ -136,7 +144,15 @@ type BodyPartState struct {
 - Threshold: If `finalDamage > bodyPart.MaxHealth * SeverThreshold` and health was already low
 - When severed:
   - Emit `bodyPartSevered` event (different from `bodyPartDisabled`)
-  - Any equipment in that body part's slots drops to the ground
+  - If `Vital: true`, instant death
+  - Wielded items handling:
+    - Remove severed body part from `Wielding` map
+    - If weapon still has at least one wielding body part: stays wielded with increased difficulty
+    - `gripFactor = (currentWieldingParts / requiredParts) ^ 2`
+    - All weapon challenge levels are divided by gripFactor (making them harder)
+    - Example: Two-handed sword with one arm = gripFactor 0.25, so levels ÷ 0.25 = 4x harder
+    - If no wielding body parts remain: weapon drops to the ground
+  - Any worn armor on that body part drops to the ground
   - The severed body part itself can drop as an object (for gruesome trophies or reattachment)
 - Severed parts cannot be healed normally - requires surgical reattachment or magical regeneration
 - A severed part is also implicitly disabled (can't attack/defend with what isn't there)
@@ -151,11 +167,22 @@ type StatusEffectConfig struct {
     // Modifiers applied while active (used in combat calculations)
     ChallengeModifiers map[string]float64  // e.g., {"dodge": -10, "damage": 5}
 
+    // Duration (used when applying effect; can be overridden)
+    DefaultDuration time.Duration  // Default duration when applied; 0 = permanent
+
     // Ticking effects
     TickInterval time.Duration  // 0 = no ticking; otherwise emits "statusTick" event
 
     // Whether this is removable (implants might not be)
     Permanent bool  // If true, no ExpiresAt is set when applied
+
+    // Effect replacement on expiry (handled in Go)
+    ReplacedBy string  // StatusEffectConfig ID to apply when this expires (uses that config's DefaultDuration)
+
+    // Stacking behavior
+    Unique          bool     // If true, only one instance of this effect can exist; reapplying refreshes duration
+    StackAttenuation float64 // Each additional stack's modifiers are multiplied by this (0.5 = 50% effectiveness per stack)
+    MaxStacks       int      // Maximum number of stacks (0 = unlimited if not Unique)
 
     // Movement control (actualDelay = baseDelay / SpeedFactor)
     SpeedFactor     float64  // 0=immobile, 0.5=half speed, 1=normal, 2=double speed
@@ -175,6 +202,14 @@ type StatusEffectConfig struct {
 | hasted | 2.0 | false | Double speed (half delay) |
 | crippled_leg | 0.55 | false | Injured limb |
 
+**Stacking examples:**
+| Effect | Unique | StackAttenuation | MaxStacks | Behavior |
+|--------|--------|------------------|-----------|----------|
+| stunned | true | - | - | Only one stun at a time; reapplying refreshes duration |
+| poison | false | 0.5 | 5 | Up to 5 stacks; each adds 50% of previous stack's damage |
+| bleeding_severe | false | 1.0 | 0 | Multiple wounds bleed independently; full effect each |
+| rage | false | 1.0 | 3 | Up to 3 stacks; full effect per stack |
+
 ### BodyConfig
 
 Defines body structure - what parts can be targeted, their modifiers, equipment slots, and unarmed combat capabilities.
@@ -187,6 +222,12 @@ type BodyConfig struct {
     Parts       []BodyPart
     DefaultPart string  // Which part is targeted by default ("torso")
 
+    // Multi-wielding penalty (wielding separate items in multiple body parts)
+    // When dual-wielding, all combat challenge levels increase by: max(0, -ambidextrousResult)
+    // High skill = no penalty; low/negative skill = increased difficulty
+    // Empty = no penalty (naturally ambidextrous, like octopi)
+    AmbidextrousChallenges Challenges
+
     // Cover properties (used when taking cover behind creatures with this body type)
     CoverAbsorption      float64  // 0-1, damage absorbed
     CoverAccuracyPenalty float64  // Accuracy penalty to hit someone behind this body
@@ -196,31 +237,32 @@ type BodyPart struct {
     ID               string   // "head", "torso", "leftArm", "tail", etc.
     Description      string   // For look output
 
-    // Body part health (tracked in ObjectDO.BodyPartHealth)
+    // Body part health (tracked in ObjectDO.BodyParts)
     MaxHealth float64  // Maximum health for this body part; at 0 = disabled
+    Vital     bool     // If true: 0 health = unconscious, severed = instant death (head, torso)
 
     // Combat targeting modifiers
-    HitModifier      float64  // Added to accuracy challenge (head = +20, harder to hit)
+    HitWeight        float64  // Relative chance to be hit (torso = 40, head = 10); modified by focus/defend
     DamageMultiplier float64  // Damage multiplier (head = 1.5x)
     CritBonus        float64  // Added to crit chance
 
-    // Equipment slots this body part supports (can equip one item from compatible slots)
-    // e.g., head: ["helmet"], leftArm: ["shield", "weapon"], rightArm: ["weapon"]
-    // Empty array if body part has no equipment slots
-    EquipSlots []string
+    // Can this body part wield items? (hands, tentacles, prehensile tail)
+    CanWield bool
 
     // Unarmed combat (if this body part can attack - e.g., arms can punch, legs can kick)
     // Empty UnarmedDamage = this body part cannot attack unarmed
-    UnarmedDamage      map[string]float64  // e.g., {"physical": 5} for fist
-    UnarmedSpeed       Challenges
-    UnarmedAccuracy    Challenges
-    UnarmedDamageBonus Challenges
-    UnarmedDescription string              // e.g., "fist", "claw", "bite"
+    UnarmedDamage        map[string]float64  // e.g., {"physical": 5} for fist
+    UnarmedSpeed         Challenges
+    UnarmedAccuracy      Challenges
+    UnarmedDamageBonus   Challenges
+    UnarmedFocus         Challenges  // For targeting specific body parts when unarmed
+    UnarmedDefend        Challenges  // For protecting specific body parts when unarmed
+    UnarmedDescription   string      // e.g., "fist", "claw", "bite"
 
-    // Unarmed defense (for blocking/parrying without a weapon)
-    // Empty maps = cannot parry/block unarmed; requires natural armor (scales, thick hide) for effective blocking
-    UnarmedParryChallenges map[string]Challenges  // damage type -> challenges (very hard for soft-skinned creatures)
-    UnarmedBlockChallenges map[string]Challenges  // damage type -> challenges (requires natural armor)
+    // Unarmed parrying (deflecting attacks without a weapon)
+    // Empty map = cannot parry unarmed; non-empty = can attempt to deflect that damage type
+    UnarmedParryChallenges map[string]Challenges  // damage type -> challenges
+    // Note: No unarmed blocking - blocking requires wielding something
 }
 ```
 
@@ -228,46 +270,61 @@ type BodyPart struct {
 ```go
 BodyConfig{
     ID: "humanoid",
+    AmbidextrousChallenges: Challenges{{Skill: "ambidexterity", Level: 15}},  // Dual-wielding is hard
     Parts: []BodyPart{
-        {ID: "head", MaxHealth: 50, HitModifier: 20, DamageMultiplier: 1.5, CritBonus: 0.1,
-         EquipSlots: []string{"helmet"}},
-        {ID: "torso", MaxHealth: 100, HitModifier: 0, DamageMultiplier: 1.0,
-         EquipSlots: []string{"chestArmor"}},
-        {ID: "rightArm", MaxHealth: 60, HitModifier: 5, DamageMultiplier: 0.8,
-         EquipSlots: []string{"weapon", "glove"},
+        {ID: "head", MaxHealth: 50, Vital: true, HitWeight: 10, DamageMultiplier: 1.5, CritBonus: 0.1},
+        {ID: "torso", MaxHealth: 100, Vital: true, HitWeight: 40, DamageMultiplier: 1.0},
+        {ID: "rightArm", MaxHealth: 60, HitWeight: 15, DamageMultiplier: 0.8, CanWield: true,
          UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "right fist"},
-        {ID: "leftArm", MaxHealth: 60, HitModifier: 5, DamageMultiplier: 0.8,
-         EquipSlots: []string{"shield", "weapon", "glove"},
+        {ID: "leftArm", MaxHealth: 60, HitWeight: 15, DamageMultiplier: 0.8, CanWield: true,
          UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "left fist"},
-        {ID: "rightLeg", MaxHealth: 70, HitModifier: 10, DamageMultiplier: 0.7,
-         EquipSlots: []string{"legArmor", "boots"},
+        {ID: "rightLeg", MaxHealth: 70, HitWeight: 10, DamageMultiplier: 0.7,
          UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "right kick"},
-        {ID: "leftLeg", MaxHealth: 70, HitModifier: 10, DamageMultiplier: 0.7,
-         EquipSlots: []string{"legArmor", "boots"},
+        {ID: "leftLeg", MaxHealth: 70, HitWeight: 10, DamageMultiplier: 0.7,
          UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "left kick"},
     },
     DefaultPart: "torso",
 }
+// Total HitWeight: 100 (torso 40%, arms 15% each, legs 10% each, head 10%)
 ```
 
-**Note:** Each body part can have multiple compatible slot types, but only ONE item can be equipped per body part. A leftArm with `["shield", "weapon", "glove"]` can hold a shield OR a weapon OR a glove, not all three.
+**Vital body parts:** Head and torso are `Vital: true`. If health reaches 0, the creature falls unconscious. If severed, instant death.
 
-**Example dragon body config (with natural armor for unarmed blocking):**
+**Example dragon body config (natural armor provided via ArmorConfig worn on body parts):**
 ```go
 BodyConfig{
     ID: "dragon",
+    AmbidextrousChallenges: Challenges{{Skill: "dragonCoordination", Level: 5}},  // Dragons are fairly coordinated
     Parts: []BodyPart{
-        {ID: "head", MaxHealth: 150, HitModifier: 25, DamageMultiplier: 2.0, CritBonus: 0.15,
-         UnarmedDamage: map[string]float64{"physical": 30, "fire": 15}, UnarmedDescription: "bite",
-         UnarmedBlockChallenges: map[string]Challenges{"physical": {{Skill: "dragonScale", Level: 5}}}},
-        {ID: "leftForeclaw", MaxHealth: 100, HitModifier: 10, DamageMultiplier: 1.2,
+        {ID: "head", MaxHealth: 150, Vital: true, HitWeight: 10, DamageMultiplier: 2.0, CritBonus: 0.15,
+         UnarmedDamage: map[string]float64{"physical": 30, "fire": 15}, UnarmedDescription: "bite"},
+        {ID: "body", MaxHealth: 300, Vital: true, HitWeight: 50, DamageMultiplier: 1.0},
+        {ID: "leftForeclaw", MaxHealth: 100, HitWeight: 10, DamageMultiplier: 1.2, CanWield: true,
          UnarmedDamage: map[string]float64{"physical": 20}, UnarmedDescription: "left claw",
-         UnarmedParryChallenges: map[string]Challenges{"physical": {{Skill: "clawFighting", Level: 10}}},
-         UnarmedBlockChallenges: map[string]Challenges{"physical": {{Skill: "dragonScale", Level: 8}}}},
-        // ... more parts: rightForeclaw, body, wings, tail ...
+         UnarmedParryChallenges: map[string]Challenges{"physical": {{Skill: "clawFighting", Level: 10}}}},
+        // ... more parts: rightForeclaw (10), wings (10), tail (10) ...
     },
     DefaultPart: "body",
 }
+// Dragon's natural armor (scales) is an ArmorConfig pre-equipped on all body parts
+```
+
+**Example octopus body config (naturally ambidextrous):**
+```go
+BodyConfig{
+    ID: "octopus",
+    // No AmbidextrousChallenges = naturally ambidextrous, no dual-wield penalty
+    Parts: []BodyPart{
+        {ID: "head", MaxHealth: 30, Vital: true, HitWeight: 10, DamageMultiplier: 1.5},
+        {ID: "body", MaxHealth: 50, Vital: true, HitWeight: 30, DamageMultiplier: 1.0},
+        {ID: "tentacle1", MaxHealth: 20, HitWeight: 7.5, DamageMultiplier: 0.5, CanWield: true,
+         UnarmedDamage: map[string]float64{"physical": 3}, UnarmedDescription: "tentacle",
+         GrappleEffectiveness: 0.5},
+        // ... tentacles 2-8, each with HitWeight: 7.5, CanWield: true, GrappleEffectiveness: 0.5 ...
+    },
+    DefaultPart: "body",
+}
+// Total HitWeight: 100 (body 30%, head 10%, 8 tentacles at 7.5% each)
 ```
 
 ### StanceConfig
@@ -328,7 +385,7 @@ type WeaponConfig struct {
     Description string
 
     // Equipment slot requirements
-    SlotType      string  // Which slot type this weapon uses: "weapon", "shield", etc.
+    SlotType      string  // Which slot type this uses: "wield" for weapons/shields/tools
     SlotsRequired int     // How many of that slot type needed (1=one-handed, 2=two-handed)
 
     // Damage by type (e.g., {"physical": 10, "fire": 5} = 10 physical + 5 fire damage)
@@ -339,6 +396,8 @@ type WeaponConfig struct {
     SpeedChallenges    Challenges  // e.g., [{Skill: "agility", Level: 10}, {Skill: "swordSpeed", Level: 5}]
     AccuracyChallenges Challenges  // For hit chance
     DamageChallenges   Challenges  // For damage bonus
+    FocusChallenges    Challenges  // For targeting specific body parts (rapier: easy, club: hard)
+    DefendChallenges   Challenges  // For protecting specific body parts (shield: easy, dagger: hard)
 
     // Defense capabilities (per damage type - e.g., shield blocks physical well, not fire)
     // Empty map = cannot parry/block; presence of damage type key = can defend against that type
@@ -358,10 +417,10 @@ type WeaponConfig struct {
 **Equipment slot examples:**
 | Weapon | SlotType | SlotsRequired | Notes |
 |--------|----------|---------------|-------|
-| Sword | "weapon" | 1 | One-handed |
-| Greatsword | "weapon" | 2 | Two-handed (needs 2 weapon slots across body parts) |
-| Shield | "shield" | 1 | Goes in shield slot |
-| Tower Shield | "shield" | 2 | Massive shield needing both arms |
+| Sword | "wield" | 1 | One-handed |
+| Greatsword | "wield" | 2 | Two-handed (needs 2 wield slots across body parts) |
+| Shield | "wield" | 1 | One-handed, used for blocking |
+| Tower Shield | "wield" | 2 | Massive shield needing both arms |
 
 **Equipping multi-slot weapons:** When SlotsRequired > 1, the system finds that many body parts with the matching slot type and occupies all of them. A 4-armed creature could dual-wield greatswords.
 
@@ -376,8 +435,12 @@ type ArmorConfig struct {
     ID          string
     Description string
 
-    // Equipment slot - which slot type this armor occupies
-    SlotType string  // e.g., "helmet", "chestArmor", "legArmor", "glove", "boots"
+    // Which body parts this can be worn on
+    CompatibleBodyParts map[string]bool  // e.g., {"head": true}, {"torso": true}
+
+    // Layering: can wear this over existing layers if sum(existing.Thickness) < this.Looseness
+    Thickness float64  // How bulky this armor is
+    Looseness float64  // How much room inside for layers underneath
 
     // Protection per damage type: damage type -> base reduction ratio
     // e.g., {"physical": 0.5, "fire": 0.1} = 50% physical reduction, 10% fire reduction
@@ -387,16 +450,35 @@ type ArmorConfig struct {
     // e.g., {"physical": [{Skill: "heavyArmor", Level: 10}]}
     ArmorChallenges map[string]Challenges
 
+    // Status effects while worn (movement penalty, heat, encumbrance)
+    StatusEffects map[string]bool  // StatusEffectConfig IDs applied while wearing
+
     // Durability (0 = indestructible; absorbed damage is 1:1)
     MaxHealth float64  // Maximum armor health
-
-    // Efficacy = baseReduction * armorChallengeResult * (currentHealth / maxHealth)
 }
 ```
 
-**Armor and body parts:** When a body part is hit, only armor equipped in that body part's slots provides protection. A helmet only protects the head, chestArmor only protects the torso, etc.
+**Armor layering:** Multiple armor pieces can be worn on the same body part if they fit:
+```go
+func canWearOver(existingLayers []*ArmorConfig, newArmor *ArmorConfig) bool {
+    totalThickness := 0.0
+    for _, layer := range existingLayers {
+        totalThickness += layer.Thickness
+    }
+    return totalThickness < newArmor.Looseness
+}
+```
 
-**Equipment health:** Armor objects use their own `Health` field (from `ObjectDO`) to track durability. When health reaches 0, the armor provides no protection. It remains equipped but non-functional until repaired.
+**Example layering:**
+| Armor | Thickness | Looseness | Notes |
+|-------|-----------|-----------|-------|
+| Undershirt | 0.5 | 0.5 | Skin-tight, nothing underneath |
+| Chainmail | 2.0 | 3.0 | Can fit undershirt (0.5 < 3.0) |
+| Plate cuirass | 3.0 | 6.0 | Can fit undershirt+chainmail (2.5 < 6.0) |
+
+**Armor and body parts:** When a body part is hit, all armor layers worn on that body part provide protection (applied from outermost to innermost). Each layer absorbs damage and takes degradation.
+
+**Equipment health:** Armor objects use their own `Health` field (from `ObjectDO`) to track durability. When health reaches 0, the armor provides no protection. It remains worn but non-functional until repaired.
 
 ### DamageTypeConfig
 
@@ -432,6 +514,39 @@ type CombatConfig struct {
 
     // Bleeding
     BleedingThresholds []BleedingThreshold  // Damage thresholds that trigger bleeding
+
+    // Tuning constants (grouped by subsystem, with sane defaults)
+
+    // Sigmoid tuning - affects how quickly skill results reach min/max effects
+    SigmoidDivisor float64  // Default: 50; higher = gentler curve
+
+    // Focus/Defend tuning (body part targeting)
+    TargetingWeightRange  [2]float64  // Default: [0.0, 2.0] - weight multiplier for focus/defend
+    TargetingPenaltyRange [2]float64  // Default: [0, 30] - accuracy/defense penalty range
+
+    // Stance tuning
+    StanceMultRange [2]float64  // Default: [0.0, 2.0] - stance effect multiplier
+
+    // Armor tuning
+    ArmorSkillMultRange [2]float64  // Default: [0.5, 1.0] - armor effectiveness from skill
+
+    // Regeneration tuning
+    RegenMultRange [2]float64  // Default: [0.5, 1.5] - regen rate multiplier
+
+    // Attack speed tuning
+    AttackSpeedMultRange [2]float64  // Default: [0.0, 1.0] - maps to min/max attack interval
+
+    // Reload/Unjam tuning
+    ReloadMultRange [2]float64  // Default: [0.5, 1.5] - time multiplier (lower = faster)
+
+    // Aiming tuning
+    AimMultRange [2]float64  // Default: [0.5, 1.5] - aim rate multiplier
+
+    // Jam tuning
+    JamHealthPenaltyMult float64  // Default: 50 - how much weapon damage affects jamming
+
+    // Grip factor (severed limb weapon effectiveness)
+    GripExponent float64  // Default: 2.0 (quadratic penalty)
 }
 
 type BleedingThreshold struct {
@@ -494,7 +609,8 @@ func getResourceWithRegen(current, max float64, lastRegenAt time.Time,
 
     // Skill affects regen rate via sigmoid (0.5x to 1.5x)
     result := regenChallenges.Check(obj, "")
-    mult := 1.0 + 0.5/(1.0+math.Exp(-result/50.0)) - 0.25  // Maps to 0.5-1.5
+    sigmoid := 1.0 / (1.0 + math.Exp(-result/50.0))  // 0 to 1
+    mult := 0.5 + sigmoid  // Maps to 0.5-1.5
 
     regenRate := baseRegenPerSec * mult
     newValue = math.Min(max, current + elapsed*regenRate)
@@ -546,51 +662,60 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Each attacking body part makes a separate attack with its own speed roll
    - Disabled body parts (health = 0) cannot attack
 
-   **Multi-attack balance:** While multi-attack seems powerful, unarmed damage is much lower than weapons, unarmed blocking is difficult without natural armor, and defenders benefit from skill recharge mechanics - repeated defenses against the same attack type become harder, but defenders still get a chance against each incoming attack.
+   **Multi-attack balance:** While multi-attack seems powerful:
+   - Unarmed damage is much lower than weapons
+   - Blocking requires wielding something - no unarmed blocking
+   - Skill recharge mechanics (see `docs/skill-system.md`) affect both sides - repeated defenses suffer cumulative fatigue, making later attacks in a barrage more likely to land
+
+   **Multi-attack timing:** Each attacking body part rolls its own speed challenges independently. Attacks run in parallel - they may land at nearly the same time or be staggered depending on speed rolls.
 
 2. **Accuracy Check**:
    - Attacker rolls `AccuracyChallenges.Check()`
-   - Add body part's `HitModifier` (targeting head is harder)
    - Add stance's `AccuracyModifier`
    - Add status effect modifiers
+   - Subtract focus penalty (if focusing and rolled poorly, see Body Part Targeting)
    - -> `hitScore`
 
 3. **Critical Check** (determined early, applied later if attack lands):
    - Roll against `BaseCritChance + bodyPart.CritBonus`
    - Store `isCrit` flag for later
 
-4. **Dodge**:
-   - Defender rolls `DodgeChallenges.Check()`
-   - Add stance's `DodgeModifier`
-   - Add status effect modifiers
-   - -> if `dodgeScore > hitScore`, attack misses entirely
-
-5. **Parry** (per damage type, weapon or unarmed):
+4. **Parry** (per damage type, weapon or unarmed):
    - Use weapon's `ParryChallenges` if weapon equipped and healthy
-   - Otherwise use defender's body part `UnarmedParryChallenges` (if any - requires skill/natural ability)
+   - Otherwise use defender's body part `UnarmedParryChallenges` (if any)
    - For each damage type in attack:
      - If `ParryChallenges[damageType]` exists, defender rolls those challenges
      - Add stance's `ParryModifier`
+     - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
      - If `parryScore > hitScore`, that damage type is parried (no damage for that type)
      - On successful parry with `ParryStatusEffectID` set:
        - Calculate parry margin: `margin = parryScore - hitScore`
        - Apply effect with probability: `chance = sigmoid(margin/50)` (barely parry ≈ 50%, decisive parry ≈ 100%)
    - Damage types without parry challenges or failed parries continue to next step
 
-6. **Block** (per damage type, weapon or unarmed):
-   - Use weapon's `BlockChallenges` if weapon equipped and healthy
-   - Otherwise use defender's body part `UnarmedBlockChallenges` (if any - requires natural armor)
+5. **Dodge**:
+   - Defender rolls `DodgeChallenges.Check()`
+   - Add stance's `DodgeModifier`
+   - Add status effect modifiers
+   - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
+   - -> if `dodgeScore > hitScore`, attack misses entirely (all remaining damage types)
+
+6. **Block** (per damage type, requires wielding):
+   - Skip entirely if dodge succeeded (attack missed)
+   - Skip if not wielding anything (no unarmed blocking)
+   - Use wielded item's `BlockChallenges` if item is healthy (health > 0)
    - For each remaining (unparried) damage type:
      - If `BlockChallenges[damageType]` exists, defender rolls those challenges
      - Add stance's `BlockModifier`
+     - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
      - If `blockScore > hitScore`, that damage type is blocked:
        - Damage for that type is negated
-       - If using weapon: weapon takes damage equal to blocked amount
-       - If unarmed: blocking body part takes damage instead (natural armor absorbs hits)
+       - Wielded item takes damage equal to blocked amount
    - Damage types without block challenges or failed blocks continue to next step
 
 7. **Armor Soak** (per damage type, body-part specific):
-   - Find armor equipped in the **hit body part's** slots
+   - Skip entirely if dodge succeeded (attack missed)
+   - Find armor worn on the **hit body part** (from `Wearing` map)
    - If no armor on that body part, or armor health = 0, skip to next step
    - For each remaining (unparried, unblocked) damage type:
      - If `ArmorChallenges[damageType]` exists, apply armor skill challenge
@@ -645,6 +770,103 @@ func calculateAttackInterval(attacker *Object, weapon *WeaponConfig, config *Com
     return interval
 }
 ```
+
+---
+
+## Body Part Targeting
+
+Attackers can focus on specific body parts; defenders can protect specific body parts. Both have risk/reward tradeoffs.
+
+### Focus (Attacker)
+
+Set `FocusBodyPart` to target a specific body part. Uses weapon's `FocusChallenges` (or `UnarmedFocus` if unarmed).
+
+**Mechanics:**
+```go
+func applyFocus(attacker *Object, weapon *WeaponConfig, weights map[string]float64, config *CombatConfig) float64 {
+    if attacker.FocusBodyPart == "" {
+        return 0  // No penalty
+    }
+
+    focusResult := weapon.FocusChallenges.Check(attacker, "")
+    sigmoid := 1.0 / (1.0 + math.Exp(-focusResult/config.SigmoidDivisor))
+
+    // Map sigmoid to weight multiplier using TargetingWeightRange
+    // sigmoid 0 → min, sigmoid 1 → max
+    weightMult := config.TargetingWeightRange[0] + sigmoid*(config.TargetingWeightRange[1]-config.TargetingWeightRange[0])
+    weights[attacker.FocusBodyPart] *= weightMult
+
+    // Calculate accuracy penalty when result is negative (sigmoid < 0.5)
+    if sigmoid < 0.5 {
+        return (0.5 - sigmoid) * 2 * config.TargetingPenaltyRange[1]  // 0 to max penalty
+    }
+    return 0
+}
+```
+
+**Effects:**
+- Good roll: focused body part more likely to be hit (up to 2x weight)
+- Bad roll: focused body part LESS likely (down to 0x weight) AND accuracy penalty
+
+### Defend (Defender)
+
+Set `DefendBodyPart` to protect a specific body part. Uses weapon's `DefendChallenges` (or `UnarmedDefend` if unarmed).
+
+**Mechanics:**
+```go
+func applyDefend(defender *Object, weapon *WeaponConfig, weights map[string]float64, config *CombatConfig) float64 {
+    if defender.DefendBodyPart == "" {
+        return 0  // No penalty
+    }
+
+    defendResult := weapon.DefendChallenges.Check(defender, "")
+    sigmoid := 1.0 / (1.0 + math.Exp(-defendResult/config.SigmoidDivisor))
+
+    // Map sigmoid to weight divisor using TargetingWeightRange
+    weightDiv := config.TargetingWeightRange[0] + sigmoid*(config.TargetingWeightRange[1]-config.TargetingWeightRange[0])
+    weights[defender.DefendBodyPart] /= weightDiv
+
+    // Calculate defense penalty when result is negative (sigmoid < 0.5)
+    if sigmoid < 0.5 {
+        return (0.5 - sigmoid) * 2 * config.TargetingPenaltyRange[1]  // 0 to max penalty
+    }
+    return 0
+}
+```
+
+**Effects:**
+- Good roll: defended body part less likely to be hit (weight ÷ 2)
+- Bad roll: defended body part MORE likely (telegraphed!) AND dodge/parry/block penalty
+
+### Body Part Selection
+
+After applying focus and defend modifiers, select body part by weighted random:
+
+```go
+func selectBodyPart(attacker, defender *Object, weapon *WeaponConfig, bodyConfig *BodyConfig, config *CombatConfig) (string, float64, float64) {
+    weights := map[string]float64{}
+    for _, part := range bodyConfig.Parts {
+        weights[part.ID] = part.HitWeight
+    }
+
+    focusPenalty := applyFocus(attacker, weapon, weights, config)
+    defendPenalty := applyDefend(defender, weapon, weights, config)
+
+    return weightedRandomSelect(weights), focusPenalty, defendPenalty
+}
+```
+
+### Tactical Implications
+
+| Attacker Focus | Defender Defend | Result |
+|----------------|-----------------|--------|
+| None | None | Random by HitWeight |
+| Head | None | Head more likely (if good roll) or accuracy penalty (if bad) |
+| None | Head | Head less likely (if good roll) or defense penalty (if bad) |
+| Head | Head | Effects partially cancel; both risk penalties |
+| Head | Torso | Attacker targets head; defender wasted defense on wrong part |
+
+**Mind games:** Skilled fighters can predict and counter each other's focus/defend choices, creating tactical depth.
 
 ---
 
@@ -774,16 +996,39 @@ Combat can inflict persistent wounds via status effects.
 
 ### Bleeding
 
-Caused by damage types with `CanCauseBleeding: true`. Bleeding naturally **heals over time** (clotting).
+Caused by damage types with `CanCauseBleeding: true`. Bleeding naturally **heals over time** (clotting) via the `ReplacedBy` mechanism.
 
 **Example configs:**
 ```go
-"bleeding_light":    {TickInterval: 10s, /* 1-2 dmg/tick, heals in ~2min */}
-"bleeding_moderate": {TickInterval: 5s,  ChallengeModifiers: {"accuracy": -5}}
-"bleeding_severe":   {TickInterval: 3s,  ChallengeModifiers: {"accuracy": -10, "dodge": -10}}
+"bleeding_severe": {
+    DefaultDuration: 30 * time.Second,
+    TickInterval:    3 * time.Second,
+    ChallengeModifiers: map[string]float64{"accuracy": -10, "dodge": -10},
+    ReplacedBy: "bleeding_moderate",
+}
+"bleeding_moderate": {
+    DefaultDuration: 30 * time.Second,
+    TickInterval:    5 * time.Second,
+    ChallengeModifiers: map[string]float64{"accuracy": -5},
+    ReplacedBy: "bleeding_light",
+}
+"bleeding_light": {
+    DefaultDuration: 60 * time.Second,
+    TickInterval:    10 * time.Second,
+    ChallengeModifiers: map[string]float64{"accuracy": -2},
+    // No ReplacedBy - just expires (healed)
+}
 ```
 
-**Natural healing:** Bleeding downgrades over time: severe → moderate → light → healed. Medical treatment stops it immediately.
+**Downgrade timeline (severe wound):**
+- 0-30s: `bleeding_severe` (3s ticks, heavy penalties)
+- 30s: expires → Go applies `bleeding_moderate`
+- 30-60s: `bleeding_moderate` (5s ticks, moderate penalties)
+- 60s: expires → Go applies `bleeding_light`
+- 60-120s: `bleeding_light` (10s ticks, minor penalties)
+- 120s: expires → healed
+
+**Medical treatment:** First aid removes the bleeding effect entirely, stopping the cascade.
 
 ---
 
@@ -812,7 +1057,7 @@ type RangedWeaponConfig struct {
     Description string
 
     // Slot requirements
-    SlotType      string  // "weapon"
+    SlotType      string  // "wield"
     SlotsRequired int     // 1 = pistol, 2 = rifle/bow
 
     // Range (0 = same room only, 1 = can shoot into adjacent room)
@@ -842,9 +1087,9 @@ type RangedWeaponConfig struct {
 
     // Ammunition
     MagazineSize     int
-    ReloadTime       time.Duration  // Base reload time (mechanical)
-    ReloadChallenges Challenges     // Skill modifier (sigmoid: 0.5x to 1.5x of ReloadTime)
-    CompatibleAmmo   []string       // Which AmmoConfig IDs this weapon can use
+    ReloadTime       time.Duration   // Base reload time (mechanical)
+    ReloadChallenges Challenges      // Skill modifier (sigmoid: 0.5x to 1.5x of ReloadTime)
+    CompatibleAmmo   map[string]bool // Which AmmoConfig IDs this weapon can use
 
     // Fire modes
     FireModes []FireModeConfig
@@ -872,7 +1117,7 @@ type RangedWeaponConfig struct {
 // Example: Throwing Dagger
 RangedWeaponConfig{
     ID: "throwing_dagger",
-    SlotType: "weapon", SlotsRequired: 1,
+    SlotType: "wield", SlotsRequired: 1,
     MaxRange: 1,
     IsThrown: true,
     DamageTypes: map[string]float64{"piercing": 8},
@@ -967,7 +1212,8 @@ func getAimBonus(shooter *Object, config *CombatConfig) float64 {
 
     // Skill affects aim rate via sigmoid (0.5x to 1.5x)
     result := config.AimChallenges.Check(shooter, "")
-    mult := 1.0 + 0.5/(1.0+math.Exp(-result/50.0)) - 0.25  // Maps to 0.5-1.5
+    sigmoid := 1.0 / (1.0 + math.Exp(-result/50.0))  // 0 to 1
+    mult := 0.5 + sigmoid  // Maps to 0.5-1.5
 
     bonus := elapsed * config.AimBonusPerSecond * mult
     return math.Min(bonus, config.MaxAimBonus)
@@ -985,14 +1231,17 @@ MaxAimBonus       float64     // Cap on aim bonus (e.g., +50)
 
 ### Reload Mechanics
 
+**Slot requirement:** Reloading requires one free wield slot (a free hand to manipulate ammunition). If all wield slots are occupied, you must first unwield something before reloading.
+
 Reload time is primarily mechanical (weapon design) with skill modifier:
 
 ```go
 func calculateReloadTime(weapon *RangedWeaponConfig, shooter *Object) time.Duration {
     result := weapon.ReloadChallenges.Check(shooter, "")
     // sigmoid maps result to 0.5-1.5 range (higher skill = faster = lower multiplier)
-    // result=0 → 1.0x, result→+∞ → 0.5x, result→-∞ → 1.5x
-    mult := 1.0 - 0.5/(1.0+math.Exp(-result/50.0))
+    // result→-∞ → 1.5x (slow), result=0 → 1.0x, result→+∞ → 0.5x (fast)
+    sigmoid := 1.0 / (1.0 + math.Exp(-result/50.0))  // 0 to 1
+    mult := 1.5 - sigmoid  // Maps to 1.5-0.5
     return time.Duration(float64(weapon.ReloadTime) * mult)
 }
 ```
@@ -1004,7 +1253,7 @@ Jamming is skill-based, not random chance:
 ```go
 // Jam check per shot (modified by weapon health)
 healthPenalty := (1 - weapon.Health/weapon.MaxHealth) * 50
-jamResult := weapon.JamChallenges.Check(shooter) - healthPenalty
+jamResult := weapon.JamChallenges.Check(shooter, "") - healthPenalty
 if jamResult < 0 {
     weapon.Jammed = true
 }
@@ -1013,8 +1262,9 @@ if jamResult < 0 {
 func calculateUnjamTime(weapon *RangedWeaponConfig, shooter *Object) time.Duration {
     result := weapon.UnjamChallenges.Check(shooter, "")
     // sigmoid maps result to 0.5-1.5 range (higher skill = faster = lower multiplier)
-    // result=0 → 1.0x, result→+∞ → 0.5x, result→-∞ → 1.5x
-    mult := 1.0 - 0.5/(1.0+math.Exp(-result/50.0))
+    // result→-∞ → 1.5x (slow), result=0 → 1.0x, result→+∞ → 0.5x (fast)
+    sigmoid := 1.0 / (1.0 + math.Exp(-result/50.0))  // 0 to 1
+    mult := 1.5 - sigmoid  // Maps to 1.5-0.5
     return time.Duration(float64(weapon.UnjamTime) * mult)
 }
 ```
@@ -1258,7 +1508,9 @@ type BodyPart struct {
 Total grapple power = sum of `GrappleEffectiveness` for all body parts where:
 - `GrappleEffectiveness > 0`
 - Body part is not disabled (health > 0)
-- Body part is **not wielding a weapon** (no item in "weapon" slot for that body part)
+- Body part is **not wielding anything** (not present in `Wielding` map)
+
+**Zero grapple power:** If total grapple power is 0 (no free grappling limbs, or body has no limbs with GrappleEffectiveness), grappling is impossible. The `grapple` action fails automatically.
 
 **Skill check:** Each challenge's Level is **divided by grapple power** before the Check. A humanoid (1.0 power) uses normal challenge levels; an octopus (4.0 power) faces challenges at 1/4 the difficulty (making grappling much easier).
 
@@ -1268,7 +1520,7 @@ Total grapple power = sum of `GrappleEffectiveness` for all body parts where:
 - Sword + shield: 0.2 power (only legs)
 - Two-handed sword: 0.2 power (only legs)
 
-**Note:** Shields are WeaponConfig with `SlotType: "weapon"`, so wielding a shield occupies that limb for grappling. Armor (ArmorConfig) does NOT occupy grappling limbs.
+**Note:** Shields are WeaponConfig with `SlotType: "wield"`, so wielding a shield occupies that limb for grappling. Armor (ArmorConfig) does NOT occupy grappling limbs.
 
 ### ObjectDO Fields
 
@@ -1571,7 +1823,7 @@ Test scenarios:
 9. **Damage type not in parry/block/armor map**: No defense against that type
 10. **Body part disabled (health = 0)**: Cannot attack or defend with that body part
 11. **All attacking body parts disabled**: Cannot attack unarmed; must equip weapon or flee
-12. **Unarmed block without natural armor**: Body part takes damage from blocking (dragon scales absorb, human arms get hurt)
+12. **Unarmed blocking**: Not allowed - blocking requires wielding something (weapon, shield, tool)
 13. **Equipment swap mid-combat**: Allowed but takes time; can't attack/parry/block during swap, dodge with penalty
 14. **Dual-wield**: Both equipped weapons attack; each has its own speed roll and attack cycle
 15. **Out of ammo**: Can't fire; must reload
@@ -1591,7 +1843,7 @@ Test scenarios:
 
 1. **Attack skills have no recharge** - Weapon speed skill check controls timing
 2. **Comparative defense** - Attacker's hit score compared against each defense score (dodge > hit = dodged). Challenge results can be negative (failure) or positive (success) - when comparing, the higher value wins, so a "lesser failure" (-5) beats a "greater failure" (-20)
-3. **Defense chain is sequential** - Dodge -> Parry -> Block -> Armor soak -> Body part multiplier
+3. **Defense chain is sequential** - Parry -> Dodge -> Block -> Armor soak -> Body part multiplier
 4. **Crit determined early** - Crit check happens after accuracy, before defense chain; multiplier applied at end if attack lands
 5. **Parry redirects** (no damage), **Block absorbs** (weapon takes damage)
 6. **Equipment degrades 1:1** - Blocking/absorbing damage costs equipment health 1:1; efficacy scales with health ratio
@@ -1615,7 +1867,7 @@ Test scenarios:
 24. **Dual-wield multi-attack** - When wielding weapons in multiple body parts, all weapons attack independently
 25. **Body part health** - Each body part has health; at 0 it's disabled and cannot attack or defend
 26. **Dual health tracking** - Damage applies to both body part AND central health; body parts can be disabled without death
-27. **Unarmed defense** - Parry possible with skill; block requires natural armor (scales, thick hide) or body part takes damage
+27. **Unarmed defense** - Parry possible with skill via UnarmedParryChallenges; blocking requires wielding something
 28. **Multi-attack defense** - Defender rolls defense for each incoming attack; skill recharge makes repeated defenses harder
 29. **Ranged damage = weapon + ammo** - Both contribute; bows add draw strength, guns add nothing
 30. **Simple range model** - MaxRange 0 (same room) or 1 (adjacent); no exit configuration needed
@@ -1643,3 +1895,6 @@ Test scenarios:
 52. **Flanking bonus** - Outnumbered defenders suffer accuracy/defense penalties based on attacker ratio
 53. **Focus resource** - Mental actions use Focus (spells, aimed shots); Stamina for physical (feint, disarm)
 54. **Aim rate skill-based** - AimChallenges modify aim bonus accumulation rate via sigmoid
+55. **Body part targeting via HitWeight** - Random selection weighted by HitWeight; focus/defend modify weights
+56. **Focus/Defend risk-reward** - Good rolls improve targeting; bad rolls cause accuracy/defense penalties
+57. **Configurable tuning constants** - Sigmoid divisor, multiplier ranges, penalties grouped by subsystem in CombatConfig
