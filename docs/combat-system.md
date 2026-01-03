@@ -1749,29 +1749,51 @@ The combat system is implemented in phases, each building on the previous. Each 
 ### Dependency Graph
 
 ```
-Phase 1: Foundation ──┬──> Phase 2: ObjectDO Schema ──> Phase 4: Equipment
-                      │                              │
-                      └──> Phase 3: Status Effects <─┘
+Phase 1: Foundation
+         │
+         v
+Phase 2: ObjectDO Schema
+         │
+         ├───────────────┬───────────────┐
+         v               v               v
+Phase 3: Status    Phase 4: Equipment   Phase 5: Resources
+         │               │               │
+         │               └───────┬───────┘
+         │                       v
+         │               Phase 6: Basic Melee
+         │                       │
+         │                       v
+         │               Phase 7: Body Parts
+         │                       │
+         └───────────────┬───────┴───────────────┐
+                         v                       v
+                 Phase 8: Advanced Melee   Phase 9: Ranged
+                         │                       │
+                         │                       v
+                         │               Phase 10: Aiming & Cover
+                         v                       │
+                 Phase 11: Movement              │
+                         │                       │
+                         └───────────┬───────────┘
+                                     v
+                         Phase 12: Message Rendering
                                      │
                                      v
-                      Phase 5: Resources (Health/Stamina/Focus)
+                         Phase 13: JS Overrides
                                      │
                                      v
-                      Phase 6: Basic Melee ──> Phase 7: Body Parts
-                                                       │
-                                     ┌─────────────────┤
-                                     v                 v
-                      Phase 8: Advanced Melee    Phase 9: Ranged
-                                     │                 │
-                                     v                 v
-                      Phase 11: Movement    Phase 10: Aiming & Cover
-                                     │
-                                     v
-                      Phase 12: Message Rendering
-                                     │
-                                     v
-                      Phase 13: JS Overrides ──> Phase 14: Polish
+                         Phase 14: Polish
 ```
+
+**Dependency summary:**
+- Phases 3, 4, 5: Parallel branches from Phase 2 (independent subsystems)
+- Phase 6: Requires Phase 4 (equipment) and Phase 5 (health)
+- Phase 7: Requires Phase 6
+- Phase 8: Requires Phase 7 and Phase 3 (status effects for wounds)
+- Phase 9: Requires Phase 6 (basic combat) and Phase 4 (equipment)
+- Phase 10: Requires Phase 9
+- Phase 11: Requires Phase 6 (can be done in parallel with 8-10)
+- Phases 12-14: Sequential polish after all features complete
 
 ---
 
@@ -1879,6 +1901,9 @@ AimingSince time.Time
 
 // Grappling
 GrappledBy, Grappling string
+
+// Room effects (for rooms/containers)
+RoomStatusEffects []string  // StatusEffectConfig IDs applied while in this room
 
 // Movement
 GuardingExit string
@@ -2031,14 +2056,18 @@ GuardingExit string
 
 **Testing:**
 - [ ] startCombat initiates attack cycle
-- [ ] Attacks land after speed delay
+- [ ] Attacks land after speed delay (varies by weapon speed skill)
 - [ ] Parry can deflect attack (no damage)
 - [ ] Dodge can avoid attack entirely
-- [ ] Block absorbs damage, weapon takes damage
+- [ ] Block absorbs damage, blocking weapon takes damage
 - [ ] Armor reduces damage, armor takes damage
 - [ ] Crit multiplies damage
 - [ ] Death event emitted at 0 health
 - [ ] stopCombat ends attack cycle
+- [ ] Multiple concurrent combats work (A vs B, A vs C)
+- [ ] CombatTargets persists across server restart
+- [ ] Combat auto-resumes on restart (goroutines lost, but CombatTargets triggers new cycle)
+- [ ] Self-attack prevented
 
 ---
 
@@ -2074,10 +2103,14 @@ GuardingExit string
 - [ ] Focus causes accuracy penalty (bad roll)
 - [ ] Defend decreases chance to hit specific part (good roll)
 - [ ] Defend causes defense penalty (bad roll)
-- [ ] Body part damage tracked separately
+- [ ] Body part damage tracked separately from central health
+- [ ] Damage applies to BOTH body part AND central health
 - [ ] Armor on hit body part applies
 - [ ] Armor on other body parts doesn't apply
-- [ ] Disabled body part can't attack
+- [ ] Disabled body part (health=0) can't attack
+- [ ] Disabled body part can't defend
+- [ ] Vital body part (head/torso) at 0 health causes unconsciousness
+- [ ] BodyParts map initialized from BodyConfig
 - [ ] bodyPartDisabled event emitted
 
 ---
@@ -2128,6 +2161,13 @@ GuardingExit string
 - SpeedFactor affects attack timing
 - PreventsActions blocks attacks
 
+**Stealth & Ambush:**
+- Hidden attackers (all descriptions have challenges observer fails) get ambush bonuses
+- AmbushAccuracyBonus added to first attack from stealth
+- AmbushAutoCrit makes first attack auto-crit
+- Ambush ignores dodge on first attack
+- Attacking removes stealth (clears description challenges)
+
 **JS callbacks:**
 - `setStance(stanceConfigID)` / `getStance()`
 
@@ -2145,6 +2185,9 @@ GuardingExit string
 - [ ] Flanking bonus applies when outnumbered
 - [ ] Broken weapon can't attack
 - [ ] Status effects modify combat rolls
+- [ ] Ambush from stealth ignores dodge
+- [ ] AmbushAccuracyBonus applies on first attack
+- [ ] Attacking breaks stealth
 
 ---
 
