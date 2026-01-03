@@ -208,19 +208,24 @@ func (g *Game) loadServerConfig(ctx context.Context) error {
 }
 
 // persistServerConfig writes the current in-memory config to the root object's state.
+// Acquires root lock before serialization to prevent TOCTOU race where config
+// could be modified between serialization and persistence.
 func (g *Game) persistServerConfig(ctx context.Context) error {
 	root, err := g.storage.AccessObject(ctx, emptyID, nil)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
 
+	root.Lock()
+	defer root.Unlock()
+
+	// Serialize while holding root lock. MarshalJSON uses RLock internally,
+	// which is safe since we consistently acquire root lock first.
 	data, err := goccy.Marshal(g.serverConfig)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
 
-	root.Lock()
-	defer root.Unlock()
 	root.Unsafe.State = string(data)
 	return nil
 }

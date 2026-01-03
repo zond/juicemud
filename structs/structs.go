@@ -202,12 +202,13 @@ func (c *Challenge) Check(cfg *ServerConfig, challenger *Object, targetID string
 	// Use Unsafe.Learning directly since we already hold the lock
 	// (calling GetLearning() would deadlock - RWMutex is not reentrant)
 	result := skillUse{
+		cfg:       cfg,
 		skill:     &skill,
 		user:      challenger.Unsafe.Id,
 		challenge: float64(c.Level),
 		at:        time.Now(),
 		target:    targetID,
-	}.check(cfg, challenger.Unsafe.Learning)
+	}.check(challenger.Unsafe.Learning)
 
 	challenger.Unsafe.Skills[c.Skill] = skill
 
@@ -845,6 +846,7 @@ func (s *Skill) rechargeCoeff(cfg *ServerConfig, at Timestamp) float64 {
 }
 
 type skillUse struct {
+	cfg       *ServerConfig
 	skill     *Skill
 	user      string
 	target    string
@@ -854,20 +856,20 @@ type skillUse struct {
 
 // check performs the skill check and returns positive for success, negative for failure.
 // If improve is true, also applies forgetting and learning to the skill.
-func (s skillUse) check(cfg *ServerConfig, improve bool) float64 {
+func (s skillUse) check(improve bool) float64 {
 	stamp := Stamp(s.at)
 
 	effective := float64(s.skill.Practical)
 	if improve {
-		effective = s.skill.Effective(cfg, stamp)
+		effective = s.skill.Effective(s.cfg, stamp)
 		s.skill.Practical = float32(effective)
 	}
 
-	rechargeCoeff := s.skill.rechargeCoeff(cfg, stamp)
+	rechargeCoeff := s.skill.rechargeCoeff(s.cfg, stamp)
 	successChance := rechargeCoeff / (1.0 + math.Pow(10, (s.challenge-effective)*0.1))
 
 	if improve {
-		s.skill.Practical += float32(s.skill.improvement(cfg, stamp, s.challenge, effective))
+		s.skill.Practical += float32(s.skill.improvement(s.cfg, stamp, s.challenge, effective))
 		if s.skill.Practical > s.skill.Theoretical {
 			s.skill.Theoretical = s.skill.Practical
 		}
@@ -876,7 +878,7 @@ func (s skillUse) check(cfg *ServerConfig, improve bool) float64 {
 	s.skill.LastBase = float32(rechargeCoeff)
 	s.skill.LastUsedAt = stamp.Uint64()
 
-	random := s.rng(cfg).Float64()
+	random := s.rng().Float64()
 	// Unified formula: score is based on ratio of random to successChance.
 	// - Success (random < successChance): ratio < 1, log negative, score positive
 	// - Failure (random > successChance): ratio > 1, log positive, score negative
@@ -886,13 +888,13 @@ func (s skillUse) check(cfg *ServerConfig, improve bool) float64 {
 
 // rng returns a deterministic RNG seeded by user, skill, target, and time window.
 // This ensures consistent results for repeated checks within the skill's Duration.
-func (s skillUse) rng(cfg *ServerConfig) *rnd.Rand {
+func (s skillUse) rng() *rnd.Rand {
 	h := fnv.New64()
 	h.Write([]byte(s.user))
 	h.Write([]byte(s.skill.Name))
 	h.Write([]byte(s.target))
 
-	skillConfig, _ := cfg.GetSkillConfig(s.skill.Name)
+	skillConfig, _ := s.cfg.GetSkillConfig(s.skill.Name)
 
 	// Seed the hash with time step based on skill duration.
 	step := uint64(s.at.UnixNano())

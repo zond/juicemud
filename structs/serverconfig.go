@@ -105,17 +105,14 @@ func (c *ServerConfig) ReplaceSkillConfigs(configs map[string]SkillConfig) {
 }
 
 // SkillConfigsSnapshot returns a copy of all skill configs for serialization.
+// Always returns a non-nil map (empty if no configs) so callers can iterate safely.
 func (c *ServerConfig) SkillConfigsSnapshot() map[string]SkillConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.skillConfigs == nil {
-		return nil
+		return make(map[string]SkillConfig)
 	}
-	result := make(map[string]SkillConfig, len(c.skillConfigs))
-	for k, v := range c.skillConfigs {
-		result[k] = v
-	}
-	return result
+	return maps.Clone(c.skillConfigs)
 }
 
 // serverConfigJSON is the JSON serialization format for ServerConfig.
@@ -133,7 +130,7 @@ func (c *ServerConfig) MarshalJSON() ([]byte, error) {
 	defer c.mu.RUnlock()
 
 	j := serverConfigJSON{
-		SkillConfigs: c.skillConfigs,
+		SkillConfigs: maps.Clone(c.skillConfigs),
 	}
 	j.Spawn.Container = c.spawn
 
