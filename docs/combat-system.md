@@ -1744,151 +1744,665 @@ GuardingExit string  // Exit direction being guarded (empty = not guarding)
 
 ## Implementation Phases
 
-### Phase 1: Data Model & Config Stores
+The combat system is implemented in phases, each building on the previous. Each phase should be testable independently before moving to the next.
+
+### Dependency Graph
+
+```
+Phase 1: Foundation ──┬──> Phase 2: ObjectDO Schema ──> Phase 4: Equipment
+                      │                              │
+                      └──> Phase 3: Status Effects <─┘
+                                     │
+                                     v
+                      Phase 5: Resources (Health/Stamina/Focus)
+                                     │
+                                     v
+                      Phase 6: Basic Melee ──> Phase 7: Body Parts
+                                                       │
+                                     ┌─────────────────┤
+                                     v                 v
+                      Phase 8: Advanced Melee    Phase 9: Ranged
+                                     │                 │
+                                     v                 v
+                      Phase 11: Movement    Phase 10: Aiming & Cover
+                                     │
+                                     v
+                      Phase 12: Message Rendering
+                                     │
+                                     v
+                      Phase 13: JS Overrides ──> Phase 14: Polish
+```
+
+---
+
+### Phase 1: Foundation (Config Infrastructure)
+
+**Goal:** All config types defined and accessible via JS. No behavior changes yet.
+
+**Depends on:** Nothing (first phase)
 
 | File | Changes |
 |------|---------|
-| `structs/schema.go` | Add to ObjectDO: Health, MaxHealth, Stamina, MaxStamina, Wielding (map), Wearing (map), BodyPartHealth (map), BodyConfigID, StanceConfigID, CombatTargets, StatusEffects |
-| `structs/combat.go` | New file: All config types (WeaponConfig, ArmorConfig, etc.) |
-| `structs/status.go` | New file: StatusEffect, StatusEffectConfig, lazy cleanup logic |
-| `game/game.go` | Expand ServerConfig, load all configs at startup |
+| `structs/combat.go` | New file: All config type definitions |
+| `structs/serverconfig.go` | Add maps for each config type, with Get/Set/Delete/CAS/Snapshot/Replace methods |
+| `game/processing.go` | Add `get*Config` and `update*Config` JS callbacks for each type |
 
-Config types to add to ServerConfig (following SkillConfig pattern):
-- WeaponConfig, RangedWeaponConfig, AmmoConfig
-- ArmorConfig
-- BodyConfig
-- StanceConfig
-- StatusEffectConfig
-- DamageTypeConfig
-- CombatConfig, MovementConfig
+**Config types to define:**
+```go
+// Damage system
+type DamageTypeConfig struct { ... }
 
-Each config type needs:
-- Get/Set/Delete/CompareAndSwap/Snapshot/Replace methods on ServerConfig
-- `get*Config` and `update*Config` JS callbacks in processing.go
+// Melee weapons
+type WeaponConfig struct { ... }
 
-### Phase 2: Status Effect System
+// Ranged weapons
+type RangedWeaponConfig struct { ... }
+type AmmoConfig struct { ... }
+type FireModeConfig struct { ... }
+
+// Defense
+type ArmorConfig struct { ... }
+
+// Bodies
+type BodyConfig struct { ... }
+type BodyPart struct { ... }
+
+// Combat modifiers
+type StanceConfig struct { ... }
+type StatusEffectConfig struct { ... }
+
+// Global tuning
+type CombatConfig struct { ... }
+type MovementConfig struct { ... }
+```
+
+**Testing:**
+- [ ] Each config type can be created via `updateXConfig(name, null, config)`
+- [ ] Each config type can be read via `getXConfig(name)`
+- [ ] Each config type can be updated via `updateXConfig(name, old, new)`
+- [ ] Each config type can be deleted via `updateXConfig(name, old, null)`
+- [ ] Configs persist across server restart (stored in root object state)
+
+---
+
+### Phase 2: ObjectDO Schema
+
+**Goal:** All combat-related fields on ObjectDO. Just data storage, no logic yet.
+
+**Depends on:** Phase 1 (needs config type definitions)
 
 | File | Changes |
 |------|---------|
-| `structs/status.go` | StatusEffect access with lazy expiry cleanup |
-| `game/jscallbacks.go` | Status effect JS functions |
+| `structs/schema.go` | Add all new fields to ObjectDO |
+| `structs/combat.go` | Add BodyPartState, StatusEffect types |
 
-Key behaviors:
-- `GetStatusEffects()` lazily removes expired, emits `statusExpired` for each
-- `ApplyStatusEffect(configID, duration)` emits `statusApplied`, schedules tick interval if needed
+**ObjectDO fields to add:**
+```go
+// Combat stats
+Health, MaxHealth float64
+Stamina, MaxStamina float64
+Focus, MaxFocus float64
+
+// Regeneration timestamps (for lazy computation)
+HealthLastRegenAt, StaminaLastRegenAt, FocusLastRegenAt time.Time
+HealthRegenEnabled, StaminaRegenEnabled, FocusRegenEnabled bool
+
+// Equipment
+Wielding map[string]string      // bodyPartID -> objectID
+Wearing  map[string][]string    // bodyPartID -> ordered objectIDs
+
+// Body
+BodyParts      map[string]BodyPartState
+BodyConfigID   string
+StanceConfigID string
+
+// Combat state
+CombatTargets  map[string]bool
+CurrentTarget  string
+FocusBodyPart  string
+DefendBodyPart string
+
+// Status effects
+StatusEffects []StatusEffect
+
+// Cover
+CoverAbsorption, CoverAccuracyPenalty float64
+InCoverBehind string
+
+// Ranged state
+CurrentAmmo int
+LoadedAmmoType string
+Jammed bool
+CurrentFireMode string
+AimingAt string
+AimingSince time.Time
+
+// Grappling
+GrappledBy, Grappling string
+
+// Movement
+GuardingExit string
+```
+
+**Testing:**
+- [ ] New fields serialize/deserialize correctly
+- [ ] Default values are sensible (empty maps, zero health, etc.)
+
+---
+
+### Phase 3: Status Effects
+
+**Goal:** Complete status effect system, independent of combat.
+
+**Depends on:** Phase 1 (StatusEffectConfig), Phase 2 (StatusEffects field)
+
+| File | Changes |
+|------|---------|
+| `structs/status.go` | StatusEffect type, GetStatusEffects with lazy cleanup |
+| `game/status.go` | Apply/remove logic, tick scheduling |
+| `game/processing.go` | JS callbacks for status effects |
+
+**Key behaviors:**
+- `GetStatusEffects()` lazily removes expired effects, emits `statusExpired`
+- `ApplyStatusEffect(configID, duration)` emits `statusApplied`, schedules tick interval
 - `RemoveStatusEffect(id)` emits `statusExpired`, clears any tick interval
-- **Tick interval handler**: On each tick, first check if effect has expired
-  - If expired: remove status effect, clear interval, emit `statusExpired`
-  - If not expired: emit `statusTick`, reschedule next tick
-- **Lazy + tick**: All effects checked lazily on access; ticking effects also checked at each tick
+- Tick handler checks expiry first, then emits `statusTick` or handles expiry
+- Unique effects refresh duration; stacking uses attenuation
+- ReplacedBy chain applies on expiry
 
-### Phase 3: Combat Core
+**JS callbacks:**
+- `applyStatusEffect(configID, duration)` / `removeStatusEffect(id)`
+- `getStatusEffects()` / `hasStatusEffect(configID)`
+
+**Testing:**
+- [ ] Apply effect, verify it appears in getStatusEffects()
+- [ ] Effect with duration expires after time passes
+- [ ] Permanent effect (duration=0) never expires
+- [ ] Ticking effect emits statusTick at intervals
+- [ ] Expired ticking effect is cleaned up, interval cancelled
+- [ ] Unique effect refreshes duration on reapply
+- [ ] Stacking effect respects MaxStacks and StackAttenuation
+- [ ] ReplacedBy effect is applied when original expires
+- [ ] statusApplied, statusExpired, statusTick events emitted correctly
+
+---
+
+### Phase 4: Equipment System
+
+**Goal:** Wielding weapons, wearing armor, equipment health.
+
+**Depends on:** Phase 1 (WeaponConfig, ArmorConfig), Phase 2 (Wielding/Wearing fields)
 
 | File | Changes |
 |------|---------|
-| `game/combat.go` | Combat logic, attack resolution, defense chain, message rendering |
+| `game/equipment.go` | Equipment logic |
+| `game/processing.go` | JS callbacks for equipment |
 
-Key functions:
-- `startCombat(attackerID, targetID)`
-- `stopCombat(attackerID, targetID)`
-- `scheduleAttack(attackerID, targetID)` - spawns goroutine with sleep
-- `resolveAttack(attacker, target, bodyPart)` - full defense chain with modifiers
-- `calculateModifiers(object)` - sum stance + status effect modifiers
-- `applyDamage(target, amount, types, bodyPart)`
-- `renderCombatMessage(eventType, renderer, observer, data)` - JS override pattern
+**Key behaviors:**
+- `equip(objectID, bodyPartID)` validates SlotType compatibility, SlotsRequired
+- Multi-slot weapons occupy multiple body parts
+- Armor layering validates Thickness vs Looseness
+- Equipment health tracked on the equipment object itself
 
-### Phase 4: JS API
+**JS callbacks:**
+- `equip(objectID, bodyPartID)` / `unequip(bodyPartID)`
+- `getEquipped(bodyPartID)` / `getEquipment()`
+- `getEquipmentHealth(bodyPartID)`
+
+**Testing:**
+- [ ] Equip one-handed weapon to arm
+- [ ] Equip two-handed weapon occupies both arms
+- [ ] Can't equip weapon to incompatible body part
+- [ ] Armor layers correctly (thin under loose)
+- [ ] Can't layer armor that doesn't fit
+- [ ] Equipment health readable
+- [ ] Unequip clears the slot(s)
+
+---
+
+### Phase 5: Resource System
+
+**Goal:** Health, Stamina, Focus with lazy regeneration.
+
+**Depends on:** Phase 2 (resource fields), Phase 1 (CombatConfig for regen rates)
 
 | File | Changes |
 |------|---------|
-| `game/jscallbacks.go` | All combat JS functions |
+| `game/resources.go` | Regeneration logic |
+| `game/processing.go` | JS callbacks for resources |
 
-**Combat functions:**
-- `startCombat(targetID)` / `stopCombat(targetID)` / `stopAllCombat()`
-- `setCurrentTarget(targetID)` / `getCurrentTarget()`
-- `setFocusBodyPart(partName)` / `getFocusBodyPart()` / `clearFocusBodyPart()`
-- `setDefendBodyPart(partName)` / `getDefendBodyPart()` / `clearDefendBodyPart()`
+**Key behaviors:**
+- Resources regenerate lazily on access, not via timers
+- Skill challenges affect regen rate via sigmoid (RegenMultRange)
+- Regen can be disabled per-resource (robots don't heal)
+- InCombatRegenMultiplier reduces regen during combat
 
-**Ranged:**
-- `setFireMode(modeID)` / `getFireMode()` - set/get current fire mode for wielded ranged weapon
-- `reload()` / `unjam()` - reload or clear jam on wielded ranged weapon
-- `startAiming(targetID)` / `stopAiming()` / `getAimBonus()` - aiming control
-
-**Stats:**
+**JS callbacks:**
 - `getHealth()` / `setHealth(n)` / `getMaxHealth()` / `setMaxHealth(n)`
 - `getStamina()` / `setStamina(n)` / `getMaxStamina()` / `setMaxStamina(n)`
 - `getFocus()` / `setFocus(n)` / `getMaxFocus()` / `setMaxFocus(n)`
 
-**Equipment:**
-- `equip(objectID, slotName)` - equip item to a specific slot (validates slot compatibility)
-- `unequip(slotName)` - unequip item from a slot
-- `getEquipped(slotName)` - get object ID equipped in a slot (empty string if none)
-- `getEquipment()` - get all equipped items as `{slotName: objectID, ...}`
-- `getEquipmentHealth(slotName)` - get health of item in slot (for degradation checks)
+**Testing:**
+- [ ] Health regenerates over time when damaged
+- [ ] Regen respects MaxHealth cap
+- [ ] Regen disabled when HealthRegenEnabled=false
+- [ ] Skill affects regen rate (higher skill = faster)
+- [ ] InCombatRegenMultiplier reduces rate during combat
 
-**Stance:**
-- `setStance(stanceConfigID)` / `getStance()`
+---
 
-**Status Effects:**
-- `applyStatusEffect(configID, duration)` / `removeStatusEffect(id)`
-- `getStatusEffects()` / `hasStatusEffect(configID)`
+### Phase 6: Basic Melee Combat
 
-**JS events emitted:**
-- Combat: `attackHit`, `attackMissed`, `parried`, `blocked`, `damaged`, `death`, `criticalHit`, `bodyPartDisabled`
-- Status: `statusApplied`, `statusExpired`, `statusTick`
-- Render (for message customization): `renderAttack`, `renderUnarmedAttack`, `renderMiss`, `renderDodge`, `renderParry`, `renderBlock`, `renderDamageDealt`, `renderDamageReceived`, `renderArmorSoak`, `renderCrit`, `renderDeath`, `renderBodyPartDisabled`, `renderStatusApplied`, `renderStatusTick`, `renderStatusExpired`
+**Goal:** Core combat loop with single weapon, basic defense chain.
 
-### Phase 5: Look Output Enhancement
+**Depends on:** Phase 4 (equipment), Phase 5 (health)
 
 | File | Changes |
 |------|---------|
-| `game/look.go` or equivalent | Add body plan info to look output |
+| `game/combat.go` | Core combat logic |
+| `game/processing.go` | JS callbacks for combat |
 
-When looking at object with BodyConfigID:
-```
-A large humanoid figure stands before you.
-Body: humanoid (head, torso, arms, legs)
-```
+**Key behaviors:**
+- `startCombat(targetID)` begins attack cycle via goroutine
+- `stopCombat(targetID)` cancels attack cycle
+- Attack timing via goroutine sleep (not persistent)
+- Defense chain: Accuracy → Parry → Dodge → Block → Armor → Damage
+- Critical hits determined early, multiplier applied at end
+- Death emits `death` event
 
-### Phase 6: Wizard Commands
+**Attack flow (simplified, single weapon):**
+1. Roll accuracy (AccuracyChallenges)
+2. Roll crit (BaseCritChance)
+3. Per damage type: defender parries or it continues
+4. If not parried: defender dodges or it continues
+5. Per damage type: defender blocks or it continues (weapon takes damage)
+6. Armor soaks remaining damage (armor takes damage)
+7. Apply body part multiplier
+8. Apply crit multiplier if crit
+9. Apply damage to health
+10. If health <= 0: emit death
+
+**JS callbacks:**
+- `startCombat(targetID)` / `stopCombat(targetID)` / `stopAllCombat()`
+- `setCurrentTarget(targetID)` / `getCurrentTarget()`
+
+**JS events:**
+- `attackHit`, `attackMissed`, `parried`, `blocked`, `damaged`, `death`, `criticalHit`
+
+**Testing:**
+- [ ] startCombat initiates attack cycle
+- [ ] Attacks land after speed delay
+- [ ] Parry can deflect attack (no damage)
+- [ ] Dodge can avoid attack entirely
+- [ ] Block absorbs damage, weapon takes damage
+- [ ] Armor reduces damage, armor takes damage
+- [ ] Crit multiplies damage
+- [ ] Death event emitted at 0 health
+- [ ] stopCombat ends attack cycle
+
+---
+
+### Phase 7: Body Part System
+
+**Goal:** Body part targeting, body part health, Focus/Defend mechanics.
+
+**Depends on:** Phase 6 (combat loop), Phase 1 (BodyConfig)
+
+| File | Changes |
+|------|---------|
+| `game/combat.go` | Body part targeting |
+
+**Key behaviors:**
+- Body part selected by HitWeight (weighted random)
+- Focus: attacker targets specific part (risk/reward)
+- Defend: defender protects specific part (risk/reward)
+- Body part health tracked separately from central health
+- Damage applies to BOTH body part and central health
+- Disabled body part (health=0) can't attack or defend
+- Armor only protects if worn on hit body part
+
+**JS callbacks:**
+- `setFocusBodyPart(partID)` / `getFocusBodyPart()` / `clearFocusBodyPart()`
+- `setDefendBodyPart(partID)` / `getDefendBodyPart()` / `clearDefendBodyPart()`
+
+**JS events:**
+- `bodyPartDisabled`
+
+**Testing:**
+- [ ] Attacks land on random body parts by HitWeight
+- [ ] Focus increases chance to hit specific part (good roll)
+- [ ] Focus causes accuracy penalty (bad roll)
+- [ ] Defend decreases chance to hit specific part (good roll)
+- [ ] Defend causes defense penalty (bad roll)
+- [ ] Body part damage tracked separately
+- [ ] Armor on hit body part applies
+- [ ] Armor on other body parts doesn't apply
+- [ ] Disabled body part can't attack
+- [ ] bodyPartDisabled event emitted
+
+---
+
+### Phase 8: Advanced Melee
+
+**Goal:** Multi-attack, wounds, stances, flanking, equipment degradation.
+
+**Depends on:** Phase 7 (body parts), Phase 3 (status effects)
+
+| File | Changes |
+|------|---------|
+| `game/combat.go` | Advanced melee features |
+
+**Key behaviors:**
+
+**Multi-attack:**
+- Unarmed: all body parts with UnarmedDamage attack
+- Dual-wield: all wielded weapons attack independently
+- Each attack has its own speed roll and cycle
+- AmbidextrousChallenges for multi-wield penalty
+- UnarmedParryChallenges for parrying without weapon
+- No unarmed blocking
+
+**Wounds:**
+- Bleeding from CanCauseBleeding damage types
+- BleedingThresholds apply status effects by damage percent
+- Severing from CanSever damage types + overkill
+- Vital parts (head/torso): sever = death
+- Grip factor: partial severance degrades weapon use
+
+**Stances:**
+- StanceConfig modifiers apply to combat rolls
+- StanceChallenges scale modifier effectiveness
+
+**Flanking:**
+- Count attackers vs defenders
+- FlankingBonusPerRatio applies accuracy bonus
+- Capped at MaxFlankingBonus
+
+**Equipment degradation:**
+- Weapons at 0 health can't attack/parry/block
+- Armor at 0 health provides no protection
+- Equipment remains equipped until removed
+
+**Status modifiers:**
+- ChallengeModifiers from active effects apply to combat rolls
+- SpeedFactor affects attack timing
+- PreventsActions blocks attacks
+
+**JS callbacks:**
+- `setStance(stanceConfigID)` / `getStance()`
+
+**Testing:**
+- [ ] Unarmed attacks from all capable body parts
+- [ ] Dual-wield attacks with both weapons
+- [ ] Ambidexterity penalty applies
+- [ ] Unarmed parry works with skill
+- [ ] Can't block unarmed
+- [ ] Bleeding applied by damage percent
+- [ ] Severing on overkill damage
+- [ ] Vital part sever = death
+- [ ] Grip factor degrades weapon after partial sever
+- [ ] Stance modifiers affect rolls
+- [ ] Flanking bonus applies when outnumbered
+- [ ] Broken weapon can't attack
+- [ ] Status effects modify combat rolls
+
+---
+
+### Phase 9: Ranged Combat
+
+**Goal:** Guns, bows, ammo, reload, jam mechanics.
+
+**Depends on:** Phase 6 (basic combat), Phase 4 (equipment)
+
+| File | Changes |
+|------|---------|
+| `game/ranged.go` | Ranged combat logic |
+| `game/processing.go` | JS callbacks for ranged |
+
+**Key behaviors:**
+- RangedWeaponConfig defines ranged weapons
+- AmmoConfig defines ammunition
+- Damage = weapon damage + ammo damage
+- Fire modes (single, burst, auto) affect accuracy/ammo
+- Magazine tracks CurrentAmmo
+- Reload requires free wield slot, takes skill-based time
+- Jam on bad skill roll, unjam takes skill-based time
+- Ranged defense penalties (DodgePenalty, ParryPenalty, BlockPenalty)
+- Thrown weapons (IsThrown) consume the weapon itself
+
+**JS callbacks:**
+- `setFireMode(modeID)` / `getFireMode()`
+- `reload()` / `unjam()`
+
+**Testing:**
+- [ ] Ranged attack deals weapon+ammo damage
+- [ ] Fire mode affects accuracy and ammo consumption
+- [ ] Out of ammo prevents firing
+- [ ] Reload fills magazine
+- [ ] Reload requires free hand
+- [ ] Jam prevents firing
+- [ ] Unjam clears jam
+- [ ] Ranged defense penalties apply (harder to dodge/parry)
+- [ ] Thrown weapon consumed on throw
+
+---
+
+### Phase 10: Aiming & Cover
+
+**Goal:** Aiming bonus, range model, cover system.
+
+**Depends on:** Phase 9 (ranged combat)
+
+| File | Changes |
+|------|---------|
+| `game/ranged.go` | Aiming and cover logic |
+| `game/processing.go` | JS callbacks |
+
+**Key behaviors:**
+
+**Aiming:**
+- Aim bonus accumulates over time (lazy from AimingSince)
+- AimChallenges affect aim rate via sigmoid
+- Capped at MaxAimBonus
+- Broken by: damage, movement, target moves, firing
+
+**Range:**
+- MaxRange 0 = same room only
+- MaxRange 1 = can shoot into adjacent room
+- RangePenalty applies for adjacent room shots
+- PointBlankModifier when in melee with target
+
+**Cover:**
+- CoverAbsorption, CoverAccuracyPenalty on objects/bodies
+- InCoverBehind field tracks cover object
+- Cover takes damage equal to absorbed (degrades 1:1)
+- Can't cover behind enemies
+- ArmorPenetration reduces cover effectiveness
+
+**JS callbacks:**
+- `startAiming(targetID)` / `stopAiming()` / `getAimBonus()`
+- `takeCover(objectID)` / `leaveCover()`
+
+**Testing:**
+- [ ] Aim bonus increases over time
+- [ ] Aim rate affected by skill
+- [ ] Aim capped at max
+- [ ] Aim broken by damage/movement
+- [ ] Can shoot into adjacent room (MaxRange 1)
+- [ ] Range penalty applies
+- [ ] Point blank modifier applies in melee
+- [ ] Cover reduces accuracy
+- [ ] Cover absorbs damage
+- [ ] Cover degrades from damage
+- [ ] Can't cover behind enemy
+
+---
+
+### Phase 11: Movement & Grappling
+
+**Goal:** Tactical movement, exit guarding, grapple system.
+
+**Depends on:** Phase 6 (combat), Phase 1 (MovementConfig)
+
+| File | Changes |
+|------|---------|
+| `game/movement.go` | Combat movement and grappling |
+
+**Key behaviors:**
+
+**Movement in combat:**
+- CombatMovementDodgePenalty while moving
+- Can't attack/parry/block while moving
+- Attacks delay movement completion
+- SpeedFactor from status effects modifies delay
+
+**Exit guarding:**
+- GuardingExit field specifies direction
+- GuardChallenges for contested passage
+- Guard can get free attack on forced passage
+
+**Grappling:**
+- Grapple power = sum of free GrappleEffectiveness
+- Challenge levels divided by grapple power
+- Grappled: can't move, dodge fails, can only target grappler
+- Grappler: can't move, grappling limbs occupied
+- Actions: grapple, hold, choke, throw, break, reverse, release
+
+**Testing:**
+- [ ] Movement in combat has dodge penalty
+- [ ] Can't attack while moving
+- [ ] SpeedFactor 0 prevents movement
+- [ ] Guard blocks exit
+- [ ] Force through guard with skill check
+- [ ] Grapple initiated successfully
+- [ ] Grappled can't move
+- [ ] Grappled can't dodge
+- [ ] Break free from grapple
+- [ ] Grapple power calculated correctly
+
+---
+
+### Phase 12: Message Rendering
+
+**Goal:** All combat messages with JS override pattern.
+
+**Depends on:** All previous combat phases
+
+| File | Changes |
+|------|---------|
+| `game/messages.go` | Message rendering logic |
+
+**Key behaviors:**
+- Each combat event has a renderer object (weapon, armor, combatant)
+- Check for `render*` callback on renderer
+- If callback returns `{Message: "..."}`, use it
+- Otherwise use Go default message
+- Messages vary by observer perspective (1st/2nd/3rd person)
+
+**Render callbacks:**
+- `renderAttack`, `renderUnarmedAttack`, `renderMiss`
+- `renderDodge`, `renderParry`, `renderBlock`
+- `renderDamageDealt`, `renderDamageReceived`, `renderArmorSoak`
+- `renderCrit`, `renderDeath`, `renderBodyPartDisabled`
+- `renderStatusApplied`, `renderStatusTick`, `renderStatusExpired`
+
+**Testing:**
+- [ ] Default messages work for all events
+- [ ] JS override replaces default message
+- [ ] Observer perspective varies correctly
+
+---
+
+### Phase 13: JS Override Callbacks
+
+**Goal:** before* callbacks for combat modification.
+
+**Depends on:** Phase 12 (message rendering complete)
+
+| File | Changes |
+|------|---------|
+| `game/combat.go` | Override hook points |
+
+**Callbacks:**
+- `beforeAttack` - can cancel attack (pacifism, resource cost)
+- `beforeDamage` - can modify/cancel damage (shields, immunity)
+- `beforeDeath` - can cancel death (deathward, last stand)
+- `beforeStatusApply` - can cancel status (immunity, resistance)
+
+**Testing:**
+- [ ] beforeAttack can cancel attack
+- [ ] beforeDamage can modify damage amount
+- [ ] beforeDamage can cancel damage entirely
+- [ ] beforeDeath can prevent death (deathward)
+- [ ] beforeStatusApply can block status effect
+
+---
+
+### Phase 14: Polish & Integration
+
+**Goal:** Wizard tools, look enhancement, comprehensive tests.
+
+**Depends on:** All previous phases
 
 | File | Changes |
 |------|---------|
 | `game/wizcommands.go` | Config management commands |
+| `game/look.go` | Body info in look output |
+| `integration_test/combat_test.go` | Comprehensive tests |
 
-Commands:
-- `/weaponconfig [id] [field] [value]`
-- `/armorconfig [id] [field] [value]`
-- `/bodyconfig [id] [field] [value]`
-- `/stanceconfig [id] [field] [value]`
-- `/statusconfig [id] [field] [value]`
-- `/damagetype [id] [description]`
-- `/combatconfig [field] [value]`
+**Wizard commands:**
+- `/weaponconfig`, `/rangedweaponconfig`, `/ammoconfig`
+- `/armorconfig`, `/bodyconfig`, `/stanceconfig`
+- `/statusconfig`, `/damagetype`, `/combatconfig`
 
-### Phase 7: Integration & Tests
+**Look enhancement:**
+```
+A large humanoid figure stands before you.
+Body: humanoid (head, torso, arms, legs)
+Wielding: longsword (right arm)
+Wearing: chainmail (torso)
+```
 
-| File | Changes |
-|------|---------|
-| `integration_test/combat_test.go` | New file: combat integration tests |
+**Integration test scenarios:**
+- Full melee combat flow (attack/defend/damage/death)
+- Multi-combatant battle with flanking
+- Ranged combat with aiming and cover
+- Status effects during combat
+- Equipment degradation over prolonged fight
+- Grappling encounter
+- Movement and pursuit
+- Body part targeting and disability
+- JS override callbacks (deathward, damage reflection)
+- Message rendering with custom messages
+- Server restart preserves CombatTargets (auto-resume)
 
-Test scenarios:
-- Basic attack/defend cycle
-- Body part targeting with modifiers
-- Armor only protects hit body part
-- Unarmed multi-attack (all body parts attack simultaneously)
-- Unarmed parry/block (with and without natural armor)
-- Multi-slot weapon equipping (two-handed)
-- Body part health tracking and disabling
-- Disabled body part cannot attack/defend
-- Damage flows to both body part and central health
-- Stance changes affecting combat
-- Status effects applying and expiring
-- Status effect ticking
-- Equipment degradation
-- Broken equipment behavior
-- Critical hits
-- Message rendering with JS override
-- Message rendering with Go defaults
+---
+
+### Phase Summary
+
+| Phase | Name | Key Deliverable |
+|-------|------|-----------------|
+| 1 | Foundation | All config types accessible via JS |
+| 2 | ObjectDO Schema | Combat fields on objects |
+| 3 | Status Effects | Complete effect system |
+| 4 | Equipment | Wielding/wearing with validation |
+| 5 | Resources | Lazy regeneration system |
+| 6 | Basic Melee | Core combat loop |
+| 7 | Body Parts | Targeting and body part health |
+| 8 | Advanced Melee | Multi-attack, wounds, stances |
+| 9 | Ranged | Guns, ammo, reload, jam |
+| 10 | Aiming & Cover | Aim bonus, range, cover |
+| 11 | Movement & Grappling | Tactical movement, grapple |
+| 12 | Messages | JS override for all messages |
+| 13 | JS Overrides | before* callbacks |
+| 14 | Polish | Wizard commands, tests |
+
+**Estimated complexity per phase:**
+- Phases 1-2: Low (mostly data definitions)
+- Phases 3-5: Medium (independent systems)
+- Phases 6-8: High (core combat logic)
+- Phases 9-11: Medium-High (extensions)
+- Phases 12-14: Medium (polish)
 
 ---
 
