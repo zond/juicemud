@@ -2449,6 +2449,511 @@ Wearing: chainmail (torso)
 
 ---
 
+## Integration Analysis
+
+This section analyzes how each phase integrates with the existing JuiceMUD codebase.
+
+### Phase 1: Foundation - Integration
+
+**What exists:** ServerConfig in `structs/serverconfig.go` with SkillConfig pattern (Get/Set/Delete/CAS/Snapshot/Replace methods, internal mutex, JSON marshal/unmarshal).
+
+**Integration approach:**
+1. Define all config structs in new `structs/combat.go` file
+2. Add config maps to `ServerConfig` struct (private fields with methods)
+3. Update `serverConfigJSON` for serialization
+4. Add JS callbacks in `game/processing.go` following `getSkillConfig`/`updateSkillConfig` pattern
+
+**Risk assessment: LOW**
+- Pure extension of existing pattern
+- No changes to existing behavior
+- ServerConfig pattern is well-tested
+
+**Code locations:**
+```
+structs/combat.go      - New file, define config types
+structs/serverconfig.go - Add maps and methods (copy SkillConfig pattern)
+game/processing.go     - Add callbacks in addGlobalCallbacks()
+```
+
+---
+
+### Phase 2: ObjectDO Schema - Integration
+
+**What exists:** ObjectDO defined in `structs/schema.benc`, auto-generated to `structs/schema.go` via bencgen. Fields include Location, Content, Skills, Descriptions, Exits, etc.
+
+**Integration approach:**
+1. Add new fields to `structs/schema.benc`
+2. Run `go generate ./structs` to regenerate schema.go
+3. Update `PostUnmarshal()` to initialize new maps (Wielding, Wearing, BodyParts, CombatTargets, etc.)
+4. Existing serialization handles new fields automatically
+
+**Risk assessment: LOW**
+- Schema extension is routine
+- bencgen handles serialization
+- PostUnmarshal pattern already exists for map initialization
+- No behavioral changes
+
+**Code locations:**
+```
+structs/schema.benc    - Add field definitions
+structs/schema.go      - Auto-generated (go generate)
+```
+
+**Migration concern:** Existing objects will have zero/nil values for new fields. This is fine - combat stats start at 0, maps initialize via PostUnmarshal.
+
+---
+
+### Phase 3: Status Effects - Integration
+
+**What exists:** Interval system in `game/processing.go` with setInterval/clearInterval, persistent storage, recovery on restart. Events emitted via `emit()` callback.
+
+**Integration approach:**
+1. StatusEffect stored in `ObjectDO.StatusEffects` slice
+2. `GetStatusEffects()` method on Object does lazy cleanup (check ExpiresAt, remove expired)
+3. `ApplyStatusEffect()` creates StatusEffect, schedules tick interval if TickInterval > 0
+4. Tick handler uses existing interval system - callback checks expiry, emits statusTick or handles expiry
+5. `RemoveStatusEffect()` clears from slice, calls `clearInterval()` if ticking
+
+**How it fits with existing systems:**
+- Tick intervals: Use existing `setInterval()` mechanism (min 5s, max 10 per object)
+- Events: Use existing `emit()` for statusApplied/statusExpired/statusTick
+- Lazy cleanup: Similar pattern to how Descriptions.Detect filters by challenges
+- Storage: StatusEffects serialize with ObjectDO automatically
+
+**Risk assessment: MEDIUM**
+- Interval system has constraints (min 5s) that may limit tick granularity
+- Must handle interval cleanup when object deleted
+- ReplacedBy chain needs careful implementation to avoid loops
+
+**Code locations:**
+```
+structs/combat.go      - StatusEffect type (or structs/status.go)
+structs/structs.go     - GetStatusEffects(), ApplyStatusEffect() methods on Object
+game/processing.go     - JS callbacks, tick handler registration
+```
+
+**Constraint:** Minimum tick interval is 5 seconds (existing system limit). Fast-ticking effects (poison every 1s) would need different approach or accepting 5s minimum.
+
+---
+
+### Phase 4: Equipment - Integration
+
+**What exists:** ObjectDO.Content tracks contained objects. Objects have Location field. Movement system handles relocating objects.
+
+**Integration approach:**
+1. Wielding/Wearing maps store objectID references (objects still in Content)
+2. `equip()` validates:
+   - Object exists in Content (must be carried)
+   - Object has WeaponConfig/ArmorConfig (check SourcePath or object state)
+   - Body part exists on wielder's BodyConfig
+   - Slot compatibility (SlotType matches)
+   - Multi-slot availability
+   - Armor layering (Thickness vs Looseness)
+3. Equipment objects use their own Health field for durability
+
+**How it fits with existing systems:**
+- Objects remain in Content when equipped (Wielding/Wearing are references)
+- Object lookup via `storage.AccessObject()` already exists
+- No movement needed - equipment is a "soft reference" to contained object
+
+**Risk assessment: LOW-MEDIUM**
+- Straightforward reference tracking
+- Validation logic is new but self-contained
+- Need to handle: object removed from Content while equipped (auto-unequip)
+
+**Code locations:**
+```
+game/equipment.go      - New file: equip/unequip logic
+game/processing.go     - JS callbacks
+```
+
+**Edge case:** If equipped item is moved out of Content (via moveObject), must auto-unequip. Add check in moveObject or emit event that equipment system handles.
+
+---
+
+### Phase 5: Resources - Integration
+
+**What exists:** Timestamp-based lazy computation used in skill system (LastUsedAt, forgetting decay). Challenge.Check() already uses time-based calculations.
+
+**Integration approach:**
+1. Health/Stamina/Focus stored as current value + LastRegenAt timestamp
+2. `getHealth()` computes: `current + elapsed * regenRate * skillMod`
+3. Skill modifier uses existing `Challenges.Check()` with sigmoid mapping
+4. Returns min(computed, max) and updates LastRegenAt
+
+**How it fits with existing systems:**
+- Identical pattern to skill forgetting/recharge calculations
+- Uses existing Challenge.Check() for skill-based regen rate
+- No timers needed - pure lazy computation
+
+**Risk assessment: LOW**
+- Pattern well-established in skill system
+- Self-contained calculation
+- No concurrency concerns (computed on access with object lock held)
+
+**Code locations:**
+```
+game/resources.go      - New file: regeneration logic
+game/processing.go     - JS callbacks (getHealth, setHealth, etc.)
+```
+
+---
+
+### Phase 6: Basic Melee - Integration
+
+**What exists:** Event queue with goroutine workers. Events fire callbacks on objects. No persistent attack timers currently.
+
+**Integration approach:**
+1. `startCombat(targetID)` adds target to CombatTargets map, spawns goroutine
+2. Goroutine: sleep(attackInterval), check still in combat, resolve attack, repeat
+3. Attack resolution calls Challenge.Check() for accuracy, defense, etc.
+4. Damage applied via setHealth() (with regen timestamp update)
+5. `stopCombat()` removes from CombatTargets; goroutine exits on next check
+6. Death emits event, JS handles respawn/loot
+
+**How it fits with existing systems:**
+- Challenge.Check() for all rolls - leverages entire skill system
+- Events (attackHit, death, etc.) use existing emit() mechanism
+- CombatTargets persists in ObjectDO - survives restart
+- Goroutines are ephemeral (combat timing lost on restart, but CombatTargets triggers resume)
+
+**Risk assessment: MEDIUM-HIGH**
+- Goroutine lifecycle management is new pattern
+- Must handle: object deleted mid-combat, target moves, etc.
+- Defense chain is complex (parry → dodge → block → armor)
+- Need careful locking when modifying both attacker and defender
+
+**Code locations:**
+```
+game/combat.go         - New file: combat logic, attack resolution
+game/processing.go     - JS callbacks (startCombat, stopCombat, etc.)
+game/game.go           - Combat restart hook (check CombatTargets on object load?)
+```
+
+**Restart behavior:** On server restart, objects with non-empty CombatTargets should auto-initiate combat cycles. Could be triggered by:
+- Boot.js iterating objects with CombatTargets
+- Object's own script checking CombatTargets on "created" event
+- New "combatResumed" event sent at startup
+
+**Locking strategy:** When resolving attack:
+```go
+structs.WithLock(func() error {
+    // Modify attacker (skill updates) and defender (health)
+    return nil
+}, attacker, defender)
+```
+
+---
+
+### Phase 7: Body Parts - Integration
+
+**What exists:** Random selection used in movement perception (weighted by challenges). Descriptions have per-description filtering.
+
+**Integration approach:**
+1. BodyConfig loaded from ServerConfig at combat time
+2. Body part selection: weighted random by HitWeight (similar to challenge-based filtering)
+3. Focus/Defend modify weights before selection
+4. BodyParts map tracks per-part health
+5. Armor lookup: `object.Wearing[hitBodyPartID]` → only that armor applies
+
+**How it fits with existing systems:**
+- Weighted selection is straightforward (no existing utility, but simple to implement)
+- Challenge.Check() for Focus/Defend skill rolls
+- Per-body-part state is just a map in ObjectDO
+
+**Risk assessment: MEDIUM**
+- New selection algorithm but conceptually simple
+- Body part initialization from BodyConfig needs careful handling
+- Dual damage (body part + central) must be atomic
+
+**Code locations:**
+```
+game/combat.go         - Body part selection, damage distribution
+structs/structs.go     - BodyParts initialization helper
+```
+
+**Initialization:** When object gets BodyConfigID set, BodyParts map should be populated from BodyConfig.Parts with each part's MaxHealth. Could be:
+- Lazy on first combat
+- Explicit via JS callback `initializeBodyParts()`
+- Automatic in setBodyConfigID setter
+
+---
+
+### Phase 8: Advanced Melee - Integration
+
+**What exists:** All foundations from earlier phases. Status effects (Phase 3), equipment (Phase 4), body parts (Phase 7).
+
+**Integration approach:**
+
+**Multi-attack:**
+- Iterate body parts with UnarmedDamage or Wielding entries
+- Each spawns independent attack goroutine with own timing
+- AmbidextrousChallenges check before multi-wield penalty
+
+**Wounds:**
+- After damage, check DamageTypeConfig.CanCauseBleeding
+- If true, calculate damagePercent, find matching BleedingThreshold
+- Call ApplyStatusEffect() with bleeding effect
+
+**Severing:**
+- After damage, if body part health < 0 and DamageTypeConfig.CanSever
+- Check overkill threshold, apply severing
+- Update BodyParts[id].Severed = true
+- Drop equipment from severed part (moveObject to room)
+
+**Stances:**
+- StanceConfig loaded, modifiers applied in attack resolution
+- StanceChallenges.Check() scales modifier effectiveness
+
+**Flanking:**
+- Count objects with defender in their CombatTargets
+- Count objects with any attacker in their CombatTargets
+- Simple ratio calculation, bonus capped
+
+**Risk assessment: HIGH**
+- Many interacting systems
+- Multi-goroutine coordination
+- Edge cases around severing (equipment drop, grip factor)
+- Stealth/ambush adds perception system interaction
+
+**Code locations:**
+```
+game/combat.go         - Extended attack resolution
+game/equipment.go      - Drop equipment on sever
+```
+
+**Stealth integration:** Ambush detection uses existing Description challenge system. Attacker is "hidden" if observer fails all description challenges. On attack, clear description challenges to reveal attacker.
+
+---
+
+### Phase 9: Ranged - Integration
+
+**What exists:** Basic combat from Phase 6. Equipment system from Phase 4.
+
+**Integration approach:**
+1. RangedWeaponConfig on equipped weapon determines ranged behavior
+2. CurrentAmmo, LoadedAmmoType, Jammed stored on weapon object (not wielder)
+3. Reload: check free wield slot, spawn goroutine for reload delay
+4. Jam check: JamChallenges.Check() on each shot
+5. Damage calculation: weapon.DamageTypes + ammo.DamageTypes
+
+**How it fits with existing systems:**
+- Uses same attack resolution pipeline, different damage source
+- Equipment system already tracks weapon objects
+- Challenges work the same way
+
+**Risk assessment: MEDIUM**
+- Straightforward extension of melee
+- Reload/unjam timers are simple goroutine sleeps
+- Magazine state on weapon object is clean
+
+**Code locations:**
+```
+game/ranged.go         - New file: ranged combat logic
+game/processing.go     - JS callbacks (reload, unjam, setFireMode)
+```
+
+---
+
+### Phase 10: Aiming & Cover - Integration
+
+**What exists:** Timestamp-based lazy computation (Phase 5 pattern). Neighbourhood queries for adjacent rooms.
+
+**Integration approach:**
+
+**Aiming:**
+- AimingAt, AimingSince on attacker object
+- getAimBonus() computes elapsed * rate * skillMod (lazy)
+- Aim broken by: damage received (hook in applyDamage), movement (hook in moveObject)
+
+**Range:**
+- MaxRange 0: target must be in same Location
+- MaxRange 1: target can be in Location or any exit.Destination
+- Use existing DeepNeighbourhood to find valid targets
+
+**Cover:**
+- InCoverBehind references cover object
+- Cover lookup: `storage.AccessObject(InCoverBehind)`
+- Apply CoverAbsorption to damage, CoverAccuracyPenalty to hit
+- Cover takes damage (update cover object's Health)
+
+**Risk assessment: MEDIUM**
+- Aiming follows established lazy pattern
+- Range check uses existing neighbourhood queries
+- Cover damage requires locking cover object too
+
+**Code locations:**
+```
+game/ranged.go         - Aiming, range checks, cover application
+game/processing.go     - JS callbacks, aim break hooks
+```
+
+**Multi-object locking:** Cover damage requires locking attacker, defender, AND cover:
+```go
+structs.WithLock(func() error {
+    // Resolve attack with cover
+}, attacker, defender, cover)
+```
+
+---
+
+### Phase 11: Movement & Grappling - Integration
+
+**What exists:** Movement system in processing.go with moveObject(), emit movement events. Exit challenges for movement validation.
+
+**Integration approach:**
+
+**Movement in combat:**
+- Check CombatTargets before movement
+- If in combat: apply CombatMovementDodgePenalty, block attack/parry/block
+- Movement uses goroutine sleep for delay (existing pattern)
+
+**Exit guarding:**
+- Check for objects in room with GuardingExit matching direction
+- If found: contested GuardChallenges check
+- Winner determines if movement proceeds
+
+**Grappling:**
+- GrappledBy/Grappling fields on objects
+- Grapple power calculated from free body parts
+- Grappled restrictions enforced in relevant functions (movement, dodge, targeting)
+
+**How it fits with existing systems:**
+- Movement hooks into existing moveObject() flow
+- Exit guarding is pre-movement check (before exit challenges)
+- Grappling state is just object fields, checked in combat/movement
+
+**Risk assessment: MEDIUM-HIGH**
+- Movement integration touches core system
+- Grappling has many restriction points to enforce
+- Must not break existing movement for non-combat objects
+
+**Code locations:**
+```
+game/movement.go       - New file: combat movement, grappling
+game/processing.go     - Hook into moveObject(), JS callbacks
+```
+
+**Movement integration point:** In moveObject callback:
+```go
+// Before movement validation
+if obj.InCombat() {
+    // Apply combat movement restrictions
+}
+if guardingObject := findGuard(location, direction); guardingObject != nil {
+    // Resolve guard challenge
+}
+```
+
+---
+
+### Phase 12: Message Rendering - Integration
+
+**What exists:** emit() sends events to objects. Object callbacks can return values. Current movement rendering uses renderMovement callback.
+
+**Integration approach:**
+1. Each combat event identifies "renderer" object (weapon, armor, combatant)
+2. Emit render* event to renderer with combat data
+3. If callback returns `{Message: "..."}`, use it
+4. Otherwise use Go default message
+5. Final message emitted to all observers via emitToLocation()
+
+**How it fits with existing systems:**
+- Follows renderMovement pattern exactly
+- Callbacks return JSON, parsed for Message field
+- Observer perspective passed in event data
+
+**Risk assessment: LOW**
+- Pattern already established
+- Pure extension, no changes to existing behavior
+
+**Code locations:**
+```
+game/messages.go       - New file: default messages, render dispatch
+game/combat.go         - Call renderMessage() at appropriate points
+```
+
+---
+
+### Phase 13: JS Overrides - Integration
+
+**What exists:** Callbacks can return values that modify behavior. beforeDamage pattern similar to how renderMovement can customize output.
+
+**Integration approach:**
+1. Before critical actions, emit before* event to relevant object
+2. If callback returns `{Cancel: true}`, abort the action
+3. If callback returns modified values, use them
+4. Proceed with (possibly modified) action
+
+**How it fits with existing systems:**
+- Same callback invocation pattern
+- Return value inspection already done for render callbacks
+
+**Risk assessment: LOW**
+- Clean extension point
+- Well-defined return value contract
+
+**Code locations:**
+```
+game/combat.go         - Add before* hooks at action points
+```
+
+---
+
+### Phase 14: Polish - Integration
+
+**What exists:** Wizard commands in game/wizcommands.go. Look output in connection handling.
+
+**Integration approach:**
+1. Wizard commands: parse arguments, call update*Config()
+2. Look enhancement: check BodyConfigID, format body part list
+3. Integration tests: use SSH interface per project conventions
+
+**Risk assessment: LOW**
+- Straightforward additions
+- Following existing patterns
+
+**Code locations:**
+```
+game/wizcommands.go    - Config commands
+game/connection.go     - Look enhancement (or game/look.go)
+integration_test/      - Combat tests
+```
+
+---
+
+## Integration Risk Summary
+
+| Phase | Risk | Key Concerns |
+|-------|------|--------------|
+| 1 | Low | Pure pattern extension |
+| 2 | Low | Schema generation is routine |
+| 3 | Medium | Interval constraints (5s min), cleanup on object delete |
+| 4 | Low-Medium | Auto-unequip on item movement |
+| 5 | Low | Established lazy computation pattern |
+| 6 | Medium-High | Goroutine lifecycle, multi-object locking, restart behavior |
+| 7 | Medium | Body part initialization, dual damage atomicity |
+| 8 | High | Many interacting systems, edge cases |
+| 9 | Medium | Extension of Phase 6 patterns |
+| 10 | Medium | Multi-object locking for cover |
+| 11 | Medium-High | Core movement system integration |
+| 12 | Low | Established render pattern |
+| 13 | Low | Clean extension points |
+| 14 | Low | Polish work |
+
+**Highest risk areas:**
+1. **Phase 6 (Basic Melee)**: Goroutine management, restart behavior, locking
+2. **Phase 8 (Advanced Melee)**: System interactions, severing complexity
+3. **Phase 11 (Movement)**: Integration with core movement system
+
+**Mitigation strategies:**
+- Build and test each phase completely before moving on
+- Phase 6 needs careful design review before implementation
+- Consider simplifying severing mechanics if implementation proves difficult
+- Movement integration should be minimal and well-isolated
+
+---
+
 ## Edge Cases
 
 1. **Target moves**: Continue if reachable, stop if not
