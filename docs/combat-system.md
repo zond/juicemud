@@ -40,9 +40,10 @@ type ObjectDO struct {
     MaxFocus  float64
 
     // Resource regeneration (lazy computation on access)
-    HealthLastRegenAt  time.Time
-    StaminaLastRegenAt time.Time
-    FocusLastRegenAt   time.Time
+    // Uses uint64 timestamps (nanoseconds) matching existing Timestamp pattern
+    HealthLastRegenAt  uint64
+    StaminaLastRegenAt uint64
+    FocusLastRegenAt   uint64
 
     // Regeneration enable flags (robots don't heal naturally, etc.)
     HealthRegenEnabled  bool  // Default true for organic creatures
@@ -70,6 +71,7 @@ type ObjectDO struct {
     StanceConfigID string  // References StanceConfig (aggressive, defensive, etc.)
 
     // Combat state
+    Active        bool             // If false, object won't fight, react, etc. (dead, stunned, dormant)
     CombatTargets map[string]bool  // Objects this object is attacking
     CurrentTarget string           // Primary target object ID (for focus)
 
@@ -94,8 +96,8 @@ type ObjectDO struct {
     CurrentFireMode string  // Active fire mode ID (empty = use first in FireModes list)
 
     // Aiming state (for combatants)
-    AimingAt    string     // Target object ID being aimed at
-    AimingSince time.Time  // When aiming started (zero = not aiming); bonus computed lazily
+    AimingAt    string  // Target object ID being aimed at
+    AimingSince uint64  // Timestamp when aiming started (0 = not aiming); bonus computed lazily
 }
 ```
 
@@ -105,15 +107,17 @@ Effects that modify combat. Optional timeout allows permanent effects (implants)
 
 ```go
 type StatusEffect struct {
-    ID          string     // Unique ID for this effect instance
-    ConfigID    string     // References StatusEffectConfig
-    AppliedAt   time.Time  // When effect was applied
-    ExpiresAt   time.Time  // When effect expires (zero = permanent, e.g., implants)
+    ID          string  // Unique ID for this effect instance
+    ConfigID    string  // References StatusEffectConfig
+    AppliedAt   uint64  // Timestamp when effect was applied
+    ExpiresAt   uint64  // Timestamp when effect expires (0 = permanent, e.g., implants)
 
     // State for ticking effects
-    LastTickAt  time.Time  // Last time the tick event was emitted
+    LastTickAt  uint64  // Timestamp of last tick event
 }
 ```
+
+**Note:** StatusEffect and BodyPartState will need to be defined as `ctr` types in `structs/schema.benc` for proper serialization.
 
 **Expiry behavior:**
 - All status effects are checked lazily on access (e.g., `GetStatusEffects()`)
@@ -149,9 +153,9 @@ type BodyPartState struct {
   - Wielded items handling:
     - Remove severed body part from `Wielding` map
     - If weapon still has at least one wielding body part: stays wielded with increased difficulty
-    - `gripFactor = (currentWieldingParts / requiredParts) ^ 2`
+    - `gripFactor = currentWieldingParts / requiredParts`
     - All weapon challenge levels are divided by gripFactor (making them harder)
-    - Example: Two-handed sword with one arm = gripFactor 0.25, so levels ÷ 0.25 = 4x harder
+    - Example: Two-handed sword with one arm = gripFactor 0.5, so levels ÷ 0.5 = 2x harder
     - If no wielding body parts remain: weapon drops to the ground
   - Any worn armor on that body part drops to the ground
   - The severed body part itself can drop as an object (for gruesome trophies or reattachment)
@@ -358,11 +362,10 @@ type StanceConfig struct {
 
 ```go
 func applyStanceModifier(baseMod float64, stanceResult float64) float64 {
-    // Use sigmoid to map unbounded stanceResult to 0-2 range
-    // stanceResult=0 → mult=1.0 (no change)
-    // stanceResult→+∞ → mult→2.0 (double effect)
-    // stanceResult→-∞ → mult→0.0 (no effect)
-    mult := 2.0 / (1.0 + math.Exp(-stanceResult/50.0))
+    // Use sigmoid to map unbounded stanceResult to configurable range
+    // Default [0.0, 2.0]: stanceResult=0 → mult=1.0, +∞ → 2.0, -∞ → 0.0
+    sigmoid := 1.0 / (1.0 + math.Exp(-stanceResult/config.SigmoidDivisor))
+    mult := config.StanceMultRange[0] + sigmoid*(config.StanceMultRange[1]-config.StanceMultRange[0])
 
     if baseMod >= 0 {
         // Positive modifiers: higher skill = bigger bonus (up to 2x)
@@ -590,8 +593,8 @@ type CombatConfig struct {
     EquipTimeMultRange    [2]float64  // Default: [0.5, 1.5] - equip time multiplier (lower = faster)
     EquipPenaltyMultRange [2]float64  // Default: [0.5, 1.5] - dodge penalty multiplier (lower = less penalty)
 
-    // Grip factor (severed limb weapon effectiveness)
-    GripExponent float64  // Default: 2.0 (quadratic penalty)
+    // Status effect limits
+    MaxStatusEffects int  // Default: 100 - max status effects per object
 }
 
 type BleedingThreshold struct {
@@ -750,10 +753,10 @@ func getResourceWithRegen(current, max float64, lastRegenAt time.Time,
         return current, lastRegenAt
     }
 
-    // Skill affects regen rate via sigmoid (0.5x to 1.5x)
+    // Skill affects regen rate via sigmoid (uses config.RegenMultRange)
     result := regenChallenges.Check(obj, "")
-    sigmoid := 1.0 / (1.0 + math.Exp(-result/50.0))  // 0 to 1
-    mult := 0.5 + sigmoid  // Maps to 0.5-1.5
+    sigmoid := 1.0 / (1.0 + math.Exp(-result/config.SigmoidDivisor))  // 0 to 1
+    mult := config.RegenMultRange[0] + sigmoid*(config.RegenMultRange[1]-config.RegenMultRange[0])
 
     regenRate := baseRegenPerSec * mult
     newValue = math.Min(max, current + elapsed*regenRate)
@@ -807,18 +810,17 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Roll against `BaseCritChance + bodyPart.CritBonus`
    - Store `isCrit` flag for later
 
-4. **Parry** (per damage type, weapon or unarmed):
+4. **Parry** (whole attack, weapon or unarmed):
    - Use weapon's `ParryChallenges` if weapon equipped and healthy
    - Otherwise use defender's body part `UnarmedParryChallenges` (if any)
-   - For each damage type in attack:
-     - If `ParryChallenges[damageType]` exists, defender rolls those challenges
-     - Add stance's `ParryModifier`
-     - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
-     - If `parryScore > hitScore`, that damage type is parried (no damage for that type)
-     - On successful parry with `ParryStatusEffectID` set:
-       - Calculate parry margin: `margin = parryScore - hitScore`
-       - Apply effect with probability: `chance = sigmoid(margin/50)` (barely parry ≈ 50%, decisive parry ≈ 100%)
-   - Damage types without parry challenges or failed parries continue to next step
+   - Defender rolls `ParryChallenges.Check()` (uses highest skill among equipped parry options)
+   - Add stance's `ParryModifier`
+   - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
+   - -> if `parryScore > hitScore`, attack is parried entirely (all damage types deflected)
+   - On successful parry with `ParryStatusEffectID` set:
+     - Calculate parry margin: `margin = parryScore - hitScore`
+     - Apply effect to attacker with probability: `chance = sigmoid(margin / config.SigmoidDivisor)`
+   - Failed parry continues to next step
 
 5. **Dodge**:
    - Defender rolls `DodgeChallenges.Check()`
@@ -827,24 +829,23 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
    - -> if `dodgeScore > hitScore`, attack misses entirely (all remaining damage types)
 
-6. **Block** (per damage type, requires wielding):
-   - Skip entirely if dodge succeeded (attack missed)
+6. **Block** (whole attack, requires wielding):
+   - Skip entirely if parry or dodge succeeded
    - Skip if not wielding anything (no unarmed blocking)
    - Use wielded item's `BlockChallenges` if item is healthy (health > 0)
-   - For each remaining (unparried) damage type:
-     - If `BlockChallenges[damageType]` exists, defender rolls those challenges
-     - Add stance's `BlockModifier`
-     - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
-     - If `blockScore > hitScore`, that damage type is blocked:
-       - Damage for that type is negated
-       - Wielded item takes damage equal to blocked amount
-   - Damage types without block challenges or failed blocks continue to next step
+   - Defender rolls `BlockChallenges.Check()` (uses highest skill among equipped block options)
+   - Add stance's `BlockModifier`
+   - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
+   - -> if `blockScore > hitScore`, attack is blocked entirely:
+     - All damage is negated
+     - Wielded item takes damage equal to total blocked amount
+   - Failed block continues to next step
 
 7. **Armor Soak** (per damage type, body-part specific):
-   - Skip entirely if dodge succeeded (attack missed)
+   - Skip entirely if parry, dodge, or block succeeded
    - Find armor worn on the **hit body part** (from `Wearing` map)
    - If no armor on that body part, or armor health = 0, skip to next step
-   - For each remaining (unparried, unblocked) damage type:
+   - For each damage type in the attack:
      - If `ArmorChallenges[damageType]` exists, apply armor skill challenge
      - Use sigmoid to map unbounded result to skill multiplier:
        - `sigmoid = 1 / (1 + exp(-challengeResult/config.SigmoidDivisor))`
@@ -876,7 +877,11 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
       - Calculate `damagePercent = finalDamage / defender.MaxHealth`
       - Apply highest matching `BleedingThreshold` status effect (scaled by `BleedingSeverity`)
     - Reduce defender's central `Health` by same amount
-    - If central Health <= 0, emit `death` event
+    - If central Health <= 0:
+      - Set `Active = false` (stops fighting, reacting, etc.)
+      - Clear `CombatTargets` (stop attacking)
+      - Remove this object from all other objects' `CombatTargets` (stop being attacked)
+      - Emit `death` event (JS handles respawn, loot, etc.)
 
 ### Attack Timing
 
@@ -889,8 +894,7 @@ func calculateAttackInterval(attacker *Object, weapon *WeaponConfig, config *Com
 
     // Higher skill = shorter interval (faster attacks)
     // Use sigmoid to handle unbounded inputs smoothly
-    // sigmoid maps (-∞, +∞) -> (0, 1), with speedResult=0 -> 0.5
-    sigmoid := 1.0 / (1.0 + math.Exp(-speedResult/50.0))
+    sigmoid := 1.0 / (1.0 + math.Exp(-speedResult/config.SigmoidDivisor))
 
     interval := config.MaxAttackInterval - time.Duration(
         float64(config.MaxAttackInterval-config.MinAttackInterval) * sigmoid,
@@ -2038,10 +2042,10 @@ GuardingExit string
 **Attack flow (simplified, single weapon):**
 1. Roll accuracy (AccuracyChallenges)
 2. Roll crit (BaseCritChance)
-3. Per damage type: defender parries or it continues
-4. If not parried: defender dodges or it continues
-5. Per damage type: defender blocks or it continues (weapon takes damage)
-6. Armor soaks remaining damage (armor takes damage)
+3. Defender parries (whole attack) or it continues
+4. Defender dodges (whole attack) or it continues
+5. Defender blocks (whole attack, blocker takes damage) or it continues
+6. Per damage type: armor soaks damage (armor takes damage)
 7. Apply body part multiplier
 8. Apply crit multiplier if crit
 9. Apply damage to health
@@ -2605,12 +2609,31 @@ game/processing.go     - JS callbacks (getHealth, setHealth, etc.)
 **What exists:** Event queue with goroutine workers. Events fire callbacks on objects. No persistent attack timers currently.
 
 **Integration approach:**
-1. `startCombat(targetID)` adds target to CombatTargets map, spawns goroutine
-2. Goroutine: sleep(attackInterval), check still in combat, resolve attack, repeat
+1. `startCombat(targetID)` adds target to CombatTargets map, creates cancellable context, spawns goroutine
+2. Goroutine: select on context.Done() or timer, check constraints on wake, resolve attack, repeat
 3. Attack resolution calls Challenge.Check() for accuracy, defense, etc.
 4. Damage applied via setHealth() (with regen timestamp update)
-5. `stopCombat()` removes from CombatTargets; goroutine exits on next check
+5. `stopCombat()` removes from CombatTargets, cancels context; goroutine wakes immediately and exits
 6. Death emits event, JS handles respawn/loot
+
+**Goroutine lifecycle with context:**
+```go
+func (g *Game) attackLoop(ctx context.Context, attackerID, targetID string) {
+    for {
+        interval := calculateAttackInterval(...)
+        select {
+        case <-ctx.Done():
+            return  // Combat ended, exit immediately
+        case <-time.After(interval):
+            // Validate constraints before acting
+            if !stillInCombat(attackerID, targetID) {
+                return
+            }
+            resolveAttack(attackerID, targetID)
+        }
+    }
+}
+```
 
 **How it fits with existing systems:**
 - Challenge.Check() for all rolls - leverages entire skill system
@@ -3019,7 +3042,7 @@ integration_test/      - Combat tests
 14. **Stances have skill challenges** - Players can improve at using stances
 15. **All configs persist in ServerConfig** - Same pattern as SkillConfigs
 16. **Look shows body plan** - Visible body parts when examining creatures
-17. **Per-damage-type defense** - Parry, block, and armor challenges vary by damage type
+17. **Defense chain** - Parry, dodge, block are whole-attack; armor soak is per-damage-type
 18. **Message rendering via JS override** - Equipment/combatants can customize all combat messages
 19. **Observer-aware messages** - First/second/third person based on who's observing
 20. **Body-part equipment slots** - Each body part can have multiple compatible slot types, but only one item equipped at a time
