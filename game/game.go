@@ -175,81 +175,69 @@ type Game struct {
 	workerWG             sync.WaitGroup                          // Tracks in-flight event workers
 	connectionByObjectID *juicemud.SyncMap[string, *Connection]  // Maps object ID to active connection
 	consoleSwitchboard   *Switchboard                            // Debug console routing and buffering
+	serverConfig         *structs.ServerConfig                   // Thread-safe server configuration
 }
 
-// ServerConfig holds server-wide configuration stored in the root object's state.
-// The root object (empty ID "") contains this config to define server behavior.
-type ServerConfig struct {
-	Spawn struct {
-		Container string
-	}
-	SkillConfigs map[string]structs.SkillConfig
+// GetServerConfig returns the server config. Thread-safe access is handled
+// by the ServerConfig's internal mutex.
+func (g *Game) GetServerConfig() *structs.ServerConfig {
+	return g.serverConfig
 }
 
-// getServerConfig loads the server config from the root object's state.
-func (g *Game) getServerConfig(ctx context.Context) (*ServerConfig, error) {
-	root, err := g.storage.AccessObject(ctx, emptyID, nil)
-	if err != nil {
-		return nil, juicemud.WithStack(err)
-	}
-	config := &ServerConfig{}
-	state := root.GetState()
-	if state != "" && state != "{}" {
-		if err := goccy.Unmarshal([]byte(state), config); err != nil {
-			// Log but don't fail - use defaults
-			log.Printf("Warning: failed to parse root object state as ServerConfig: %v", err)
-		}
-	}
-	return config, nil
-}
-
-// updateServerConfig atomically reads, modifies, and writes the server config.
-// The update function receives the current config and should modify it in place.
-// The root object is locked during the entire operation.
-func (g *Game) updateServerConfig(ctx context.Context, update func(*ServerConfig)) error {
+// loadServerConfig loads the server config from the root object's state into memory.
+// Called at startup to initialize the in-memory config.
+func (g *Game) loadServerConfig(ctx context.Context) error {
 	root, err := g.storage.AccessObject(ctx, emptyID, nil)
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	return structs.UpdateState(root, func(config *ServerConfig) error {
-		update(config)
-		return nil
-	})
+
+	state := root.GetState()
+	if state != "" && state != "{}" {
+		if err := goccy.Unmarshal([]byte(state), g.serverConfig); err != nil {
+			// Log but don't fail - use defaults
+			log.Printf("Warning: failed to parse root object state as ServerConfig: %v", err)
+		}
+	}
+
+	skillConfigs := g.serverConfig.SkillConfigsSnapshot()
+	if len(skillConfigs) > 0 {
+		log.Printf("Loaded %d skill configs from server config", len(skillConfigs))
+	}
+	return nil
+}
+
+// persistServerConfig writes the current in-memory config to the root object's state.
+func (g *Game) persistServerConfig(ctx context.Context) error {
+	root, err := g.storage.AccessObject(ctx, emptyID, nil)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	data, err := goccy.Marshal(g.serverConfig)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+
+	root.Lock()
+	defer root.Unlock()
+	root.Unsafe.State = string(data)
+	return nil
 }
 
 // getSpawnLocation returns the configured spawn location for new users.
 // Falls back to genesis if not configured or if configured location doesn't exist.
 func (g *Game) getSpawnLocation(ctx context.Context) string {
-	config, err := g.getServerConfig(ctx)
-	if err != nil {
-		log.Printf("Warning: failed to load server config, using default spawn: %v", err)
-		return genesisID
-	}
-	if config.Spawn.Container == "" {
+	spawn := g.serverConfig.GetSpawn()
+	if spawn == "" {
 		return genesisID
 	}
 	// Verify the spawn location exists
-	if _, err := g.storage.AccessObject(ctx, config.Spawn.Container, nil); err != nil {
-		log.Printf("Warning: configured spawn location %q not found, using genesis: %v", config.Spawn.Container, err)
+	if _, err := g.storage.AccessObject(ctx, spawn, nil); err != nil {
+		log.Printf("Warning: configured spawn location %q not found, using genesis: %v", spawn, err)
 		return genesisID
 	}
-	return config.Spawn.Container
-}
-
-// loadSkillConfigs loads skill configs from the root object and populates the in-memory store.
-// Called at startup to restore skill configurations.
-func (g *Game) loadSkillConfigs(ctx context.Context) error {
-	config, err := g.getServerConfig(ctx)
-	if err != nil {
-		return juicemud.WithStack(err)
-	}
-	if config.SkillConfigs != nil {
-		structs.SkillConfigs.Replace(config.SkillConfigs)
-		if len(config.SkillConfigs) > 0 {
-			log.Printf("Loaded %d skill configs from server config", len(config.SkillConfigs))
-		}
-	}
-	return nil
+	return spawn
 }
 
 // New creates a new Game instance.
@@ -316,6 +304,7 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 		workChan:             make(chan *structs.Event), // Unbuffered for synchronous handoff
 		connectionByObjectID: juicemud.NewSyncMap[string, *Connection](),
 		consoleSwitchboard:   NewSwitchboard(ctx),
+		serverConfig:         structs.NewServerConfig(),
 	}
 
 	// Start event workers. They process events until context is cancelled.
@@ -396,8 +385,8 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 		return nil, juicemud.WithStack(err)
 	}
 
-	// Load skill configs from root object state
-	if err := g.loadSkillConfigs(ctx); err != nil {
+	// Load server config from root object state
+	if err := g.loadServerConfig(ctx); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 

@@ -230,7 +230,7 @@ func (c *Connection) scan() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if neigh, err = neigh.Filter(viewer); err != nil {
+	if neigh, err = neigh.Filter(c.game.GetServerConfig(), viewer); err != nil {
 		return juicemud.WithStack(err)
 	}
 	if err := c.describeLocation(neigh.Location); err != nil {
@@ -423,7 +423,7 @@ func (c *Connection) look() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if loc, err = loc.Filter(viewer); err != nil {
+	if loc, err = loc.Filter(c.game.GetServerConfig(), viewer); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return c.describeLocation(loc)
@@ -564,7 +564,7 @@ func (c *Connection) identifyingCommand(def defaultObject, maxTargets int, f fun
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				if loc, err = loc.Filter(obj); err != nil {
+				if loc, err = loc.Filter(c.game.GetServerConfig(), obj); err != nil {
 					return juicemud.WithStack(err)
 				}
 				return f(c, obj, rest, loc)
@@ -576,7 +576,7 @@ func (c *Connection) identifyingCommand(def defaultObject, maxTargets int, f fun
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		if loc, err = loc.Filter(obj); err != nil {
+		if loc, err = loc.Filter(c.game.GetServerConfig(), obj); err != nil {
 			return juicemud.WithStack(err)
 		}
 		targets := []*structs.Object{}
@@ -695,7 +695,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		// Location couldn't be loaded at all - can't continue
 		return false, nil
 	}
-	if loc, err = loc.Filter(obj); err != nil {
+	if loc, err = loc.Filter(c.game.GetServerConfig(), obj); err != nil {
 		return false, juicemud.WithStack(err)
 	}
 
@@ -711,7 +711,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 
 	for _, exit := range loc.GetExits() {
 		if exit.Name() == name || exit.Name() == expandedName {
-			score, primaryFailure := structs.Challenges(exit.UseChallenges).CheckWithDetails(obj, loc.GetId())
+			score, primaryFailure := structs.Challenges(exit.UseChallenges).CheckWithDetails(c.game.GetServerConfig(), obj, loc.GetId())
 			if score > 0 {
 				// Check if the object has a handleMovement callback
 				if obj.HasCallback(handleMovementEventType, emitEventTag) {

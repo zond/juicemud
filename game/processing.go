@@ -272,7 +272,7 @@ func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *st
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		for det, err := range fromNeigh.Detections(mov.Object) {
+		for det, err := range fromNeigh.Detections(g.GetServerConfig(), mov.Object) {
 			if err != nil {
 				return juicemud.WithStack(err)
 			}
@@ -288,7 +288,7 @@ func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *st
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		for det, err := range toNeigh.Detections(mov.Object) {
+		for det, err := range toNeigh.Detections(g.GetServerConfig(), mov.Object) {
 			if err != nil {
 				return juicemud.WithStack(err)
 			}
@@ -515,7 +515,7 @@ func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
 		if len(args) != 1 || !args[0].IsString() {
 			return rc.Throw("getSkillConfig takes [string] arguments")
 		}
-		skill, found := structs.SkillConfigs.Get(args[0].String())
+		skill, found := g.serverConfig.GetSkillConfig(args[0].String())
 		if !found {
 			return rc.Null()
 		}
@@ -526,15 +526,15 @@ func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
 		return res
 	}
 
-	// casSkillConfig(name, oldConfig, newConfig) -> boolean
+	// updateSkillConfig(name, oldConfig, newConfig) -> boolean
 	// Atomically updates a skill config if current value matches oldConfig.
 	// - oldConfig null: succeeds only if key doesn't exist (insert)
 	// - newConfig null: deletes the key (if oldConfig matched)
-	// Returns true if swap succeeded, false if current value didn't match.
-	callbacks["casSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+	// Returns true if update succeeded, false if current value didn't match oldConfig.
+	callbacks["updateSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 3 || !args[0].IsString() {
-			return rc.Throw("casSkillConfig takes [string, Object|null, Object|null] arguments")
+			return rc.Throw("updateSkillConfig takes [string, Object|null, Object|null] arguments")
 		}
 
 		name := args[0].String()
@@ -542,7 +542,7 @@ func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
 		var oldConfig *structs.SkillConfig
 		if !args[1].IsNull() && !args[1].IsUndefined() {
 			if !args[1].IsObject() {
-				return rc.Throw("casSkillConfig: oldConfig must be Object or null")
+				return rc.Throw("updateSkillConfig: oldConfig must be Object or null")
 			}
 			old := structs.SkillConfig{}
 			if err := rc.Copy(&old, args[1]); err != nil {
@@ -554,7 +554,7 @@ func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
 		var newConfig *structs.SkillConfig
 		if !args[2].IsNull() && !args[2].IsUndefined() {
 			if !args[2].IsObject() {
-				return rc.Throw("casSkillConfig: newConfig must be Object or null")
+				return rc.Throw("updateSkillConfig: newConfig must be Object or null")
 			}
 			new := structs.SkillConfig{}
 			if err := rc.Copy(&new, args[2]); err != nil {
@@ -563,23 +563,30 @@ func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
 			newConfig = &new
 		}
 
-		swapped, persistErr := structs.SkillConfigs.CompareAndSwapThen(name, oldConfig, newConfig, func() error {
-			// Persist to root object state while holding the lock
-			return g.updateServerConfig(ctx, func(serverConfig *ServerConfig) {
-				if serverConfig.SkillConfigs == nil {
-					serverConfig.SkillConfigs = make(map[string]structs.SkillConfig)
-				}
-				if newConfig == nil {
-					delete(serverConfig.SkillConfigs, name)
-				} else {
-					serverConfig.SkillConfigs[name] = *newConfig
-				}
-			})
-		})
-		if persistErr != nil {
-			return rc.Throw("casSkillConfig: failed to persist config: %v", persistErr)
+		// Atomically update in-memory config
+		swapped := g.serverConfig.CompareAndSwapSkillConfig(name, oldConfig, newConfig)
+		if !swapped {
+			res, err := rc.JSFromGo(false)
+			if err != nil {
+				return rc.Throw("trying to convert result: %v", err)
+			}
+			return res
 		}
-		res, err := rc.JSFromGo(swapped)
+
+		// Persist to root object state
+		if err := g.persistServerConfig(ctx); err != nil {
+			// Revert the in-memory change on persist failure.
+			// Use unconditional set to ensure revert succeeds even if another
+			// goroutine modified the config between our CAS and persist failure.
+			if oldConfig == nil {
+				g.serverConfig.DeleteSkillConfig(name)
+			} else {
+				g.serverConfig.SetSkillConfig(name, *oldConfig)
+			}
+			return rc.Throw("updateSkillConfig: failed to persist config: %v", err)
+		}
+
+		res, err := rc.JSFromGo(true)
 		if err != nil {
 			return rc.Throw("trying to convert result: %v", err)
 		}
@@ -759,7 +766,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		// If challenges provided, check recipient's skills
 		// challenges.Check(recipient, emitterID) - can recipient perceive event from emitter?
 		if len(challenges) > 0 {
-			if challenges.Check(recipient, object.GetId()) <= 0 {
+			if challenges.Check(g.GetServerConfig(), recipient, object.GetId()) <= 0 {
 				// Recipient fails challenge - silently don't emit
 				return nil
 			}
@@ -807,7 +814,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		emitterId := object.GetId()
 
 		// Iterate over all observers who pass the challenges
-		for obs := range neighbourhood.Observers(emitterId, challenges) {
+		for obs := range neighbourhood.Observers(g.GetServerConfig(), emitterId, challenges) {
 			if err := g.storage.Queue().Push(ctx, &structs.AnyEvent{
 				At:     at,
 				Object: obs.Subject.GetId(),

@@ -187,7 +187,7 @@ The root object (ID `""`) stores server-wide configuration in its state:
 
 **Spawn Location**: Where new users appear. Falls back to "genesis" if not set or invalid.
 
-**Skill Configs**: Game-wide skill parameters. See the JavaScript API section for `getSkillConfig()` and `casSkillConfig()`.
+**Skill Configs**: Game-wide skill parameters. See the JavaScript API section for `getSkillConfig()` and `updateSkillConfig()`.
 
 ### Administration
 
@@ -674,19 +674,19 @@ var config = getSkillConfig('perception');
 // config.Duration - seconds for deterministic results
 ```
 
-#### `casSkillConfig(skillName, oldConfig, newConfig)`
-Compare-and-swap skill configuration. Returns true if successful.
+#### `updateSkillConfig(skillName, oldConfig, newConfig)`
+Atomically updates skill configuration if current value matches oldConfig. Returns true if successful.
 
 ```javascript
 // Create new config (oldConfig = null)
-casSkillConfig('stealth', null, {Forget: 3600, Recharge: 1000, Duration: 60});
+updateSkillConfig('stealth', null, {Forget: 3600, Recharge: 1000, Duration: 60});
 
 // Update existing config
 var old = getSkillConfig('stealth');
-casSkillConfig('stealth', old, {Forget: 7200, Recharge: old.Recharge, Duration: old.Duration});
+updateSkillConfig('stealth', old, {Forget: 7200, Recharge: old.Recharge, Duration: old.Duration});
 
 // Delete config (newConfig = null)
-casSkillConfig('stealth', old, null);
+updateSkillConfig('stealth', old, null);
 ```
 
 ### Data Structures

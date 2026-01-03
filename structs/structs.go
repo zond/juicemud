@@ -192,7 +192,7 @@ func (e *Event) CreateKey() {
 
 // Check tests the challenger's skill against this challenge's difficulty.
 // Returns positive for success, negative for failure. Updates skill state.
-func (c *Challenge) Check(challenger *Object, targetID string) float64 {
+func (c *Challenge) Check(cfg *ServerConfig, challenger *Object, targetID string) float64 {
 	challenger.Lock()
 	defer challenger.Unlock()
 
@@ -207,7 +207,7 @@ func (c *Challenge) Check(challenger *Object, targetID string) float64 {
 		challenge: float64(c.Level),
 		at:        time.Now(),
 		target:    targetID,
-	}.check(challenger.Unsafe.Learning)
+	}.check(cfg, challenger.Unsafe.Learning)
 
 	challenger.Unsafe.Skills[c.Skill] = skill
 
@@ -248,15 +248,15 @@ func (c Challenges) Map() map[string]Challenge {
 
 // Check sums results of all challenges. Positive = success, negative = failure.
 // Empty challenges return 1.0 (auto-success).
-func (c Challenges) Check(challenger *Object, targetID string) float64 {
-	score, _ := c.CheckWithDetails(challenger, targetID)
+func (c Challenges) Check(cfg *ServerConfig, challenger *Object, targetID string) float64 {
+	score, _ := c.CheckWithDetails(cfg, challenger, targetID)
 	return score
 }
 
 // CheckWithDetails is like Check but also returns the primary failure on failure.
 // Returns (score, nil) on success, or (score, primaryFailure) on failure.
 // The primary failure is the challenge with the most negative individual result.
-func (c Challenges) CheckWithDetails(challenger *Object, targetID string) (float64, *Challenge) {
+func (c Challenges) CheckWithDetails(cfg *ServerConfig, challenger *Object, targetID string) (float64, *Challenge) {
 	if len(c) == 0 {
 		return 1.0, nil
 	}
@@ -264,7 +264,7 @@ func (c Challenges) CheckWithDetails(challenger *Object, targetID string) (float
 	var primaryFailure *Challenge
 	worstScore := 0.0
 	for i := range c {
-		score := c[i].Check(challenger, targetID)
+		score := c[i].Check(cfg, challenger, targetID)
 		result += score
 		if score < worstScore {
 			worstScore = score
@@ -299,10 +299,10 @@ func (d Descriptions) Matches(pattern string) bool {
 // This includes descriptions with no challenges (always visible) and
 // descriptions where the viewer overcomes the challenges.
 // Returns nil if no descriptions are visible.
-func (d Descriptions) Detect(viewer *Object, targetID string) []Description {
+func (d Descriptions) Detect(cfg *ServerConfig, viewer *Object, targetID string) []Description {
 	var result []Description
 	for _, desc := range d {
-		if Challenges(desc.Challenges).Check(viewer, targetID) > 0 {
+		if Challenges(desc.Challenges).Check(cfg, viewer, targetID) > 0 {
 			result = append(result, desc)
 		}
 	}
@@ -338,17 +338,17 @@ func (o *Object) AddDescriptionChallenges(addedChallenges Challenges) (*Object, 
 
 // Filter returns a copy with only descriptions and exits the viewer can perceive.
 // Multiple descriptions may be included if the viewer overcomes challenges for multiple descriptions.
-func (o *Object) Filter(viewer *Object) (*Object, error) {
+func (o *Object) Filter(cfg *ServerConfig, viewer *Object) (*Object, error) {
 	cpy, err := Clone(o)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 
-	cpy.Unsafe.Descriptions = Descriptions(cpy.Unsafe.Descriptions).Detect(viewer, cpy.Unsafe.Id)
+	cpy.Unsafe.Descriptions = Descriptions(cpy.Unsafe.Descriptions).Detect(cfg, viewer, cpy.Unsafe.Id)
 
 	exits := Exits{}
 	for _, exit := range cpy.Unsafe.Exits {
-		exitDescs := Descriptions(exit.Descriptions).Detect(viewer, cpy.Unsafe.Id)
+		exitDescs := Descriptions(exit.Descriptions).Detect(cfg, viewer, cpy.Unsafe.Id)
 		if len(exitDescs) > 0 {
 			exit.Descriptions = exitDescs
 			exits = append(exits, exit)
@@ -440,21 +440,21 @@ func (l *Location) AddDescriptionChallenges(addedChallenges Challenges) (*Locati
 	return result, nil
 }
 
-func (l *Location) Filter(viewer *Object) (*Location, error) {
+func (l *Location) Filter(cfg *ServerConfig, viewer *Object) (*Location, error) {
 	result := &Location{
 		Content: Content{},
 	}
 	for id := range l.Content {
 		if id == viewer.GetId() {
 			result.Content[id] = l.Content[id]
-		} else if cont, err := l.Content[id].Filter(viewer); err != nil {
+		} else if cont, err := l.Content[id].Filter(cfg, viewer); err != nil {
 			return nil, juicemud.WithStack(err)
 		} else if len(cont.GetDescriptions()) > 0 {
 			result.Content[id] = cont
 		}
 	}
 	var err error
-	if result.Container, err = l.Container.Filter(viewer); err != nil {
+	if result.Container, err = l.Container.Filter(cfg, viewer); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	return result, nil
@@ -525,11 +525,11 @@ type LocationEmit struct {
 
 // Observers yields each object in the location that passes the given challenges.
 // Objects with the same ID as targetID are excluded (you can't observe yourself).
-func (l *Location) Observers(targetID string, challenges Challenges) iter.Seq[*Object] {
+func (l *Location) Observers(cfg *ServerConfig, targetID string, challenges Challenges) iter.Seq[*Object] {
 	return func(yield func(*Object) bool) {
 		for viewer := range l.All() {
 			if viewer.GetId() != targetID {
-				if challenges.Check(viewer, targetID) > 0 {
+				if challenges.Check(cfg, viewer, targetID) > 0 {
 					if !yield(viewer) {
 						return
 					}
@@ -550,10 +550,10 @@ type Observation struct {
 // For observers in the same location, Challenges = baseChallenges.
 // For observers in neighbouring locations, Challenges = baseChallenges + exit.TransmitChallenges.
 // Perspective indicates where the observation is from (here, via exit, or unknown).
-func (n *DeepNeighbourhood) Observers(targetID string, baseChallenges Challenges) iter.Seq[*Observation] {
+func (n *DeepNeighbourhood) Observers(cfg *ServerConfig, targetID string, baseChallenges Challenges) iter.Seq[*Observation] {
 	return func(yield func(*Observation) bool) {
 		// Observers in the same location - perspective is "here"
-		for viewer := range n.Location.Observers(targetID, baseChallenges) {
+		for viewer := range n.Location.Observers(cfg, targetID, baseChallenges) {
 			if !yield(&Observation{
 				Subject:     viewer,
 				Challenges:  baseChallenges,
@@ -573,7 +573,7 @@ func (n *DeepNeighbourhood) Observers(targetID string, baseChallenges Challenges
 			// Find the return exit (observer→source) for perspective
 			returnExit := neighbour.Container.FindExit(n.Location.Container.GetId())
 			perspective := Perspective{Here: false, Exit: returnExit}
-			for viewer := range neighbour.Observers(targetID, combined) {
+			for viewer := range neighbour.Observers(cfg, targetID, combined) {
 				if !yield(&Observation{
 					Subject:     viewer,
 					Challenges:  combined,
@@ -596,11 +596,11 @@ type Detection struct {
 // The perspective describes where the event came from (from the observer's point of view).
 // The target should have all challenges applied via AddDescriptionChallenges before calling.
 // Typically this includes TransmitChallenges from exits when observing through an exit.
-func (l *Location) Detections(target *Object, perspective Perspective) iter.Seq2[*Detection, error] {
+func (l *Location) Detections(cfg *ServerConfig, target *Object, perspective Perspective) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
 		for viewer := range l.All() {
 			if viewer.GetId() != target.GetId() {
-				if filtered, err := target.Filter(viewer); err != nil {
+				if filtered, err := target.Filter(cfg, viewer); err != nil {
 					if !yield(nil, juicemud.WithStack(err)) {
 						return
 					}
@@ -618,10 +618,10 @@ func (l *Location) Detections(target *Object, perspective Perspective) iter.Seq2
 // Sensory events travel from source (n.Location) to observers in neighbours.
 // TransmitChallenges on the source→neighbour exit are added to the target's description challenges.
 // The perspective is set to the observer→source exit (or unknown if no return exit).
-func (n *DeepNeighbourhood) Detections(target *Object) iter.Seq2[*Detection, error] {
+func (n *DeepNeighbourhood) Detections(cfg *ServerConfig, target *Object) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
 		// Observers in the same location as target - perspective is "here"
-		for det, err := range n.Location.Detections(target, Perspective{Here: true}) {
+		for det, err := range n.Location.Detections(cfg, target, Perspective{Here: true}) {
 			if !yield(det, err) {
 				return
 			}
@@ -643,7 +643,7 @@ func (n *DeepNeighbourhood) Detections(target *Object) iter.Seq2[*Detection, err
 			// Perspective: observer→source exit (nil if no return exit found)
 			returnExit := neighbour.Container.FindExit(n.Location.Container.GetId())
 			perspective := Perspective{Here: false, Exit: returnExit}
-			for det, err := range neighbour.Detections(challenged, perspective) {
+			for det, err := range neighbour.Detections(cfg, challenged, perspective) {
 				if !yield(det, err) {
 					return
 				}
@@ -673,13 +673,13 @@ func (n *DeepNeighbourhood) Describe() string {
 }
 
 // Filter returns a copy with only what the viewer can perceive.
-func (n *DeepNeighbourhood) Filter(viewer *Object) (*DeepNeighbourhood, error) {
+func (n *DeepNeighbourhood) Filter(cfg *ServerConfig, viewer *Object) (*DeepNeighbourhood, error) {
 	result := &DeepNeighbourhood{
 		Neighbours: map[string]*Location{},
 	}
 
 	var err error
-	if result.Location, err = n.Location.Filter(viewer); err != nil {
+	if result.Location, err = n.Location.Filter(cfg, viewer); err != nil {
 		return nil, err
 	}
 
@@ -687,7 +687,7 @@ func (n *DeepNeighbourhood) Filter(viewer *Object) (*DeepNeighbourhood, error) {
 		if neighbour, found := n.Neighbours[exit.Destination]; found {
 			if challenged, err := neighbour.AddDescriptionChallenges(exit.TransmitChallenges); err != nil {
 				return nil, juicemud.WithStack(err)
-			} else if filtered, err := challenged.Filter(viewer); err != nil {
+			} else if filtered, err := challenged.Filter(cfg, viewer); err != nil {
 				return nil, juicemud.WithStack(err)
 			} else if len(filtered.Container.GetDescriptions()) > 0 {
 				result.Neighbours[exit.Destination] = filtered
@@ -769,121 +769,6 @@ func (a *AnyEvent) Event() (*Event, error) {
 	}, nil
 }
 
-// SkillConfigStore provides thread-safe access to skill configurations with
-// compare-and-swap semantics to prevent lost updates from concurrent modifications.
-type SkillConfigStore struct {
-	m *juicemud.SyncMap[string, SkillConfig]
-}
-
-// NewSkillConfigStore creates a new skill config store.
-func NewSkillConfigStore() *SkillConfigStore {
-	return &SkillConfigStore{
-		m: juicemud.NewSyncMap[string, SkillConfig](),
-	}
-}
-
-// Get returns the config for the given skill name, or zero value if not found.
-func (s *SkillConfigStore) Get(name string) (SkillConfig, bool) {
-	return s.m.GetHas(name)
-}
-
-// CompareAndSwap atomically updates a skill config if the current value matches old.
-// If old is nil, succeeds only if the key doesn't exist (insert).
-// If new is nil, deletes the key (if old matched).
-// Returns true if the operation succeeded.
-func (s *SkillConfigStore) CompareAndSwap(name string, old *SkillConfig, new *SkillConfig) bool {
-	var swapped bool
-	s.m.WithLock(name, func() {
-		current, exists := s.m.GetHas(name)
-
-		// Check if current state matches expected old state
-		if old == nil {
-			// Caller expects key to not exist
-			if exists {
-				return
-			}
-		} else {
-			// Caller expects key to exist with specific value
-			if !exists || current != *old {
-				return
-			}
-		}
-
-		// Current state matches - perform the update
-		if new == nil {
-			s.m.Del(name)
-		} else {
-			s.m.Set(name, *new)
-		}
-		swapped = true
-	})
-	return swapped
-}
-
-// Set unconditionally sets a skill config (for initialization/testing).
-func (s *SkillConfigStore) Set(name string, config SkillConfig) {
-	s.m.Set(name, config)
-}
-
-// Replace replaces all skill configs with the provided map.
-// This should only be called during initialization (e.g., loadSkillConfigs at startup)
-// before any concurrent JS execution, as it does not acquire per-key locks.
-func (s *SkillConfigStore) Replace(configs map[string]SkillConfig) {
-	s.m.Replace(configs)
-}
-
-// CompareAndSwapThen atomically updates a skill config and runs a callback if successful.
-// The callback runs while still holding the per-key lock, ensuring atomicity.
-// If the callback returns an error, the change is reverted.
-// Returns (swapped bool, err from callback if swapped and callback failed).
-//
-// LOCK ORDERING: The callback may acquire other locks (e.g., root object lock for persistence).
-// To avoid deadlocks, never hold the root object lock when calling SkillConfig methods.
-func (s *SkillConfigStore) CompareAndSwapThen(name string, old *SkillConfig, new *SkillConfig, then func() error) (bool, error) {
-	var swapped bool
-	var err error
-	s.m.WithLock(name, func() {
-		current, exists := s.m.GetHas(name)
-
-		// Check if current state matches expected old state
-		if old == nil {
-			if exists {
-				return
-			}
-		} else {
-			if !exists || current != *old {
-				return
-			}
-		}
-
-		// Current state matches - perform the update
-		if new == nil {
-			s.m.Del(name)
-		} else {
-			s.m.Set(name, *new)
-		}
-		swapped = true
-
-		// Run the callback while still holding the lock
-		if then != nil {
-			if err = then(); err != nil {
-				// Revert the change
-				if old == nil {
-					s.m.Del(name)
-				} else {
-					s.m.Set(name, *old)
-				}
-				swapped = false
-			}
-		}
-	})
-	return swapped, err
-}
-
-var (
-	SkillConfigs = NewSkillConfigStore()
-)
-
 type SkillDuration float64
 
 func (s SkillDuration) Nanoseconds() int64 {
@@ -917,9 +802,9 @@ func (s *Skill) specificRecharge(at Timestamp, recharge SkillDuration) float64 {
 }
 
 // improvement calculates skill XP gain based on recharge, skill level, and challenge difficulty.
-func (s *Skill) improvement(at Timestamp, challenge float64, effective float64) float64 {
+func (s *Skill) improvement(cfg *ServerConfig, at Timestamp, challenge float64, effective float64) float64 {
 	recharge := 6 * time.Minute
-	if sk, found := SkillConfigs.Get(s.Name); found && sk.Recharge.Duration() > recharge {
+	if sk, found := cfg.GetSkillConfig(s.Name); found && sk.Recharge.Duration() > recharge {
 		recharge = sk.Recharge.Duration()
 	}
 	rechargeCoeff := math.Min(1, float64(at.Time().Sub(Timestamp(s.LastUsedAt).Time()))/float64(recharge))
@@ -931,8 +816,8 @@ func (s *Skill) improvement(at Timestamp, challenge float64, effective float64) 
 }
 
 // Returns the effective level of this skill considering amount forgotten since last use.
-func (s *Skill) Effective(at Timestamp) float64 {
-	if config, found := SkillConfigs.Get(s.Name); found && config.Forget != 0 {
+func (s *Skill) Effective(cfg *ServerConfig, at Timestamp) float64 {
+	if config, found := cfg.GetSkillConfig(s.Name); found && config.Forget != 0 {
 		nanosSinceLastUse := at.Nanoseconds() - Timestamp(s.LastUsedAt).Nanoseconds()
 		forgetFraction := float64(nanosSinceLastUse) / float64(config.Forget.Nanoseconds())
 		forgetCoeff := 1 + (-1 / (1 + math.Exp(8-8*forgetFraction))) + (1 / math.Exp(8))
@@ -945,12 +830,12 @@ func (s *Skill) Effective(at Timestamp) float64 {
 }
 
 // Returns the amount of skill level useable considering recharge time.
-func (s *Skill) rechargeCoeff(at Timestamp) float64 {
+func (s *Skill) rechargeCoeff(cfg *ServerConfig, at Timestamp) float64 {
 	if s.LastUsedAt == 0 {
 		return 1.0
 	}
 
-	if sk, found := SkillConfigs.Get(s.Name); found && sk.Recharge != 0 {
+	if sk, found := cfg.GetSkillConfig(s.Name); found && sk.Recharge != 0 {
 		rechargeCoeff := s.specificRecharge(at, sk.Recharge)
 		cumulativeReuse := float64(s.LastBase) * sk.Reuse
 		return cumulativeReuse + (1-cumulativeReuse)*rechargeCoeff
@@ -969,20 +854,20 @@ type skillUse struct {
 
 // check performs the skill check and returns positive for success, negative for failure.
 // If improve is true, also applies forgetting and learning to the skill.
-func (s skillUse) check(improve bool) float64 {
+func (s skillUse) check(cfg *ServerConfig, improve bool) float64 {
 	stamp := Stamp(s.at)
 
 	effective := float64(s.skill.Practical)
 	if improve {
-		effective = s.skill.Effective(stamp)
+		effective = s.skill.Effective(cfg, stamp)
 		s.skill.Practical = float32(effective)
 	}
 
-	rechargeCoeff := s.skill.rechargeCoeff(stamp)
+	rechargeCoeff := s.skill.rechargeCoeff(cfg, stamp)
 	successChance := rechargeCoeff / (1.0 + math.Pow(10, (s.challenge-effective)*0.1))
 
 	if improve {
-		s.skill.Practical += float32(s.skill.improvement(stamp, s.challenge, effective))
+		s.skill.Practical += float32(s.skill.improvement(cfg, stamp, s.challenge, effective))
 		if s.skill.Practical > s.skill.Theoretical {
 			s.skill.Theoretical = s.skill.Practical
 		}
@@ -991,7 +876,7 @@ func (s skillUse) check(improve bool) float64 {
 	s.skill.LastBase = float32(rechargeCoeff)
 	s.skill.LastUsedAt = stamp.Uint64()
 
-	random := s.rng().Float64()
+	random := s.rng(cfg).Float64()
 	// Unified formula: score is based on ratio of random to successChance.
 	// - Success (random < successChance): ratio < 1, log negative, score positive
 	// - Failure (random > successChance): ratio > 1, log positive, score negative
@@ -1001,13 +886,13 @@ func (s skillUse) check(improve bool) float64 {
 
 // rng returns a deterministic RNG seeded by user, skill, target, and time window.
 // This ensures consistent results for repeated checks within the skill's Duration.
-func (s skillUse) rng() *rnd.Rand {
+func (s skillUse) rng(cfg *ServerConfig) *rnd.Rand {
 	h := fnv.New64()
 	h.Write([]byte(s.user))
 	h.Write([]byte(s.skill.Name))
 	h.Write([]byte(s.target))
 
-	skillConfig, _ := SkillConfigs.Get(s.skill.Name)
+	skillConfig, _ := cfg.GetSkillConfig(s.skill.Name)
 
 	// Seed the hash with time step based on skill duration.
 	step := uint64(s.at.UnixNano())

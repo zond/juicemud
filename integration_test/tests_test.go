@@ -3300,7 +3300,7 @@ addCallback('logmany', ['action'], (msg) => {
 	tc.sendCommand(fmt.Sprintf("/undebug #%s", loggerID), defaultWaitTimeout)
 }
 
-// TestSkillConfig tests getSkillConfig() and casSkillConfig() JS APIs.
+// TestSkillConfig tests getSkillConfig() and updateSkillConfig() JS APIs.
 func TestSkillConfig(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -3328,20 +3328,20 @@ addCallback('getconfig', ['action'], (msg) => {
 	}
 });
 addCallback('setconfig', ['action'], (msg) => {
-	// Use CAS to set config - null as old value means "doesn't exist yet"
+	// Use updateSkillConfig to set config - null as old value means "doesn't exist yet"
 	const newConfig = {Forget: 3600, Recharge: 1000};
-	const success = casSkillConfig('%s', null, newConfig);
+	const success = updateSkillConfig('%s', null, newConfig);
 	setDescriptions([{Short: 'skill config tester (set:' + success + ')'}]);
 });
 addCallback('updateconfig', ['action'], (msg) => {
-	// Use CAS to update existing config
+	// Use updateSkillConfig to update existing config
 	const oldConfig = getSkillConfig('%s');
 	if (oldConfig === null) {
 		setDescriptions([{Short: 'skill config tester (update:noexist)'}]);
 		return;
 	}
 	const newConfig = {Forget: 7200, Recharge: oldConfig.Recharge};
-	const success = casSkillConfig('%s', oldConfig, newConfig);
+	const success = updateSkillConfig('%s', oldConfig, newConfig);
 	setDescriptions([{Short: 'skill config tester (update:' + success + ')'}]);
 });
 `, skillName, skillName, skillName, skillName)
@@ -3373,7 +3373,7 @@ addCallback('updateconfig', ['action'], (msg) => {
 	}
 	_, found = tc.waitForObject("*skill config tester*set:true*", defaultWaitTimeout)
 	if !found {
-		t.Fatal("casSkillConfig should return true for new config")
+		t.Fatal("updateSkillConfig should return true for new config")
 	}
 
 	// Query again - should now have value
@@ -3397,7 +3397,7 @@ addCallback('updateconfig', ['action'], (msg) => {
 	}
 	_, found = tc.waitForObject("*skill config tester*update:true*", defaultWaitTimeout)
 	if !found {
-		t.Fatal("casSkillConfig should return true for valid update")
+		t.Fatal("updateSkillConfig should return true for valid update")
 	}
 
 	// Verify update took effect

@@ -346,6 +346,8 @@ func TestMulti(t *testing.T) {
 	// Test a challenge requiring multiple skills.
 	// Uses the same structure as Challenges.Check(): sum individual results, success if > 0.
 
+	cfg := NewServerConfig()
+
 	skills := map[string]*Skill{
 		"TestMultiA": {Name: "TestMultiA", Practical: 10},
 		"TestMultiB": {Name: "TestMultiB", Practical: 10},
@@ -382,7 +384,7 @@ func TestMulti(t *testing.T) {
 					target:    string(rune('a' + i)), // Different target per challenge for independent RNG
 					at:        at,
 					challenge: ch.level,
-				}.check(false)
+				}.check(cfg, false)
 			}
 
 			if total > 0 {
@@ -444,6 +446,8 @@ func TestMulti(t *testing.T) {
 }
 
 func TestCheckWithDetails(t *testing.T) {
+	cfg := NewServerConfig()
+
 	// Create a test object with some skills
 	obj := &Object{
 		Unsafe: &ObjectDO{
@@ -457,7 +461,7 @@ func TestCheckWithDetails(t *testing.T) {
 
 	t.Run("empty challenges returns success", func(t *testing.T) {
 		challenges := Challenges{}
-		score, failure := challenges.CheckWithDetails(obj, "target")
+		score, failure := challenges.CheckWithDetails(cfg, obj, "target")
 		if score != 1.0 {
 			t.Errorf("expected score 1.0, got %v", score)
 		}
@@ -472,7 +476,7 @@ func TestCheckWithDetails(t *testing.T) {
 
 		// Very easy challenge (level 0 vs skill 50) - should almost always pass
 		challenges := Challenges{{Skill: "climbing", Level: 0, Message: "Too slippery"}}
-		score, failure := challenges.CheckWithDetails(obj, "target")
+		score, failure := challenges.CheckWithDetails(cfg, obj, "target")
 		if score <= 0 {
 			t.Errorf("expected positive score for easy challenge, got %v", score)
 		}
@@ -487,7 +491,7 @@ func TestCheckWithDetails(t *testing.T) {
 
 		// Very hard challenge (level 100 vs skill 10) - should almost always fail
 		challenges := Challenges{{Skill: "climbing", Level: 100, Message: "Too slippery"}}
-		score, failure := challenges.CheckWithDetails(obj, "target")
+		score, failure := challenges.CheckWithDetails(cfg, obj, "target")
 		if score > 0 {
 			t.Errorf("expected negative score for hard challenge, got %v", score)
 		}
@@ -511,7 +515,7 @@ func TestCheckWithDetails(t *testing.T) {
 			{Skill: "climbing", Level: 10, Message: "Slippery"},
 			{Skill: "jumping", Level: 50, Message: "Too high"},
 		}
-		_, failure := challenges.CheckWithDetails(obj, "target")
+		_, failure := challenges.CheckWithDetails(cfg, obj, "target")
 		// The jumping challenge should be the primary failure (worst score)
 		if failure == nil {
 			t.Errorf("expected non-nil failure")
@@ -522,6 +526,8 @@ func TestCheckWithDetails(t *testing.T) {
 }
 
 func TestLevel(t *testing.T) {
+	cfg := NewServerConfig()
+
 	u := skillUse{
 		user: "a",
 		skill: &Skill{
@@ -540,7 +546,7 @@ func TestLevel(t *testing.T) {
 			u.skill.Theoretical = 10
 			u.skill.LastBase = 1
 			u.skill.LastUsedAt = 0
-			if u.check(false) > 0 {
+			if u.check(cfg, false) > 0 {
 				success++
 			}
 		}
@@ -554,6 +560,8 @@ func TestLevel(t *testing.T) {
 }
 
 func TestRechargeWithoutReuse(t *testing.T) {
+	cfg := NewServerConfig()
+
 	u := skillUse{
 		user: "a",
 		skill: &Skill{
@@ -563,7 +571,7 @@ func TestRechargeWithoutReuse(t *testing.T) {
 		target: "b",
 	}
 	recharge := time.Minute
-	SkillConfigs.Set("TestRechargeWithoutReuse", SkillConfig{
+	cfg.SetSkillConfig("TestRechargeWithoutReuse", SkillConfig{
 		Recharge: Duration(recharge),
 	})
 	testAt := func(multiple float64) float64 {
@@ -572,8 +580,8 @@ func TestRechargeWithoutReuse(t *testing.T) {
 		for i := 0; i < count; i++ {
 			u.skill.LastUsedAt = Stamp(time.Unix(0, rand.Int64())).Uint64()
 			u.at = Timestamp(u.skill.LastUsedAt).Time().Add(time.Duration(float64(recharge) * multiple))
-			u.challenge = u.skill.Effective(Stamp(u.at))
-			if u.check(false) > 0 {
+			u.challenge = u.skill.Effective(cfg, Stamp(u.at))
+			if u.check(cfg, false) > 0 {
 				success++
 			}
 		}
@@ -587,6 +595,8 @@ func TestRechargeWithoutReuse(t *testing.T) {
 }
 
 func TestForget(t *testing.T) {
+	cfg := NewServerConfig()
+
 	now := time.Time{}
 	s := &Skill{
 		Name:        "TestForget",
@@ -595,12 +605,12 @@ func TestForget(t *testing.T) {
 		LastUsedAt:  Stamp(now).Uint64(),
 	}
 	forget := time.Hour
-	SkillConfigs.Set("TestForget", SkillConfig{
+	cfg.SetSkillConfig("TestForget", SkillConfig{
 		Forget: Duration(forget),
 	})
-	assertClose(t, s.Effective(Stamp(now)), 20, 0.02)
-	assertClose(t, s.Effective(Stamp(now.Add(forget))), 15, 0.02)
-	assertClose(t, s.Effective(Stamp(now.Add(forget*2))), 10, 0.02)
+	assertClose(t, s.Effective(cfg, Stamp(now)), 20, 0.02)
+	assertClose(t, s.Effective(cfg, Stamp(now.Add(forget))), 15, 0.02)
+	assertClose(t, s.Effective(cfg, Stamp(now.Add(forget*2))), 10, 0.02)
 
 	skillUse{
 		user:      "a",
@@ -608,19 +618,21 @@ func TestForget(t *testing.T) {
 		target:    "b",
 		at:        now.Add(forget),
 		challenge: 10,
-	}.check(true)
-	assertClose(t, s.Effective(Stamp(now.Add(forget))), 15, 0.04)
+	}.check(cfg, true)
+	assertClose(t, s.Effective(cfg, Stamp(now.Add(forget))), 15, 0.04)
 	assertClose(t, s.Practical, 15, 0.04)
 }
 
 func TestLearn(t *testing.T) {
+	cfg := NewServerConfig()
+
 	now := time.Time{}
 	s := &Skill{
 		Name:       "TestLearn",
 		LastUsedAt: Stamp(now).Uint64(),
 	}
 	recharge := 6 * time.Minute
-	SkillConfigs.Set("TestLearn", SkillConfig{
+	cfg.SetSkillConfig("TestLearn", SkillConfig{
 		Recharge: Duration(recharge),
 		Forget:   Duration(time.Hour * 24 * 31 * 6),
 	})
@@ -638,14 +650,14 @@ func TestLearn(t *testing.T) {
 				at = Timestamp(s.LastUsedAt).Time().Add(time.Hour * 22)
 			}
 			dur += step
-			//			before := s.Effective(Stamp(at))
+			//			before := s.Effective(cfg, Stamp(at))
 			skillUse{
 				user:      "a",
 				skill:     s,
 				target:    "b",
 				at:        at,
-				challenge: s.Effective(Stamp(at)),
-			}.check(true)
+				challenge: s.Effective(cfg, Stamp(at)),
+			}.check(cfg, true)
 		}
 		return dur
 	}
@@ -677,6 +689,8 @@ func TestLearn(t *testing.T) {
 }
 
 func TestRechargeWithReuse(t *testing.T) {
+	cfg := NewServerConfig()
+
 	u := skillUse{
 		user: "a",
 		skill: &Skill{
@@ -686,7 +700,7 @@ func TestRechargeWithReuse(t *testing.T) {
 		target: "b",
 	}
 	recharge := time.Minute
-	SkillConfigs.Set("TestRechargeWithReuse", SkillConfig{
+	cfg.SetSkillConfig("TestRechargeWithReuse", SkillConfig{
 		Recharge: Duration(recharge),
 		Reuse:    0.5,
 	})
@@ -698,10 +712,10 @@ func TestRechargeWithReuse(t *testing.T) {
 			u.skill.LastUsedAt = 0
 			u.at = time.Unix(0, rand.Int64())
 			u.challenge = 0
-			u.check(false)
+			u.check(cfg, false)
 			u.at = u.at.Add(time.Duration(float64(recharge) * multiple))
-			u.challenge = u.skill.Effective(Stamp(u.at))
-			if u.check(false) > 0 {
+			u.challenge = u.skill.Effective(cfg, Stamp(u.at))
+			if u.check(cfg, false) > 0 {
 				success++
 			}
 		}
@@ -714,6 +728,8 @@ func TestRechargeWithReuse(t *testing.T) {
 }
 
 func TestDuration(t *testing.T) {
+	cfg := NewServerConfig()
+
 	u := skillUse{
 		user: "a",
 		skill: &Skill{
@@ -722,7 +738,7 @@ func TestDuration(t *testing.T) {
 		},
 		target: "b",
 	}
-	SkillConfigs.Set("TestDuration", SkillConfig{
+	cfg.SetSkillConfig("TestDuration", SkillConfig{
 		Duration: Duration(time.Minute),
 	})
 	testAt := func(multiple float64) float64 {
@@ -730,9 +746,9 @@ func TestDuration(t *testing.T) {
 		count := 10000
 		for i := 0; i < count; i++ {
 			u.at = time.Unix(0, rand.Int64())
-			val1 := u.rng().Float64()
+			val1 := u.rng(cfg).Float64()
 			u.at = u.at.Add(time.Duration(float64(time.Minute) * multiple))
-			val2 := u.rng().Float64()
+			val2 := u.rng(cfg).Float64()
 			if val1 == val2 {
 				same += 1
 			}

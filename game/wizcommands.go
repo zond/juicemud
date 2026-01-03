@@ -1274,15 +1274,15 @@ func (c *Connection) wizCommands() commands {
 				// Special validation for root object (server config)
 				isServerConfig := target.GetId() == ""
 				if isServerConfig {
-					var config ServerConfig
+					var config structs.ServerConfig
 					if err := goccy.Unmarshal(newState, &config); err != nil {
 						fmt.Fprintf(c.term, "Error: invalid server config: %v\n", err)
 						return nil
 					}
 					// Validate spawn location if set
-					if config.Spawn.Container != "" {
-						if _, err := c.game.storage.AccessObject(c.ctx, config.Spawn.Container, nil); err != nil {
-							fmt.Fprintf(c.term, "Warning: spawn location %q does not exist\n", config.Spawn.Container)
+					if spawn := config.GetSpawn(); spawn != "" {
+						if _, err := c.game.storage.AccessObject(c.ctx, spawn, nil); err != nil {
+							fmt.Fprintf(c.term, "Warning: spawn location %q does not exist\n", spawn)
 						}
 					}
 				}
