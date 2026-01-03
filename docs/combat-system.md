@@ -604,31 +604,129 @@ type BleedingThreshold struct {
 
 ## Config Persistence
 
-All global configs are stored in the root object's ServerConfig (same pattern as SkillConfigs):
+All global configs are stored in `ServerConfig` (in `structs/serverconfig.go`), which is persisted to the root object's state. ServerConfig has an internal mutex and private fields accessed via thread-safe getters/setters:
 
 ```go
 type ServerConfig struct {
-    Spawn struct {
-        Container string
-    }
-    SkillConfigs        map[string]SkillConfig
-    WeaponConfigs       map[string]WeaponConfig
-    RangedWeaponConfigs map[string]RangedWeaponConfig
-    AmmoConfigs         map[string]AmmoConfig
-    ArmorConfigs        map[string]ArmorConfig
-    BodyConfigs         map[string]BodyConfig
-    StanceConfigs       map[string]StanceConfig
-    StatusEffectConfigs map[string]StatusEffectConfig
-    DamageTypes         map[string]DamageTypeConfig
-    CombatConfig        CombatConfig
-    MovementConfig      MovementConfig
+    mu sync.RWMutex  // Internal mutex for thread-safe access
+
+    // Fields are private, accessed via Get/Set/Delete/Update/Snapshot methods
+    spawn               string
+    skillConfigs        map[string]SkillConfig
+    weaponConfigs       map[string]WeaponConfig
+    rangedWeaponConfigs map[string]RangedWeaponConfig
+    ammoConfigs         map[string]AmmoConfig
+    armorConfigs        map[string]ArmorConfig
+    bodyConfigs         map[string]BodyConfig
+    stanceConfigs       map[string]StanceConfig
+    statusEffectConfigs map[string]StatusEffectConfig
+    damageTypes         map[string]DamageTypeConfig
+    combatConfig        CombatConfig
+    movementConfig      MovementConfig
 }
 ```
 
-Each config type has a corresponding in-memory store (like `SkillConfigs`) that is:
-- Loaded from ServerConfig at startup
-- Updated via wizard commands
-- Persisted back to ServerConfig on change
+### ServerConfig Methods
+
+Each config type has these methods on ServerConfig:
+
+```go
+// Read a single config (returns zero value and false if not found)
+func (c *ServerConfig) GetWeaponConfig(name string) (WeaponConfig, bool)
+
+// Write a single config
+func (c *ServerConfig) SetWeaponConfig(name string, cfg WeaponConfig)
+
+// Delete a config
+func (c *ServerConfig) DeleteWeaponConfig(name string)
+
+// Atomic compare-and-swap (for safe concurrent updates from JS)
+// old=nil means "insert only if doesn't exist", new=nil means "delete"
+func (c *ServerConfig) CompareAndSwapWeaponConfig(name string, old, new *WeaponConfig) bool
+
+// Get snapshot of all configs (defensive copy for serialization)
+func (c *ServerConfig) WeaponConfigsSnapshot() map[string]WeaponConfig
+
+// Replace all configs atomically (for bulk loading)
+func (c *ServerConfig) ReplaceWeaponConfigs(configs map[string]WeaponConfig)
+```
+
+### How Wizards Update Configs
+
+Wizards update configs via JavaScript callbacks. Each config type has `get*Config` and `update*Config` callbacks:
+
+```javascript
+// getWeaponConfig(name) -> config or null
+const config = getWeaponConfig("longsword");
+
+// updateWeaponConfig(name, oldConfig, newConfig) -> boolean
+// - oldConfig null: insert only if key doesn't exist
+// - newConfig null: delete the key (if oldConfig matched)
+// Returns true if update succeeded, false if current value didn't match oldConfig
+
+// Example: Create a new weapon config
+const success = updateWeaponConfig("longsword", null, {
+    BaseDamage: 15.0,
+    AttackIntervalChallenges: [{Skill: "swords", Challenge: 50}],
+    AccuracyChallenges: [{Skill: "swords", Challenge: 40}],
+    // ... other fields
+});
+
+// Example: Update existing config (read-modify-write)
+const current = getWeaponConfig("longsword");
+if (current) {
+    const updated = {...current, BaseDamage: 20.0};
+    updateWeaponConfig("longsword", current, updated);
+}
+
+// Example: Delete a config
+const toDelete = getWeaponConfig("longsword");
+updateWeaponConfig("longsword", toDelete, null);
+```
+
+### Update Callback Implementation Pattern
+
+The Go callbacks (in `game/processing.go`) follow this atomic pattern:
+
+1. **CAS in-memory**: Call `CompareAndSwapWeaponConfig()` on ServerConfig
+2. **Persist to storage**: Call `persistServerConfig()` which writes to root object state
+3. **Revert on failure**: If persist fails, revert the in-memory change
+
+```go
+// Simplified pattern (see updateSkillConfig in processing.go for full implementation)
+swapped := g.serverConfig.CompareAndSwapWeaponConfig(name, oldConfig, newConfig)
+if !swapped {
+    return false  // CAS failed, current value didn't match old
+}
+
+if err := g.persistServerConfig(ctx); err != nil {
+    // Revert in-memory change on persist failure
+    if oldConfig == nil {
+        g.serverConfig.DeleteWeaponConfig(name)
+    } else {
+        g.serverConfig.SetWeaponConfig(name, *oldConfig)
+    }
+    return false
+}
+return true
+```
+
+### Startup Loading
+
+At server startup, `loadServerConfig()` reads the root object's state and unmarshals it into the in-memory ServerConfig. All config maps are initialized (never nil) so callers can iterate safely.
+
+### JSON Serialization
+
+ServerConfig implements `MarshalJSON`/`UnmarshalJSON` to serialize the private fields:
+
+```json
+{
+    "Spawn": {"Container": "genesis"},
+    "SkillConfigs": {"stealth": {"Forget": 1000000000, "Recharge": 360000000000}},
+    "WeaponConfigs": {"longsword": {"BaseDamage": 15.0, ...}},
+    ...
+}
+```
 
 ---
 
@@ -1651,17 +1749,22 @@ GuardingExit string  // Exit direction being guarded (empty = not guarding)
 | File | Changes |
 |------|---------|
 | `structs/schema.go` | Add to ObjectDO: Health, MaxHealth, Stamina, MaxStamina, Wielding (map), Wearing (map), BodyPartHealth (map), BodyConfigID, StanceConfigID, CombatTargets, StatusEffects |
-| `structs/combat.go` | New file: All config types and their stores |
+| `structs/combat.go` | New file: All config types (WeaponConfig, ArmorConfig, etc.) |
 | `structs/status.go` | New file: StatusEffect, StatusEffectConfig, lazy cleanup logic |
 | `game/game.go` | Expand ServerConfig, load all configs at startup |
 
-Config stores to create (following SkillConfigStore pattern):
-- WeaponConfigStore
-- ArmorConfigStore
-- BodyConfigStore
-- StanceConfigStore
-- StatusEffectConfigStore
-- DamageTypeStore
+Config types to add to ServerConfig (following SkillConfig pattern):
+- WeaponConfig, RangedWeaponConfig, AmmoConfig
+- ArmorConfig
+- BodyConfig
+- StanceConfig
+- StatusEffectConfig
+- DamageTypeConfig
+- CombatConfig, MovementConfig
+
+Each config type needs:
+- Get/Set/Delete/CompareAndSwap/Snapshot/Replace methods on ServerConfig
+- `get*Config` and `update*Config` JS callbacks in processing.go
 
 ### Phase 2: Status Effect System
 
