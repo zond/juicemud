@@ -33,8 +33,22 @@ type ObjectDO struct {
     // Combat stats
     Health    float64  // Current health (0 = incapacitated/dead)
     MaxHealth float64  // Maximum health
-    Stamina   float64  // Resource for special moves (reserved for future use)
+    Stamina   float64  // Resource for physical special moves (feint, disarm, power attack)
     MaxStamina float64
+    Focus     float64  // Resource for mental actions (spells, aimed shots, intimidate)
+    MaxFocus  float64
+
+    // Resource regeneration (lazy computation on access)
+    HealthLastRegenAt  time.Time
+    StaminaLastRegenAt time.Time
+    FocusLastRegenAt   time.Time
+
+    // Regeneration enable flags (robots don't heal naturally, etc.)
+    HealthRegenEnabled  bool  // Default true for organic creatures
+    StaminaRegenEnabled bool
+    FocusRegenEnabled   bool
+    // Note: Stamina/Focus are consumed by wizard-defined JS actions, not core combat.
+    // Core combat only tracks and regenerates these resources.
 
     // Equipment: qualified slot name -> equipped object ID
     // Format: "{bodyPartID}.{slotType}" - works for any body configuration
@@ -97,6 +111,13 @@ type StatusEffect struct {
 - Effects with tick intervals are ALSO checked at each tick
 - When expired (by lazy check or tick), emit `statusExpired` and clear any interval
 - When applied, emit `statusApplied`
+
+**Timing patterns in combat:**
+| Pattern | Use Case | Persistence | Examples |
+|---------|----------|-------------|----------|
+| Intervals | Persistent scheduled events | Survives restart | StatusEffect ticks (poison damage, buff expiry) |
+| Goroutines + sleep | Ephemeral timers | Lost on restart | Attack timers, movement delays, reload/unjam |
+| Lazy timestamps | Values changing over time | Computed on access | Resource regen, aim bonus, bleeding severity |
 
 ### BodyPartState
 
@@ -272,9 +293,30 @@ type StanceConfig struct {
 }
 ```
 
-**Stance skill effect:** When applying stance modifiers, the `StanceChallenges.Check()` result scales them:
-- Positive modifiers: `actualMod = baseMod * (1 + result/100)` (higher skill = bigger bonus)
-- Negative modifiers: `actualMod = baseMod * (1 - result/100)` (higher skill = smaller penalty, clamped to 0)
+**Stance skill effect:** When applying stance modifiers, the `StanceChallenges.Check()` result scales them using sigmoid for bounded output:
+
+```go
+func applyStanceModifier(baseMod float64, stanceResult float64) float64 {
+    // Use sigmoid to map unbounded stanceResult to 0-2 range
+    // stanceResult=0 → mult=1.0 (no change)
+    // stanceResult→+∞ → mult→2.0 (double effect)
+    // stanceResult→-∞ → mult→0.0 (no effect)
+    mult := 2.0 / (1.0 + math.Exp(-stanceResult/50.0))
+
+    if baseMod >= 0 {
+        // Positive modifiers: higher skill = bigger bonus (up to 2x)
+        return baseMod * mult
+    } else {
+        // Negative modifiers: higher skill = smaller penalty (down to 0)
+        // Invert the multiplier: mult=2 means penalty reduced to 0
+        return baseMod * (2.0 - mult)
+    }
+}
+```
+
+This ensures:
+- Bonuses scale from 0x to 2x based on skill
+- Penalties scale from 2x to 0x based on skill (never become bonuses)
 
 ### WeaponConfig
 
@@ -302,6 +344,11 @@ type WeaponConfig struct {
     // Empty map = cannot parry/block; presence of damage type key = can defend against that type
     ParryChallenges   map[string]Challenges   // damage type -> skill challenges for parry (redirect, no damage)
     BlockChallenges   map[string]Challenges   // damage type -> skill challenges for block (absorb, weapon takes damage)
+
+    // Parry can apply status effect to attacker (staggered, off-balance, disarmed, etc.)
+    // Chance scales with parry success via sigmoid: baseChance * sigmoid(parryMargin)
+    ParryStatusEffectID       string         // StatusEffectConfig to apply on successful parry (empty = none)
+    ParryStatusEffectDuration time.Duration  // How long the effect lasts
 
     // Durability (0 = indestructible; blocking damage is 1:1)
     MaxHealth float64  // Maximum weapon health
@@ -427,6 +474,52 @@ Each config type has a corresponding in-memory store (like `SkillConfigs`) that 
 
 ## Combat Flow
 
+### Resource Regeneration
+
+Health, Stamina, and Focus regenerate lazily - computed on access, not via timers:
+
+```go
+func getResourceWithRegen(current, max float64, lastRegenAt time.Time,
+                          regenEnabled bool, regenChallenges Challenges,
+                          baseRegenPerSec float64, obj *Object) (newValue float64, newTimestamp time.Time) {
+    now := time.Now()
+    if !regenEnabled || current >= max {
+        return current, now
+    }
+
+    elapsed := now.Sub(lastRegenAt).Seconds()
+    if elapsed <= 0 {
+        return current, lastRegenAt
+    }
+
+    // Skill affects regen rate via sigmoid (0.5x to 1.5x)
+    result := regenChallenges.Check(obj, "")
+    mult := 1.0 + 0.5/(1.0+math.Exp(-result/50.0)) - 0.25  // Maps to 0.5-1.5
+
+    regenRate := baseRegenPerSec * mult
+    newValue = math.Min(max, current + elapsed*regenRate)
+    return newValue, now
+}
+```
+
+**CombatConfig for regeneration:**
+```go
+type CombatConfig struct {
+    // ... existing fields ...
+
+    // Resource regeneration (lazy computation)
+    HealthRegenChallenges  Challenges
+    HealthRegenPerSecond   float64  // Base rate before skill modifier
+    StaminaRegenChallenges Challenges
+    StaminaRegenPerSecond  float64
+    FocusRegenChallenges   Challenges
+    FocusRegenPerSecond    float64
+
+    // Combat modifiers
+    InCombatRegenMultiplier float64  // e.g., 0.25 (quarter regen during combat)
+}
+```
+
 ### Attack Cycle
 
 Combat timing uses simple goroutines with sleep (no queue persistence needed - combat doesn't survive server restarts).
@@ -479,6 +572,9 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
      - If `ParryChallenges[damageType]` exists, defender rolls those challenges
      - Add stance's `ParryModifier`
      - If `parryScore > hitScore`, that damage type is parried (no damage for that type)
+     - On successful parry with `ParryStatusEffectID` set:
+       - Calculate parry margin: `margin = parryScore - hitScore`
+       - Apply effect with probability: `chance = sigmoid(margin/50)` (barely parry ≈ 50%, decisive parry ≈ 100%)
    - Damage types without parry challenges or failed parries continue to next step
 
 6. **Block** (per damage type, weapon or unarmed):
@@ -498,8 +594,12 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - If no armor on that body part, or armor health = 0, skip to next step
    - For each remaining (unparried, unblocked) damage type:
      - If `ArmorChallenges[damageType]` exists, apply armor skill challenge
-     - Calculate reduction: `reduction = baseReduction * challengeResult * (armorHealth / armorMaxHealth)`
-     - Reduce damage by that amount
+     - Use sigmoid to map unbounded result to skill multiplier:
+       - `skillMult = 0.5 + 0.5 * (1 / (1 + exp(-challengeResult/50)))`
+       - This maps: very negative → 0.5, zero → 0.75, very positive → 1.0
+     - Calculate base reduction: `baseRed = baseReduction * skillMult * (armorHealth / armorMaxHealth)`
+     - Apply armor penetration: `finalRed = baseRed * (1 - armorPenetration[damageType])`
+     - Reduce damage by `finalRed` (capped at remaining damage)
      - Armor takes damage equal to absorbed amount (1:1)
    - Damage types not in armor's BaseReduction pass through fully
 
@@ -527,7 +627,7 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
 
 ### Attack Timing
 
-Uses existing `Challenges.Check()` - results are summed across all challenges:
+Uses existing `Challenges.Check()` - results are summed across all challenges. Uses sigmoid to handle unbounded inputs:
 
 ```go
 func calculateAttackInterval(attacker *Object, weapon *WeaponConfig, config *CombatConfig) time.Duration {
@@ -535,11 +635,12 @@ func calculateAttackInterval(attacker *Object, weapon *WeaponConfig, config *Com
     speedResult := weapon.SpeedChallenges.Check(attacker, "")
 
     // Higher skill = shorter interval (faster attacks)
-    // Clamp result to reasonable range
-    normalized := math.Max(0, math.Min(1, (speedResult+100)/200))
+    // Use sigmoid to handle unbounded inputs smoothly
+    // sigmoid maps (-∞, +∞) -> (0, 1), with speedResult=0 -> 0.5
+    sigmoid := 1.0 / (1.0 + math.Exp(-speedResult/50.0))
 
     interval := config.MaxAttackInterval - time.Duration(
-        float64(config.MaxAttackInterval-config.MinAttackInterval) * normalized,
+        float64(config.MaxAttackInterval-config.MinAttackInterval) * sigmoid,
     )
     return interval
 }
@@ -621,6 +722,52 @@ addCallback('renderStatusApplied', ['emit'], (req) => {
 
 ---
 
+## JS Override Callbacks
+
+Beyond message rendering, certain combat events can be intercepted and modified via JS callbacks. These allow wizards to implement special abilities, immunities, and custom mechanics.
+
+### Override Callbacks
+
+| Callback | Object | Can Return | Use Cases |
+|----------|--------|------------|-----------|
+| `beforeAttack` | Attacker | `{Cancel: true}` | Pacifism effects, attack redirection, resource costs |
+| `beforeDamage` | Defender | `{Damage: modified, Cancel: true}` | Damage immunity, absorption shields, damage reflection |
+| `beforeDeath` | Dying object | `{Cancel: true}` | Deathward effects, phylacteries, last-stand abilities |
+| `beforeStatusApply` | Target | `{Cancel: true}` | Status immunity, poison resistance |
+
+### Example: Deathward
+
+```javascript
+// On a creature with deathward buff
+addCallback('beforeDeath', ['emit'], (req) => {
+    if (hasStatusEffect('deathward')) {
+        removeStatusEffect('deathward');
+        setHealth(1);  // Survive with 1 HP
+        emit('deathwardTriggered', {Object: getId()});
+        return {Cancel: true};  // Prevent death
+    }
+    return null;  // Let death proceed
+});
+```
+
+### Example: Damage Reflection
+
+```javascript
+// On a creature with thorns aura
+addCallback('beforeDamage', ['emit'], (req) => {
+    if (hasStatusEffect('thorns_aura')) {
+        // Reflect 20% of physical damage back to attacker
+        const reflected = (req.Damage['physical'] || 0) * 0.2;
+        if (reflected > 0) {
+            applyDamage(req.Attacker, {'physical': reflected});
+        }
+    }
+    return null;  // Take normal damage
+});
+```
+
+---
+
 ## Wound System
 
 Combat can inflict persistent wounds via status effects.
@@ -687,26 +834,55 @@ type RangedWeaponConfig struct {
     MinFireInterval    time.Duration
     MaxFireInterval    time.Duration
 
+    // Defense difficulty (penalties to defender - higher = harder to defend)
+    // Bows are slow and visible (low penalties); guns are fast (high penalties)
+    DodgePenalty float64  // Added to RangedDodgePenalty from CombatConfig
+    ParryPenalty float64  // Penalty to parry attempts (guns nearly impossible to parry)
+    BlockPenalty float64  // Penalty to block attempts (shields vs bullets)
+
     // Ammunition
     MagazineSize     int
-    ReloadChallenges Challenges  // Skill reduces reload time
-    BaseReloadTime   time.Duration
-    MinReloadTime    time.Duration
-    CompatibleAmmo   []string  // Which AmmoConfig IDs this weapon can use
+    ReloadTime       time.Duration  // Base reload time (mechanical)
+    ReloadChallenges Challenges     // Skill modifier (sigmoid: 0.5x to 1.5x of ReloadTime)
+    CompatibleAmmo   []string       // Which AmmoConfig IDs this weapon can use
 
     // Fire modes
     FireModes []FireModeConfig
 
-    // Reliability (all skill-based)
-    JamChallenges   Challenges  // Higher skill = less jamming
-    UnjamChallenges Challenges  // Higher skill = faster unjam
-    BaseUnjamTime   time.Duration
-    MinUnjamTime    time.Duration
+    // Reliability
+    JamChallenges   Challenges     // Higher skill = less jamming
+    UnjamTime       time.Duration  // Base unjam time (mechanical)
+    UnjamChallenges Challenges     // Skill modifier (sigmoid: 0.5x to 1.5x of UnjamTime)
 
     // Durability (0 = indestructible)
     MaxHealth float64
-}
 
+    // Thrown weapons (daggers, javelins, grenades)
+    IsThrown bool  // If true: weapon IS the ammo, consumed on throw, no reload
+}
+```
+
+**Thrown weapons:** When `IsThrown` is true:
+- The weapon object itself is the projectile
+- No separate ammunition needed (CompatibleAmmo, MagazineSize ignored)
+- Weapon is removed from inventory on throw (can be recovered if it lands somewhere accessible)
+- Damage comes from weapon's DamageTypes (no ammo contribution)
+
+```go
+// Example: Throwing Dagger
+RangedWeaponConfig{
+    ID: "throwing_dagger",
+    SlotType: "weapon", SlotsRequired: 1,
+    MaxRange: 1,
+    IsThrown: true,
+    DamageTypes: map[string]float64{"piercing": 8},
+    // No MagazineSize, ReloadTime, CompatibleAmmo needed
+}
+```
+
+### FireModeConfig
+
+```go
 type FireModeConfig struct {
     ID               string   // "single", "burst", "auto"
     ShotsPerTrigger  int      // 1, 3, ~10
@@ -727,8 +903,10 @@ type AmmoConfig struct {
     DamageTypes      map[string]float64  // e.g., {"piercing": 15}
     DamageChallenges Challenges
 
-    // Armor interaction
-    ArmorPenetration float64  // 0-1, reduces armor effectiveness
+    // Armor penetration per damage type: ignores this fraction of armor/cover absorption
+    // 0 = normal, 0.5 = ignores half of absorption, 1.0 = ignores all absorption
+    // e.g., {"piercing": 0.3} = AP rounds ignore 30% of armor vs piercing
+    ArmorPenetration map[string]float64
 
     // Wound effects
     CanCauseBleeding bool
@@ -778,20 +956,46 @@ When point blank, PointBlankModifier applies:
 
 ### Aiming
 
-Aiming improves accuracy over time. Bonus computed lazily from `AimingSince`:
+Aiming improves accuracy over time. Bonus computed lazily from `AimingSince`, with skill affecting the rate:
 
 ```go
 func getAimBonus(shooter *Object, config *CombatConfig) float64 {
     if shooter.AimingSince.IsZero() {
         return 0
     }
-    elapsed := time.Since(shooter.AimingSince)
-    bonus := elapsed.Seconds() * config.AimBonusPerSecond
+    elapsed := time.Since(shooter.AimingSince).Seconds()
+
+    // Skill affects aim rate via sigmoid (0.5x to 1.5x)
+    result := config.AimChallenges.Check(shooter, "")
+    mult := 1.0 + 0.5/(1.0+math.Exp(-result/50.0)) - 0.25  // Maps to 0.5-1.5
+
+    bonus := elapsed * config.AimBonusPerSecond * mult
     return math.Min(bonus, config.MaxAimBonus)
 }
 ```
 
+**CombatConfig for aiming:**
+```go
+AimChallenges     Challenges  // Skill affects aim rate (sigmoid: 0.5x to 1.5x)
+AimBonusPerSecond float64     // Base aim bonus per second (e.g., +10)
+MaxAimBonus       float64     // Cap on aim bonus (e.g., +50)
+```
+
 **Aim is broken by:** taking damage, moving, target moving rooms, being grappled, shooting.
+
+### Reload Mechanics
+
+Reload time is primarily mechanical (weapon design) with skill modifier:
+
+```go
+func calculateReloadTime(weapon *RangedWeaponConfig, shooter *Object) time.Duration {
+    result := weapon.ReloadChallenges.Check(shooter, "")
+    // sigmoid maps result to 0.5-1.5 range (higher skill = faster = lower multiplier)
+    // result=0 → 1.0x, result→+∞ → 0.5x, result→-∞ → 1.5x
+    mult := 1.0 - 0.5/(1.0+math.Exp(-result/50.0))
+    return time.Duration(float64(weapon.ReloadTime) * mult)
+}
+```
 
 ### Jam Mechanics
 
@@ -805,9 +1009,14 @@ if jamResult < 0 {
     weapon.Jammed = true
 }
 
-// Unjam time based on skill
-unjamResult := weapon.UnjamChallenges.Check(shooter)
-unjamTime := BaseUnjamTime - (unjamResult * factor)  // Clamp to MinUnjamTime
+// Unjam time: base time modified by skill (sigmoid: 0.5x to 1.5x)
+func calculateUnjamTime(weapon *RangedWeaponConfig, shooter *Object) time.Duration {
+    result := weapon.UnjamChallenges.Check(shooter, "")
+    // sigmoid maps result to 0.5-1.5 range (higher skill = faster = lower multiplier)
+    // result=0 → 1.0x, result→+∞ → 0.5x, result→-∞ → 1.5x
+    mult := 1.0 - 0.5/(1.0+math.Exp(-result/50.0))
+    return time.Duration(float64(weapon.UnjamTime) * mult)
+}
 ```
 
 ### Ranged Defense Chain
@@ -818,13 +1027,22 @@ unjamTime := BaseUnjamTime - (unjamResult * factor)  // Clamp to MinUnjamTime
    - Add/Subtract: PointBlankModifier (if in active melee with target)
    - Add/Subtract: FireMode.AccuracyModifier
    - Add: Aim bonus
-   - Subtract: Target's cover penalty
+   - Subtract: Target's cover accuracy penalty
    - Add: Body part HitModifier
-3. **Dodge** - Defender rolls with RangedDodgePenalty (bullets are fast)
-4. **Cover** - If behind cover, apply absorption and accuracy penalty
-5. **Block** - Only with shields rated for ranged (rare)
-6. **Armor Soak** - Normal armor chain (ArmorPenetration reduces effectiveness)
-7. **Apply Damage** - Normal (body part, bleeding, severing)
+3. **Dodge** - Defender rolls with penalties:
+   - RangedDodgePenalty (from CombatConfig, base penalty for all ranged)
+   - weapon.DodgePenalty (bows: low, guns: high)
+4. **Parry** - If defender has parry-capable weapon/unarmed:
+   - Apply weapon.ParryPenalty (bows: 20, guns: 80-90)
+   - Guns are nearly impossible to parry; arrows can be deflected
+5. **Block** - If defender has shield:
+   - Apply weapon.BlockPenalty (bows: 10, guns: 20-30)
+   - Shields help more vs ranged than parry does
+6. **Cover** - If behind cover:
+   - Apply armor penetration: `effectiveAbsorption = absorption * (1 - armorPenetration[damageType])`
+   - Reduce damage by effectiveAbsorption
+7. **Armor Soak** - Normal armor chain (ArmorPenetration reduces effectiveness per damage type)
+8. **Apply Damage** - Normal (body part, bleeding, severing)
 
 ### CombatConfig Additions for Ranged
 
@@ -833,21 +1051,24 @@ type CombatConfig struct {
     // ... existing fields ...
 
     // Ranged combat
-    RangedDodgePenalty float64  // Penalty to dodge ranged attacks (e.g., -30)
-    AimBonusPerSecond  float64  // How much aim bonus per second (e.g., +10)
-    MaxAimBonus        float64  // Cap on aim bonus (e.g., +50)
+    RangedDodgePenalty float64     // Penalty to dodge ranged attacks (e.g., -30)
+    AimChallenges      Challenges  // Skill affects aim rate (sigmoid: 0.5x to 1.5x)
+    AimBonusPerSecond  float64     // Base aim bonus per second (e.g., +10)
+    MaxAimBonus        float64     // Cap on aim bonus (e.g., +50)
 }
 ```
 
 ### Example Weapons
 
-| Weapon | Slots | MaxRange | PointBlank | Magazine | Damage |
-|--------|-------|----------|------------|----------|--------|
-| Pistol | 1 | 0 | 0 | 12 | (from ammo) |
-| Shotgun | 2 | 0 | +25 | 6 | (from ammo) |
-| Longbow | 2 | 1 | -30 | 1 | piercing: 8 |
-| Crossbow | 2 | 1 | -15 | 1 | piercing: 12 |
-| Rifle | 2 | 1 | -15 | 30 | (from ammo) |
+| Weapon | Slots | MaxRange | PointBlank | Magazine | DodgePen | ParryPen | BlockPen |
+|--------|-------|----------|------------|----------|----------|----------|----------|
+| Pistol | 1 | 0 | 0 | 12 | 30 | 80 | 20 |
+| Shotgun | 2 | 0 | +25 | 6 | 25 | 90 | 30 |
+| Longbow | 2 | 1 | -30 | 1 | 10 | 20 | 10 |
+| Crossbow | 2 | 1 | -15 | 1 | 15 | 40 | 15 |
+| Rifle | 2 | 1 | -15 | 30 | 40 | 90 | 25 |
+
+Bows are much easier to parry/block/dodge than guns due to visible flight path and slower projectiles.
 
 ---
 
@@ -890,11 +1111,21 @@ func getCoverValues(obj *Object) (absorption, penalty float64) {
 
 Both properties scale with cover health:
 ```go
-effectiveAbsorption := cover.CoverAbsorption * (cover.Health / cover.MaxHealth)
-effectivePenalty := cover.CoverAccuracyPenalty * (cover.Health / cover.MaxHealth)
+func getCoverEffectiveness(cover *Object) (absorption, penalty float64) {
+    if cover.MaxHealth <= 0 {
+        // Indestructible cover (MaxHealth=0) always provides full benefit
+        return cover.CoverAbsorption, cover.CoverAccuracyPenalty
+    }
+    if cover.Health <= 0 {
+        // Destroyed cover provides no benefit
+        return 0, 0
+    }
+    ratio := cover.Health / cover.MaxHealth
+    return cover.CoverAbsorption * ratio, cover.CoverAccuracyPenalty * ratio
+}
 ```
 
-**Damage to cover:** Cover takes damage equal to absorbed amount (1:1). When cover health = 0, it provides no benefit.
+**Damage to cover:** Cover takes damage equal to absorbed amount (1:1). When cover health = 0, it provides no benefit. Indestructible cover (MaxHealth = 0) never degrades.
 
 ### Using Creatures as Cover
 
@@ -955,6 +1186,57 @@ Being seen by a specific observer (they pass perception) only reveals you **to t
 
 ---
 
+## Flanking Bonus
+
+When outnumbered in combat, defenders face penalties as they struggle to track multiple attackers.
+
+### Calculation
+
+For each defender, count how many attackers have them as a target vs how many allies are helping:
+- `attackers` = count of objects with defender in their CombatTargets
+- `defenders` = count of objects with any attacker in their CombatTargets (including self)
+- `ratio` = attackers / defenders
+
+### Flanking Effects
+
+| Ratio | Attacker Bonus | Defender Penalty | Description |
+|-------|----------------|------------------|-------------|
+| 1:1 | 0 | 0 | Even fight |
+| 2:1 | +10 accuracy | -10 dodge/parry/block | Outnumbered |
+| 3:1 | +20 accuracy | -20 dodge/parry/block | Badly outnumbered |
+| 4+:1 | +30 accuracy | -30 dodge/parry/block | Surrounded |
+
+```go
+func getFlankingBonus(ratio float64) float64 {
+    if ratio <= 1 {
+        return 0
+    }
+    // Cap at 4:1 ratio
+    return math.Min(30, (ratio-1) * 10)
+}
+```
+
+### Flanking vs Groups
+
+When groups fight groups:
+- Each combatant's ratio is calculated individually
+- A 4v2 fight: each defender faces 2:1, each attacker faces 0.5:1
+- Tactical positioning matters: focus fire vs spreading damage
+
+### CombatConfig for Flanking
+
+```go
+type CombatConfig struct {
+    // ... existing fields ...
+
+    // Flanking
+    FlankingBonusPerRatio float64  // Bonus per attacker beyond 1:1 (default: 10)
+    MaxFlankingBonus      float64  // Cap on flanking bonus (default: 30)
+}
+```
+
+---
+
 ## Grappling System
 
 Close-quarters combat for holds, throws, and restraint. Go handles enforcement; JS customizes messages.
@@ -978,7 +1260,7 @@ Total grapple power = sum of `GrappleEffectiveness` for all body parts where:
 - Body part is not disabled (health > 0)
 - Body part is **not wielding a weapon** (no item in "weapon" slot for that body part)
 
-**Skill check:** Each challenge's Level is **multiplied by grapple power** before the Check. A humanoid (1.0 power) uses normal skill levels; an octopus (4.0 power) effectively has 4× the skill levels.
+**Skill check:** Each challenge's Level is **divided by grapple power** before the Check. A humanoid (1.0 power) uses normal challenge levels; an octopus (4.0 power) faces challenges at 1/4 the difficulty (making grappling much easier).
 
 **Examples (humanoid: 2 arms @ 0.4, 2 legs @ 0.1 = 1.0 total):**
 - Unarmed: 1.0 grapple power (full skill)
@@ -1011,12 +1293,12 @@ When grappling (`Grappling` is set):
 
 | Action | Effect | Skill Check |
 |--------|--------|-------------|
-| `grapple` | Initiate grapple | GrappleChallenges × power vs target |
-| `hold` | Maintain grapple, prevent escape | GrappleChallenges × power |
+| `grapple` | Initiate grapple | GrappleChallenges (levels ÷ power) vs target |
+| `hold` | Maintain grapple, prevent escape | GrappleChallenges (levels ÷ power) |
 | `choke` | Deal damage over time while holding | GrappleChallenges + damage |
-| `throw` | Release + knockdown + damage | GrappleChallenges × power |
-| `break` | Escape from being grappled | GrappleChallenges × power vs grappler |
-| `reverse` | Escape AND become the grappler | GrappleChallenges × power (harder) |
+| `throw` | Release + knockdown + damage | GrappleChallenges (levels ÷ power) |
+| `break` | Escape from being grappled | GrappleChallenges (levels ÷ power) vs grappler |
+| `reverse` | Escape AND become the grappler | GrappleChallenges (levels ÷ power), harder threshold |
 | `release` | Voluntarily release target | Automatic |
 
 ### CombatConfig Additions
@@ -1026,12 +1308,39 @@ type CombatConfig struct {
     // ... existing fields ...
 
     // Grappling
-    GrappleChallenges Challenges  // Skill challenges for grapple checks (levels × power)
+    GrappleChallenges Challenges  // Skill challenges for grapple checks (levels ÷ power)
     GrappleBreakBonus float64     // Bonus to break attempts (defender advantage)
 
     // Ambush
     AmbushAccuracyBonus float64  // Accuracy bonus when attacking from stealth
     AmbushAutoCrit      bool     // First attack from stealth auto-crits
+}
+```
+
+---
+
+## Weapon Switching in Combat
+
+Changing weapons mid-combat has tradeoffs similar to movement.
+
+### Core Rules
+
+**While switching weapons:**
+- Cannot attack (busy swapping)
+- Cannot parry or block (hands occupied)
+- Dodge works but with WeaponSwitchDodgePenalty
+- Switching time determined by EquipChallenges
+
+### CombatConfig for Weapon Switching
+
+```go
+type CombatConfig struct {
+    // ... existing fields ...
+
+    // Weapon switching
+    EquipChallenges           Challenges     // Skill for faster swaps
+    BaseEquipTime             time.Duration  // e.g., 2s
+    WeaponSwitchDodgePenalty  float64        // e.g., -20
 }
 ```
 
@@ -1174,6 +1483,7 @@ Key functions:
 **Stats:**
 - `getHealth()` / `setHealth(n)` / `getMaxHealth()` / `setMaxHealth(n)`
 - `getStamina()` / `setStamina(n)` / `getMaxStamina()` / `setMaxStamina(n)`
+- `getFocus()` / `setFocus(n)` / `getMaxFocus()` / `setMaxFocus(n)`
 
 **Equipment:**
 - `equip(objectID, slotName)` - equip item to a specific slot (validates slot compatibility)
@@ -1262,7 +1572,7 @@ Test scenarios:
 10. **Body part disabled (health = 0)**: Cannot attack or defend with that body part
 11. **All attacking body parts disabled**: Cannot attack unarmed; must equip weapon or flee
 12. **Unarmed block without natural armor**: Body part takes damage from blocking (dragon scales absorb, human arms get hurt)
-13. **Equipment swap mid-combat**: Allowed but takes time (delays next attack); JS can customize swap duration
+13. **Equipment swap mid-combat**: Allowed but takes time; can't attack/parry/block during swap, dodge with penalty
 14. **Dual-wield**: Both equipped weapons attack; each has its own speed roll and attack cycle
 15. **Out of ammo**: Can't fire; must reload
 16. **Weapon jammed**: Can't fire; must clear jam (skill-based time)
@@ -1319,3 +1629,17 @@ Test scenarios:
 38. **Attacks delay movement** - Can't sprint and fight simultaneously
 39. **Chase in JS** - NPCs implement chase behavior via event callbacks
 40. **SpeedFactor on status effects** - Movement delay divided by SpeedFactor; 0 = immobile
+41. **Sigmoid for unbounded inputs** - Attack speed, armor soak, stance modifiers use sigmoid to map unbounded challenge results to bounded ranges
+42. **Grapple power divides difficulty** - Challenge levels divided by grapple power (octopus with 4.0 power faces 1/4 difficulty)
+43. **Three timing patterns** - Intervals for persistent events (status ticks), goroutines for ephemeral timers (attacks), lazy timestamps for continuous values (regen, aim)
+44. **Lazy resource regeneration** - Health/Stamina/Focus computed on access using elapsed time and skill-based rate
+45. **Regen enable flags** - Objects can disable natural regeneration (robots don't heal)
+46. **JS override callbacks** - beforeAttack, beforeDamage, beforeDeath, beforeStatusApply can cancel/modify combat events
+47. **Parry causes status effect** - Successful parry can apply status to attacker with sigmoid-based probability
+48. **Per-damage-type armor penetration** - Ammo specifies penetration fraction per damage type
+49. **Ranged defense penalties** - Weapons have DodgePenalty, ParryPenalty, BlockPenalty (bows easier to defend than guns)
+50. **Thrown weapons are ammo** - IsThrown flag means weapon is consumed on throw, no separate ammo
+51. **Weapon switching penalties** - Can't attack/parry/block while switching; dodge with penalty
+52. **Flanking bonus** - Outnumbered defenders suffer accuracy/defense penalties based on attacker ratio
+53. **Focus resource** - Mental actions use Focus (spells, aimed shots); Stamina for physical (feint, disarm)
+54. **Aim rate skill-based** - AimChallenges modify aim bonus accumulation rate via sigmoid
