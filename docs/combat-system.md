@@ -2461,7 +2461,9 @@ This section analyzes how each phase integrates with the existing JuiceMUD codeb
 1. Define all config structs in new `structs/combat.go` file
 2. Add config maps to `ServerConfig` struct (private fields with methods)
 3. Update `serverConfigJSON` for serialization
-4. Add JS callbacks in `game/processing.go` following `getSkillConfig`/`updateSkillConfig` pattern
+4. Add JS callbacks in `game/processing.go` following `getSkillConfig`/`updateSkillConfig` pattern:
+   - `get*Config(name)` - read from in-memory ServerConfig
+   - `update*Config(name, old, new)` - CAS in-memory → persist to root object → revert on failure
 
 **Risk assessment: LOW**
 - Pure extension of existing pattern
@@ -2515,13 +2517,12 @@ structs/schema.go      - Auto-generated (go generate)
 5. `RemoveStatusEffect()` clears from slice, calls `clearInterval()` if ticking
 
 **How it fits with existing systems:**
-- Tick intervals: Use existing `setInterval()` mechanism (min 5s, max 10 per object)
+- Tick intervals: Use existing `setInterval()` mechanism (min will be 1s, max 10 per object)
 - Events: Use existing `emit()` for statusApplied/statusExpired/statusTick
 - Lazy cleanup: Similar pattern to how Descriptions.Detect filters by challenges
 - Storage: StatusEffects serialize with ObjectDO automatically
 
-**Risk assessment: MEDIUM**
-- Interval system has constraints (min 5s) that may limit tick granularity
+**Risk assessment: LOW-MEDIUM**
 - Must handle interval cleanup when object deleted
 - ReplacedBy chain needs careful implementation to avoid loops
 
@@ -2532,7 +2533,7 @@ structs/structs.go     - GetStatusEffects(), ApplyStatusEffect() methods on Obje
 game/processing.go     - JS callbacks, tick handler registration
 ```
 
-**Constraint:** Minimum tick interval is 5 seconds (existing system limit). Fast-ticking effects (poison every 1s) would need different approach or accepting 5s minimum.
+**Note:** Minimum tick interval will be 1 second (reduced from current 5s limit). For sub-second effects, use lazy timestamp computation instead.
 
 ---
 
@@ -2567,7 +2568,7 @@ game/equipment.go      - New file: equip/unequip logic
 game/processing.go     - JS callbacks
 ```
 
-**Edge case:** If equipped item is moved out of Content (via moveObject), must auto-unequip. Add check in moveObject or emit event that equipment system handles.
+**Edge case:** If equipped item is moved out of Content (via moveObject), must auto-unequip. The Go code in `moveObject` that triggers the `transmitted` event should also check if the moved object was in the source's Equipment map and remove it.
 
 ---
 
@@ -2621,7 +2622,7 @@ game/processing.go     - JS callbacks (getHealth, setHealth, etc.)
 - Goroutine lifecycle management is new pattern
 - Must handle: object deleted mid-combat, target moves, etc.
 - Defense chain is complex (parry → dodge → block → armor)
-- Need careful locking when modifying both attacker and defender
+- Goroutines must validate constraints when waking up (target still exists, still in combat, etc.)
 
 **Code locations:**
 ```
@@ -2630,10 +2631,25 @@ game/processing.go     - JS callbacks (startCombat, stopCombat, etc.)
 game/game.go           - Combat restart hook (check CombatTargets on object load?)
 ```
 
-**Restart behavior:** On server restart, objects with non-empty CombatTargets should auto-initiate combat cycles. Could be triggered by:
-- Boot.js iterating objects with CombatTargets
-- Object's own script checking CombatTargets on "created" event
-- New "combatResumed" event sent at startup
+**Restart behavior:** Combat resumes through visibility checks:
+1. **Movement triggers**: When an object moves to a room, it checks if any objects in CombatTargets are present → resumes combat
+2. **Movement events**: When receiving a movement event, check if the arriving object is in CombatTargets → resumes combat
+3. **Lazy first-event check**: On first event after server restart, check if object has non-empty CombatTargets and target is visible → resume combat
+
+Implementation for lazy first-event:
+```go
+type Game struct {
+    startupTime time.Time  // Set when server starts
+}
+
+// In event handler, before running JS:
+if obj.LastEventTime.Before(g.startupTime) && len(obj.CombatTargets) > 0 {
+    // First event since restart, has combat state - check for visible targets
+}
+obj.LastEventTime = time.Now()
+```
+
+This avoids iterating all objects at startup. Dormant objects that never receive events won't resume combat, but that's acceptable since nothing is happening to them anyway.
 
 **Locking strategy:** When resolving attack:
 ```go
@@ -2642,6 +2658,8 @@ structs.WithLock(func() error {
     return nil
 }, attacker, defender)
 ```
+
+Note: Callers must validate objects are non-nil before calling `WithLock`. If cover can be destroyed mid-attack, check before locking.
 
 ---
 
@@ -2928,7 +2946,7 @@ integration_test/      - Combat tests
 |-------|------|--------------|
 | 1 | Low | Pure pattern extension |
 | 2 | Low | Schema generation is routine |
-| 3 | Medium | Interval constraints (5s min), cleanup on object delete |
+| 3 | Low-Medium | Interval cleanup on object delete, ReplacedBy chain loops |
 | 4 | Low-Medium | Auto-unequip on item movement |
 | 5 | Low | Established lazy computation pattern |
 | 6 | Medium-High | Goroutine lifecycle, multi-object locking, restart behavior |

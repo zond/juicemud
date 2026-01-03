@@ -23,8 +23,8 @@ const (
 	jsExecutionTimeout = 200 * time.Millisecond
 
 	// Interval limits
-	minIntervalMS         = 5000 // Minimum interval: 5 seconds
-	maxIntervalsPerObject = 10   // Maximum intervals per object
+	minIntervalMS         = 1000 // Minimum interval: 1 second
+	maxIntervalsPerObject = 100  // Maximum intervals per object
 )
 
 type RWMutex interface {
