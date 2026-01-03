@@ -88,9 +88,10 @@ type ObjectDO struct {
     InCoverBehind string  // Object ID providing cover (empty = no cover)
 
     // Ranged weapon state (for weapon objects)
-    CurrentAmmo    int     // Rounds in magazine
-    LoadedAmmoType string  // Which AmmoConfig currently loaded
-    Jammed         bool    // Weapon is jammed
+    CurrentAmmo     int     // Rounds in magazine
+    LoadedAmmoType  string  // Which AmmoConfig currently loaded
+    Jammed          bool    // Weapon is jammed
+    CurrentFireMode string  // Active fire mode ID (empty = use first in FireModes list)
 
     // Aiming state (for combatants)
     AimingAt    string     // Target object ID being aimed at
@@ -249,6 +250,9 @@ type BodyPart struct {
     // Can this body part wield items? (hands, tentacles, prehensile tail)
     CanWield bool
 
+    // Grappling effectiveness (0 = can't grapple, 0.4 = human arm, 0.5 = octopus tentacle)
+    GrappleEffectiveness float64
+
     // Unarmed combat (if this body part can attack - e.g., arms can punch, legs can kick)
     // Empty UnarmedDamage = this body part cannot attack unarmed
     UnarmedDamage        map[string]float64  // e.g., {"physical": 5} for fist
@@ -391,6 +395,10 @@ type WeaponConfig struct {
     // Damage by type (e.g., {"physical": 10, "fire": 5} = 10 physical + 5 fire damage)
     DamageTypes  map[string]float64
 
+    // Armor penetration per damage type (0 = none, 0.5 = ignores half, 1.0 = ignores all)
+    // Picks, rapiers, armor-piercing weapons have high penetration
+    ArmorPenetration map[string]float64
+
     // Skill challenges (use existing Challenges type - results summed)
     // Each Challenge has {Skill, Level, Message}
     SpeedChallenges    Challenges  // e.g., [{Skill: "agility", Level: 10}, {Skill: "swordSpeed", Level: 5}]
@@ -498,6 +506,7 @@ type DamageTypeConfig struct {
 
 ```go
 type CombatConfig struct {
+    // Attack timing
     MinAttackInterval time.Duration  // e.g., 1s
     MaxAttackInterval time.Duration  // e.g., 10s
 
@@ -515,13 +524,45 @@ type CombatConfig struct {
     // Bleeding
     BleedingThresholds []BleedingThreshold  // Damage thresholds that trigger bleeding
 
+    // Resource regeneration (lazy computation)
+    HealthRegenChallenges   Challenges
+    HealthRegenPerSecond    float64  // Base rate before skill modifier
+    StaminaRegenChallenges  Challenges
+    StaminaRegenPerSecond   float64
+    FocusRegenChallenges    Challenges
+    FocusRegenPerSecond     float64
+    InCombatRegenMultiplier float64  // e.g., 0.25 (quarter regen during combat)
+
+    // Ranged combat
+    RangedDodgePenalty float64     // Penalty to dodge ranged attacks (e.g., -30)
+    AimChallenges      Challenges  // Skill affects aim rate
+    AimBonusPerSecond  float64     // Base aim bonus per second (e.g., +10)
+    MaxAimBonus        float64     // Cap on aim bonus (e.g., +50)
+
+    // Flanking
+    FlankingBonusPerRatio float64  // Bonus per attacker beyond 1:1 (default: 10)
+    MaxFlankingBonus      float64  // Cap on flanking bonus (default: 30)
+
+    // Grappling
+    GrappleChallenges Challenges  // Skill challenges for grapple checks (levels ÷ power)
+    GrappleBreakBonus float64     // Bonus to break attempts (defender advantage)
+
+    // Ambush
+    AmbushAccuracyBonus float64  // Accuracy bonus when attacking from stealth
+    AmbushAutoCrit      bool     // First attack from stealth auto-crits
+
+    // Weapon switching (EquipChallenges affects both time and dodge penalty)
+    EquipChallenges          Challenges     // Skill for faster swaps and reduced penalty
+    BaseEquipTime            time.Duration  // e.g., 2s (modified by EquipTimeMultRange)
+    WeaponSwitchDodgePenalty float64        // e.g., -20 (modified by EquipPenaltyMultRange)
+
     // Tuning constants (grouped by subsystem, with sane defaults)
 
     // Sigmoid tuning - affects how quickly skill results reach min/max effects
     SigmoidDivisor float64  // Default: 50; higher = gentler curve
 
     // Focus/Defend tuning (body part targeting)
-    TargetingWeightRange  [2]float64  // Default: [0.0, 2.0] - weight multiplier for focus/defend
+    TargetingWeightRange  [2]float64  // Default: [0.1, 2.0] - weight multiplier for focus/defend (min > 0 to avoid div-by-zero)
     TargetingPenaltyRange [2]float64  // Default: [0, 30] - accuracy/defense penalty range
 
     // Stance tuning
@@ -544,6 +585,10 @@ type CombatConfig struct {
 
     // Jam tuning
     JamHealthPenaltyMult float64  // Default: 50 - how much weapon damage affects jamming
+
+    // Weapon switching tuning
+    EquipTimeMultRange    [2]float64  // Default: [0.5, 1.5] - equip time multiplier (lower = faster)
+    EquipPenaltyMultRange [2]float64  // Default: [0.5, 1.5] - dodge penalty multiplier (lower = less penalty)
 
     // Grip factor (severed limb weapon effectiveness)
     GripExponent float64  // Default: 2.0 (quadratic penalty)
@@ -618,23 +663,7 @@ func getResourceWithRegen(current, max float64, lastRegenAt time.Time,
 }
 ```
 
-**CombatConfig for regeneration:**
-```go
-type CombatConfig struct {
-    // ... existing fields ...
-
-    // Resource regeneration (lazy computation)
-    HealthRegenChallenges  Challenges
-    HealthRegenPerSecond   float64  // Base rate before skill modifier
-    StaminaRegenChallenges Challenges
-    StaminaRegenPerSecond  float64
-    FocusRegenChallenges   Challenges
-    FocusRegenPerSecond    float64
-
-    // Combat modifiers
-    InCombatRegenMultiplier float64  // e.g., 0.25 (quarter regen during combat)
-}
-```
+**Regeneration fields:** See `CombatConfig` above for `HealthRegenChallenges`, `HealthRegenPerSecond`, `StaminaRegenChallenges`, `StaminaRegenPerSecond`, `FocusRegenChallenges`, `FocusRegenPerSecond`, `InCombatRegenMultiplier`.
 
 ### Attack Cycle
 
@@ -667,7 +696,7 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Blocking requires wielding something - no unarmed blocking
    - Skill recharge mechanics (see `docs/skill-system.md`) affect both sides - repeated defenses suffer cumulative fatigue, making later attacks in a barrage more likely to land
 
-   **Multi-attack timing:** Each attacking body part rolls its own speed challenges independently. Attacks run in parallel - they may land at nearly the same time or be staggered depending on speed rolls.
+   **Multi-attack timing:** Each attacking body part has its own independent attack timer, just like dual-wielding weapons. Each body part rolls its own speed challenges and maintains its own attack cycle. Attacks may land at different times depending on speed rolls - a fast punch might land before a slower kick from the same combatant.
 
 2. **Accuracy Check**:
    - Attacker rolls `AccuracyChallenges.Check()`
@@ -720,8 +749,9 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - For each remaining (unparried, unblocked) damage type:
      - If `ArmorChallenges[damageType]` exists, apply armor skill challenge
      - Use sigmoid to map unbounded result to skill multiplier:
-       - `skillMult = 0.5 + 0.5 * (1 / (1 + exp(-challengeResult/50)))`
-       - This maps: very negative → 0.5, zero → 0.75, very positive → 1.0
+       - `sigmoid = 1 / (1 + exp(-challengeResult/config.SigmoidDivisor))`
+       - `skillMult = config.ArmorSkillMultRange[0] + sigmoid * (config.ArmorSkillMultRange[1] - config.ArmorSkillMultRange[0])`
+       - Default [0.5, 1.0] maps: very negative → 0.5, zero → 0.75, very positive → 1.0
      - Calculate base reduction: `baseRed = baseReduction * skillMult * (armorHealth / armorMaxHealth)`
      - Apply armor penetration: `finalRed = baseRed * (1 - armorPenetration[damageType])`
      - Reduce damage by `finalRed` (capped at remaining damage)
@@ -1153,9 +1183,8 @@ type AmmoConfig struct {
     // e.g., {"piercing": 0.3} = AP rounds ignore 30% of armor vs piercing
     ArmorPenetration map[string]float64
 
-    // Wound effects
-    CanCauseBleeding bool
-    BleedingSeverity float64
+    // Note: Bleeding is controlled by DamageTypeConfig, not ammo
+    // Ammo specifies DamageTypes which inherit bleeding properties from their DamageTypeConfig
 
     // Special effects
     StatusEffectID     string   // e.g., "burning" for incendiary
@@ -1210,10 +1239,10 @@ func getAimBonus(shooter *Object, config *CombatConfig) float64 {
     }
     elapsed := time.Since(shooter.AimingSince).Seconds()
 
-    // Skill affects aim rate via sigmoid (0.5x to 1.5x)
+    // Skill affects aim rate via AimMultRange
     result := config.AimChallenges.Check(shooter, "")
-    sigmoid := 1.0 / (1.0 + math.Exp(-result/50.0))  // 0 to 1
-    mult := 0.5 + sigmoid  // Maps to 0.5-1.5
+    sigmoid := 1.0 / (1.0 + math.Exp(-result/config.SigmoidDivisor))
+    mult := config.AimMultRange[0] + sigmoid*(config.AimMultRange[1]-config.AimMultRange[0])
 
     bonus := elapsed * config.AimBonusPerSecond * mult
     return math.Min(bonus, config.MaxAimBonus)
@@ -1236,12 +1265,12 @@ MaxAimBonus       float64     // Cap on aim bonus (e.g., +50)
 Reload time is primarily mechanical (weapon design) with skill modifier:
 
 ```go
-func calculateReloadTime(weapon *RangedWeaponConfig, shooter *Object) time.Duration {
+func calculateReloadTime(weapon *RangedWeaponConfig, shooter *Object, config *CombatConfig) time.Duration {
     result := weapon.ReloadChallenges.Check(shooter, "")
-    // sigmoid maps result to 0.5-1.5 range (higher skill = faster = lower multiplier)
-    // result→-∞ → 1.5x (slow), result=0 → 1.0x, result→+∞ → 0.5x (fast)
-    sigmoid := 1.0 / (1.0 + math.Exp(-result/50.0))  // 0 to 1
-    mult := 1.5 - sigmoid  // Maps to 1.5-0.5
+    // sigmoid maps result to ReloadMultRange (higher skill = faster = lower multiplier)
+    sigmoid := 1.0 / (1.0 + math.Exp(-result/config.SigmoidDivisor))
+    // Invert: high sigmoid (good skill) = low mult (fast reload)
+    mult := config.ReloadMultRange[1] - sigmoid*(config.ReloadMultRange[1]-config.ReloadMultRange[0])
     return time.Duration(float64(weapon.ReloadTime) * mult)
 }
 ```
@@ -1259,12 +1288,12 @@ if jamResult < 0 {
 }
 
 // Unjam time: base time modified by skill (sigmoid: 0.5x to 1.5x)
-func calculateUnjamTime(weapon *RangedWeaponConfig, shooter *Object) time.Duration {
+func calculateUnjamTime(weapon *RangedWeaponConfig, shooter *Object, config *CombatConfig) time.Duration {
     result := weapon.UnjamChallenges.Check(shooter, "")
-    // sigmoid maps result to 0.5-1.5 range (higher skill = faster = lower multiplier)
-    // result→-∞ → 1.5x (slow), result=0 → 1.0x, result→+∞ → 0.5x (fast)
-    sigmoid := 1.0 / (1.0 + math.Exp(-result/50.0))  // 0 to 1
-    mult := 1.5 - sigmoid  // Maps to 1.5-0.5
+    // sigmoid maps result to ReloadMultRange (same tuning as reload)
+    sigmoid := 1.0 / (1.0 + math.Exp(-result/config.SigmoidDivisor))
+    // Invert: high sigmoid (good skill) = low mult (fast unjam)
+    mult := config.ReloadMultRange[1] - sigmoid*(config.ReloadMultRange[1]-config.ReloadMultRange[0])
     return time.Duration(float64(weapon.UnjamTime) * mult)
 }
 ```
@@ -1278,7 +1307,7 @@ func calculateUnjamTime(weapon *RangedWeaponConfig, shooter *Object) time.Durati
    - Add/Subtract: FireMode.AccuracyModifier
    - Add: Aim bonus
    - Subtract: Target's cover accuracy penalty
-   - Add: Body part HitModifier
+   - Subtract: Focus penalty (if focusing on body part, see Body Part Targeting)
 3. **Dodge** - Defender rolls with penalties:
    - RangedDodgePenalty (from CombatConfig, base penalty for all ranged)
    - weapon.DodgePenalty (bows: low, guns: high)
@@ -1294,19 +1323,7 @@ func calculateUnjamTime(weapon *RangedWeaponConfig, shooter *Object) time.Durati
 7. **Armor Soak** - Normal armor chain (ArmorPenetration reduces effectiveness per damage type)
 8. **Apply Damage** - Normal (body part, bleeding, severing)
 
-### CombatConfig Additions for Ranged
-
-```go
-type CombatConfig struct {
-    // ... existing fields ...
-
-    // Ranged combat
-    RangedDodgePenalty float64     // Penalty to dodge ranged attacks (e.g., -30)
-    AimChallenges      Challenges  // Skill affects aim rate (sigmoid: 0.5x to 1.5x)
-    AimBonusPerSecond  float64     // Base aim bonus per second (e.g., +10)
-    MaxAimBonus        float64     // Cap on aim bonus (e.g., +50)
-}
-```
+**Ranged fields:** See `CombatConfig` above for `RangedDodgePenalty`, `AimChallenges`, `AimBonusPerSecond`, `MaxAimBonus`.
 
 ### Example Weapons
 
@@ -1457,12 +1474,11 @@ For each defender, count how many attackers have them as a target vs how many al
 | 4+:1 | +30 accuracy | -30 dodge/parry/block | Surrounded |
 
 ```go
-func getFlankingBonus(ratio float64) float64 {
+func getFlankingBonus(ratio float64, config *CombatConfig) float64 {
     if ratio <= 1 {
         return 0
     }
-    // Cap at 4:1 ratio
-    return math.Min(30, (ratio-1) * 10)
+    return math.Min(config.MaxFlankingBonus, (ratio-1) * config.FlankingBonusPerRatio)
 }
 ```
 
@@ -1473,17 +1489,7 @@ When groups fight groups:
 - A 4v2 fight: each defender faces 2:1, each attacker faces 0.5:1
 - Tactical positioning matters: focus fire vs spreading damage
 
-### CombatConfig for Flanking
-
-```go
-type CombatConfig struct {
-    // ... existing fields ...
-
-    // Flanking
-    FlankingBonusPerRatio float64  // Bonus per attacker beyond 1:1 (default: 10)
-    MaxFlankingBonus      float64  // Cap on flanking bonus (default: 30)
-}
-```
+**Flanking fields:** See `CombatConfig` above for `FlankingBonusPerRatio`, `MaxFlankingBonus`.
 
 ---
 
@@ -1491,24 +1497,16 @@ type CombatConfig struct {
 
 Close-quarters combat for holds, throws, and restraint. Go handles enforcement; JS customizes messages.
 
-### BodyPart Additions
-
-```go
-type BodyPart struct {
-    // ... existing fields ...
-
-    GrappleEffectiveness float64 // Contribution to grapple power (0 = can't grapple)
-}
-```
+### Grapple Power Calculation
 
 **Typical totals:** Humanoid = 1.0 (arms 0.4 each, legs 0.1 each), Giant octopus = 4.0 (8 tentacles at 0.5 each)
-
-### Grapple Power Calculation
 
 Total grapple power = sum of `GrappleEffectiveness` for all body parts where:
 - `GrappleEffectiveness > 0`
 - Body part is not disabled (health > 0)
 - Body part is **not wielding anything** (not present in `Wielding` map)
+
+**Broken weapons:** A wielded item still occupies the body part even if broken (health = 0). Broken weapons reduce grapple power just like functional ones - you're still holding something.
 
 **Zero grapple power:** If total grapple power is 0 (no free grappling limbs, or body has no limbs with GrappleEffectiveness), grappling is impossible. The `grapple` action fails automatically.
 
@@ -1553,21 +1551,7 @@ When grappling (`Grappling` is set):
 | `reverse` | Escape AND become the grappler | GrappleChallenges (levels ÷ power), harder threshold |
 | `release` | Voluntarily release target | Automatic |
 
-### CombatConfig Additions
-
-```go
-type CombatConfig struct {
-    // ... existing fields ...
-
-    // Grappling
-    GrappleChallenges Challenges  // Skill challenges for grapple checks (levels ÷ power)
-    GrappleBreakBonus float64     // Bonus to break attempts (defender advantage)
-
-    // Ambush
-    AmbushAccuracyBonus float64  // Accuracy bonus when attacking from stealth
-    AmbushAutoCrit      bool     // First attack from stealth auto-crits
-}
-```
+**Grappling and ambush fields:** See `CombatConfig` above for `GrappleChallenges`, `GrappleBreakBonus`, `AmbushAccuracyBonus`, `AmbushAutoCrit`.
 
 ---
 
@@ -1583,18 +1567,7 @@ Changing weapons mid-combat has tradeoffs similar to movement.
 - Dodge works but with WeaponSwitchDodgePenalty
 - Switching time determined by EquipChallenges
 
-### CombatConfig for Weapon Switching
-
-```go
-type CombatConfig struct {
-    // ... existing fields ...
-
-    // Weapon switching
-    EquipChallenges           Challenges     // Skill for faster swaps
-    BaseEquipTime             time.Duration  // e.g., 2s
-    WeaponSwitchDodgePenalty  float64        // e.g., -20
-}
-```
+**Weapon switching fields:** See `CombatConfig` above for `EquipChallenges`, `BaseEquipTime`, `WeaponSwitchDodgePenalty`, `EquipTimeMultRange`, `EquipPenaltyMultRange`.
 
 ---
 
@@ -1677,7 +1650,7 @@ GuardingExit string  // Exit direction being guarded (empty = not guarding)
 
 | File | Changes |
 |------|---------|
-| `structs/schema.go` | Add to ObjectDO: Health, MaxHealth, Stamina, MaxStamina, Equipment (map), BodyPartHealth (map), BodyConfigID, StanceConfigID, CombatTargets, StatusEffects |
+| `structs/schema.go` | Add to ObjectDO: Health, MaxHealth, Stamina, MaxStamina, Wielding (map), Wearing (map), BodyPartHealth (map), BodyConfigID, StanceConfigID, CombatTargets, StatusEffects |
 | `structs/combat.go` | New file: All config types and their stores |
 | `structs/status.go` | New file: StatusEffect, StatusEffectConfig, lazy cleanup logic |
 | `game/game.go` | Expand ServerConfig, load all configs at startup |
@@ -1731,6 +1704,12 @@ Key functions:
 - `startCombat(targetID)` / `stopCombat(targetID)` / `stopAllCombat()`
 - `setCurrentTarget(targetID)` / `getCurrentTarget()`
 - `setFocusBodyPart(partName)` / `getFocusBodyPart()` / `clearFocusBodyPart()`
+- `setDefendBodyPart(partName)` / `getDefendBodyPart()` / `clearDefendBodyPart()`
+
+**Ranged:**
+- `setFireMode(modeID)` / `getFireMode()` - set/get current fire mode for wielded ranged weapon
+- `reload()` / `unjam()` - reload or clear jam on wielded ranged weapon
+- `startAiming(targetID)` / `stopAiming()` / `getAimBonus()` - aiming control
 
 **Stats:**
 - `getHealth()` / `setHealth(n)` / `getMaxHealth()` / `setMaxHealth(n)`
