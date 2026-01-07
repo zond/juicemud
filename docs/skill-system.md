@@ -31,7 +31,7 @@ Computes effective level for a set of skills. **Must be called immediately befor
 
 1. **Forget**: Apply forgetting formula (same sigmoid as current code), but **persist the lowered value to Practical**. This ensures decay is remembered until next use.
 
-2. **Recharge**: Compute rechargeCoeff (same sigmoid + cumulative reuse as current code), then **fold into effective**: `effective = forgottenPractical + 10 * log10(rechargeCoeff)`
+2. **Recharge**: Compute rechargeCoeff (same sigmoid + cumulative reuse as current code), then **fold into effective**: `effective = forgottenEffective + 10 * log10(rechargeCoeff)`
 
 3. **Mean**: Compute arithmetic mean of all effective values: `mean = avg(eff_i)`. This is equivalent to geometric mean in linear power-space, ensuring skills 10+30 ≡ skills 20+20.
 
@@ -70,6 +70,8 @@ blockEff  := defender.EffectiveSkills(map[string]bool{"block": true})
 soakEff   := defender.EffectiveSkills(map[string]bool{"soak": true})
 
 // Roll all results
+// Note: opposingEffective is for learning (challengeCoeff), not roll generation
+// Attack skill learns vs best defense; each defense skill learns vs attack
 bestDefense := max(parryEff, dodgeEff, blockEff, soakEff)
 attackRoll := attacker.Roll(attackSkills, attackEff, bestDefense)
 parryRoll  := defender.Roll(parrySkills, parryEff, attackEff)
@@ -132,8 +134,8 @@ A challenge is a skill check against a fixed difficulty level (not another chara
 ** CHANGES **
 - OLD: Effective only includes forget factor, Practical unchanged
 - NEW: Forgetting **persists to Practical** (decay remembered until next use)
-- NEW: Recharge folded into effective: `effective = forgottenPractical + 10 * log10(rechargeCoeff)`
-- NEW: Recovery via EMA in Roll(), not instant restore
+- NEW: Recharge folded into effective: `effective = forgottenEffective + 10 * log10(rechargeCoeff)`
+- NEW: Recovery via learning (theoryCoeff), not instant restore
 ** END CHANGES **
 
 The effective skill level accounts for both forgetting AND fatigue:
@@ -171,12 +173,9 @@ forgottenEffective = forgettableSkill * forgetCoeff + permanentSkill
 If no `Forget` is configured, `forgottenEffective = skill.Practical`.
 
 ** CHANGES **
-**Fix: Forgetting must persist properly**
 - OLD: Decay computed from LastUsedAt, which resets after each use - decay doesn't truly persist
-- NEW: Decay persists to Practical and stays until recovered via learning (theoryCoeff)
-
-**Recharge folded into Effective:**
-`effective = forgottenPractical + 10 * log10(rechargeCoeff)`
+- NEW: Decay persists to Practical (in `EffectiveSkills()`) and stays until recovered via learning (theoryCoeff)
+- NEW: Recharge folded into effective: `effective = forgottenEffective + 10 * log10(rechargeCoeff)`
 ** END CHANGES **
 
 ### Step 2: Compute Recharge Coefficient
@@ -235,13 +234,15 @@ If no `Recharge` is configured, `rechargeCoeff = 1.0`.
 ** CHANGES **
 **Folding into effective:**
 ```
-rechargeCoeff = max(rechargeCoeff, 1e-9)  // Floor to prevent -Inf
+const MinValue = 1e-9  // Floor to prevent -Inf and division by zero
+
+rechargeCoeff = max(rechargeCoeff, MinValue)
 effectiveSkill = forgottenEffective + 10 * log10(rechargeCoeff)
 ```
 - rechargeCoeff = 1.0: no penalty
 - rechargeCoeff = 0.5: effective skill reduced by ~3
 - rechargeCoeff = 0.1: effective skill reduced by 10
-- rechargeCoeff = 1e-9 (floor): effective skill reduced by 90
+- rechargeCoeff = MinValue: effective skill reduced by 90
 ** END CHANGES **
 
 ### Step 3: Roll Generation (NEW)
@@ -255,19 +256,21 @@ effectiveSkill = forgottenEffective + 10 * log10(rechargeCoeff)
 
 For static challenges (fixed difficulty):
 ```
-yourRoll = max(1e-9, Uniform(0, 10^(effectiveMean / 10)))
-challengeRoll = max(1e-9, Uniform(0, 10^(challenge.Level / 10)))
+yourRoll = max(MinValue, Uniform(0, 10^(effectiveMean / 10)))
+challengeRoll = max(MinValue, Uniform(0, 10^(challenge.Level / 10)))
 score = 10 * log10(yourRoll / challengeRoll)
 ```
 
 For skill vs skill (combat, opposed checks):
 ```
-yourRoll = max(1e-9, Uniform(0, 10^(yourEffective / 10)))
-theirRoll = max(1e-9, Uniform(0, 10^(theirEffective / 10)))
+yourRoll = max(MinValue, Uniform(0, 10^(yourEffective / 10)))
+theirRoll = max(MinValue, Uniform(0, 10^(theirEffective / 10)))
 score = 10 * log10(yourRoll / theirRoll)
 ```
 
-**Note**: Floor values of `1e-9` prevent division by zero and `-Inf` results.
+**Note**: `MinValue` (1e-9) floors prevent division by zero and `-Inf` results.
+
+**Implementation**: The `Uniform(0, max)` distribution is generated using the deterministic RNG from Step 4: `roll = rng.Float64() * max`, then floored to `MinValue`.
 
 **Score interpretation** (same scale as skill levels):
 - **+10 = you rolled 10× better** (dominated)
@@ -322,7 +325,7 @@ score = 10 * log10(yourRoll / theirRoll)
 
 **Score examples** (you effective 30 vs them effective 20):
 - Your max: 10^3 = 1000, Their max: 10^2 = 100
-- You roll higher on average, winning ~90% of the time
+- You roll higher on average, winning ~95% of the time
 - Typical winning score: +5 to +15
 
 ### Step 6: Update Skill State
@@ -353,8 +356,8 @@ A challenge can require multiple skills. The effective level is the **arithmetic
 func (c *Challenge) Check(challenger *Object, targetID string) float64 {
     effectiveMean := challenger.EffectiveSkills(c.Skills)
 
-    yourRoll := Uniform(0, 10^(effectiveMean / 10))
-    challengeRoll := Uniform(0, 10^(c.Level / 10))
+    yourRoll := max(MinValue, Uniform(0, 10^(effectiveMean / 10)))
+    challengeRoll := max(MinValue, Uniform(0, 10^(c.Level / 10)))
 
     return 10 * log10(yourRoll / challengeRoll)
 }
@@ -401,6 +404,8 @@ finalStep = (now.UnixNano() + offset) / skillConfig.Duration / 3
 - Logical consistency: A hidden character stays hidden (or detected) for a reasonable duration
 - No "look" spam exploits: Typing "look" repeatedly doesn't re-roll detection checks
 - Immersion: The world behaves consistently rather than flickering between states
+
+**Default**: If no `Duration` is configured, it defaults to 0, meaning each check generates a fresh random seed (no deterministic window).
 
 ## Skill Improvement
 
@@ -508,6 +513,18 @@ type SkillConfig struct {
     Forget   SkillDuration  // Time to decay to 50% of theoretical
 }
 ```
+
+## Edge Cases
+
+**Empty skills map**: If `Challenge.Skills` is empty, the effective level is 0 (mean of empty set). This produces rolls in `Uniform(0, 1)`.
+
+**Never-used skill** (`LastUsedAt = 0`): Only occurs for brand-new skills where `Practical = 0` and `Theoretical = 0`. Since there's nothing to forget, `forgottenEffective = 0`. The skill starts fresh.
+
+**`Theoretical < Practical`**: Can only happen immediately after `Practical` is bumped by learning. The next line `if skill.Practical > skill.Theoretical { skill.Theoretical = skill.Practical }` corrects this. During this brief moment, `theoryCoeff = max(1, 1 + 3*(negative)) = 1`, so no special handling needed.
+
+**Skill level 0**: Produces rolls in `Uniform(0, 10^0) = Uniform(0, 1)`. Still functional, just very weak.
+
+**Negative effective** (due to extreme recharge penalty): Possible if `rechargeCoeff` is very low. For example, `forgottenEffective = 10` and `rechargeCoeff = 0.001` gives `effective = 10 + 10*log10(0.001) = 10 - 30 = -20`. This produces rolls in `Uniform(0, 10^(-2)) = Uniform(0, 0.01)`. Very weak but still functional due to `MinValue` floor.
 
 ## Design Rationale
 
