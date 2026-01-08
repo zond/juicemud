@@ -12,7 +12,7 @@ A flexible, wizard-configurable combat system that:
 
 ## Design Principles
 
-1. **Leverage existing systems**: Use SkillConfig pattern, Challenge.Check(), and skill recharge mechanics (see `docs/skill-system.md` for detailed formulas)
+1. **Leverage existing systems**: Use SkillConfig pattern, EffectiveSkills(), Roll(), and skill recharge mechanics (see `docs/skill-system.md` for detailed formulas)
 2. **Go-heavy logic**: Combat calculations in Go, JS only for events/customization
 3. **Wizard-configurable**: All weapons, armor, damage types defined via configs
 4. **Equipment degradation**: Both armor and weapons have health that affects efficacy
@@ -144,9 +144,10 @@ type BodyPartState struct {
 ```
 
 **Severing mechanics:**
-- A body part can be severed when damage would reduce health significantly below 0 (overkill)
-- Only certain damage types can sever: `slashing`, `piercing` (not `bludgeoning`, `fire`, etc.)
-- Threshold: If `finalDamage > bodyPart.MaxHealth * SeverThreshold` and health was already low
+- Severing is handled via `ApplyStatusEffects` on weapons with severing capability
+- When the weapon's ApplyStatusEffect roll succeeds and conditions are met, the "severed" status effect is applied
+- JS handlers on the status effect check damage/overkill and mark body part as severed
+- Only weapons configured with a severing ApplyStatusEffect can sever
 - When severed:
   - Emit `bodyPartSevered` event (different from `bodyPartDisabled`)
   - If `Vital: true`, instant death
@@ -228,10 +229,10 @@ type BodyConfig struct {
     DefaultPart string  // Which part is targeted by default ("torso")
 
     // Multi-wielding penalty (wielding separate items in multiple body parts)
-    // When dual-wielding, all combat challenge levels increase by: max(0, -ambidextrousResult)
-    // High skill = no penalty; low/negative skill = increased difficulty
-    // Empty = no penalty (naturally ambidextrous, like octopi)
-    AmbidextrousChallenges Challenges
+    // Skill result mapped via sigmoid to AmbidextrousPenaltyRange in CombatConfig
+    // Low skill = accuracy penalty on off-hand attacks; high skill = no penalty
+    // Empty = naturally ambidextrous (no penalty), like octopi
+    AmbidextrousSkills map[string]bool  // e.g., {"ambidexterity": true}
 
     // Cover properties (used when taking cover behind creatures with this body type)
     CoverAbsorption      float64  // 0-1, damage absorbed
@@ -259,17 +260,20 @@ type BodyPart struct {
 
     // Unarmed combat (if this body part can attack - e.g., arms can punch, legs can kick)
     // Empty UnarmedDamage = this body part cannot attack unarmed
-    UnarmedDamage        map[string]float64  // e.g., {"physical": 5} for fist
-    UnarmedSpeed         Challenges
-    UnarmedAccuracy      Challenges
-    UnarmedDamageBonus   Challenges
-    UnarmedFocus         Challenges  // For targeting specific body parts when unarmed
-    UnarmedDefend        Challenges  // For protecting specific body parts when unarmed
-    UnarmedDescription   string      // e.g., "fist", "claw", "bite"
+    UnarmedDamage           map[string]float64  // e.g., {"physical": 5} for fist
+    UnarmedSpeedSkills      map[string]bool     // Skills affecting attack speed
+    UnarmedAccuracySkills   map[string]bool     // Skills affecting hit chance
+    UnarmedDamageBonusSkills map[string]bool    // Skills affecting damage bonus
+    UnarmedFocusSkills      map[string]bool     // For targeting specific body parts when unarmed
+    UnarmedDefendSkills     map[string]bool     // For protecting specific body parts when unarmed
+    UnarmedDescription      string              // e.g., "fist", "claw", "bite"
+
+    // Status effects applied when this body part deals unarmed damage (venom, fire, etc.)
+    ApplyStatusEffects []ApplyStatusEffect
 
     // Unarmed parrying (deflecting attacks without a weapon)
     // Empty map = cannot parry unarmed; non-empty = can attempt to deflect that damage type
-    UnarmedParryChallenges map[string]Challenges  // damage type -> challenges
+    UnarmedParrySkills map[string]map[string]bool  // damage type -> skills for parry
     // Note: No unarmed blocking - blocking requires wielding something
 }
 ```
@@ -278,7 +282,7 @@ type BodyPart struct {
 ```go
 BodyConfig{
     ID: "humanoid",
-    AmbidextrousChallenges: Challenges{{Skill: "ambidexterity", Level: 15}},  // Dual-wielding is hard
+    AmbidextrousSkills: map[string]bool{"ambidexterity": true},  // Dual-wielding requires this skill
     Parts: []BodyPart{
         {ID: "head", MaxHealth: 50, Vital: true, HitWeight: 10, DamageMultiplier: 1.5, CritBonus: 0.1},
         {ID: "torso", MaxHealth: 100, Vital: true, HitWeight: 40, DamageMultiplier: 1.0},
@@ -302,14 +306,17 @@ BodyConfig{
 ```go
 BodyConfig{
     ID: "dragon",
-    AmbidextrousChallenges: Challenges{{Skill: "dragonCoordination", Level: 5}},  // Dragons are fairly coordinated
+    AmbidextrousSkills: map[string]bool{"dragonCoordination": true},  // Dragons are fairly coordinated
     Parts: []BodyPart{
         {ID: "head", MaxHealth: 150, Vital: true, HitWeight: 10, DamageMultiplier: 2.0, CritBonus: 0.15,
-         UnarmedDamage: map[string]float64{"physical": 30, "fire": 15}, UnarmedDescription: "bite"},
+         UnarmedDamage: map[string]float64{"physical": 30, "fire": 15}, UnarmedDescription: "bite",
+         ApplyStatusEffects: []ApplyStatusEffect{
+             {StatusEffectID: "burning", Skills: map[string]bool{"fireBreath": true}, Level: 20},
+         }},
         {ID: "body", MaxHealth: 300, Vital: true, HitWeight: 50, DamageMultiplier: 1.0},
         {ID: "leftForeclaw", MaxHealth: 100, HitWeight: 10, DamageMultiplier: 1.2, CanWield: true,
          UnarmedDamage: map[string]float64{"physical": 20}, UnarmedDescription: "left claw",
-         UnarmedParryChallenges: map[string]Challenges{"physical": {{Skill: "clawFighting", Level: 10}}}},
+         UnarmedParrySkills: map[string]map[string]bool{"physical": {"clawFighting": true}}},
         // ... more parts: rightForeclaw (10), wings (10), tail (10) ...
     },
     DefaultPart: "body",
@@ -317,11 +324,27 @@ BodyConfig{
 // Dragon's natural armor (scales) is an ArmorConfig pre-equipped on all body parts
 ```
 
+**Example venomous snake:**
+```go
+BodyConfig{
+    ID: "venomous_snake",
+    Parts: []BodyPart{
+        {ID: "head", MaxHealth: 20, Vital: true, HitWeight: 20, DamageMultiplier: 1.5,
+         UnarmedDamage: map[string]float64{"piercing": 5}, UnarmedDescription: "fangs",
+         ApplyStatusEffects: []ApplyStatusEffect{
+             {StatusEffectID: "deadly_venom", Skills: map[string]bool{"venomStrike": true}, Level: 15},
+         }},
+        {ID: "body", MaxHealth: 30, Vital: true, HitWeight: 80, DamageMultiplier: 1.0},
+    },
+    DefaultPart: "body",
+}
+```
+
 **Example octopus body config (naturally ambidextrous):**
 ```go
 BodyConfig{
     ID: "octopus",
-    // No AmbidextrousChallenges = naturally ambidextrous, no dual-wield penalty
+    // No AmbidextrousSkills = naturally ambidextrous, no dual-wield penalty
     Parts: []BodyPart{
         {ID: "head", MaxHealth: 30, Vital: true, HitWeight: 10, DamageMultiplier: 1.5},
         {ID: "body", MaxHealth: 50, Vital: true, HitWeight: 30, DamageMultiplier: 1.0},
@@ -345,20 +368,20 @@ type StanceConfig struct {
     Description string
 
     // Modifiers to combat (base values before skill adjustment)
-    AccuracyModifier float64  // Added to accuracy challenges
+    AccuracyModifier float64  // Added to accuracy rolls
     DamageModifier   float64  // Damage multiplier
-    DodgeModifier    float64  // Added to dodge challenges
+    DodgeModifier    float64  // Added to dodge rolls
     ParryModifier    float64
     BlockModifier    float64
 
-    // Skill challenges for this stance
+    // Skills for this stance
     // Results improve positive modifiers and reduce negative modifiers
     // e.g., aggressive stance has +accuracy but -dodge; higher skill = more accuracy, less dodge penalty
-    StanceChallenges Challenges  // e.g., [{Skill: "aggressiveStance", Level: 5}]
+    StanceSkills map[string]bool  // e.g., {"aggressiveStance": true}
 }
 ```
 
-**Stance skill effect:** When applying stance modifiers, the `StanceChallenges.Check()` result scales them using sigmoid for bounded output:
+**Stance skill effect:** When applying stance modifiers, the stance skill roll scales them using sigmoid for bounded output:
 
 ```go
 func applyStanceModifier(baseMod float64, stanceResult float64) float64 {
@@ -382,9 +405,71 @@ This ensures:
 - Bonuses scale from 0x to 2x based on skill
 - Penalties scale from 2x to 0x based on skill (never become bonuses)
 
+### ApplyStatusEffect
+
+Defines a status effect that can be applied when damage is dealt (by weapons/ammo/unarmed) or received (by armor).
+
+```go
+type ApplyStatusEffect struct {
+    StatusEffectID string          // StatusEffectConfig ID to apply
+    Skills         map[string]bool // Skills used in the application check
+    Level          float32         // Difficulty - if roll vs Level > 0, effect applies
+}
+```
+
+**For weapons/ammo/unarmed:** When damage is dealt, the attacker rolls using their `Skills` against `Level`. On success, the effect is applied to the target.
+
+**For armor:** When the armor absorbs any damage, the defender (armor wearer) rolls using their `Skills` against `Level`. On success, the effect is applied to the attacker.
+
+**Event payload for `statusApplied`:**
+```go
+{
+    StatusEffectID string   // Which effect was applied
+    Source         *Object  // Who/what applied it (attacker, weapon, armor object)
+    Target         *Object  // Who received the effect
+    BodyPart       string   // Which body part was hit (if applicable)
+    Damage         float64  // How much damage triggered this
+    DamageTypes    map[string]float64  // Breakdown by damage type
+    Overkill       float64  // Damage beyond body part max health
+}
+```
+
+The event payload provides enough information for JS handlers to implement effects like:
+- **Bleeding:** Scale intensity based on Damage and damage types
+- **Severing:** Check Overkill vs a threshold to sever the body part
+- **Poison:** Apply DOT based on the specific StatusEffectConfig
+
+**Examples:**
+```go
+// Slashing sword that causes bleeding and can sever
+WeaponConfig{
+    DamageTypes: map[string]float64{"slashing": 15},
+    ApplyStatusEffects: []ApplyStatusEffect{
+        {StatusEffectID: "bleeding_wound", Skills: map[string]bool{"slashing": true}, Level: 10},
+        {StatusEffectID: "severing_strike", Skills: map[string]bool{"slashing": true}, Level: 30},
+    },
+}
+
+// Poisoned dagger
+WeaponConfig{
+    DamageTypes: map[string]float64{"piercing": 8},
+    ApplyStatusEffects: []ApplyStatusEffect{
+        {StatusEffectID: "weak_poison", Skills: map[string]bool{"poisoning": true}, Level: 15},
+    },
+}
+
+// Cursed armor that drains attacker's stamina
+ArmorConfig{
+    BaseReduction: map[string]float64{"physical": 0.3},
+    ApplyStatusEffects: []ApplyStatusEffect{
+        {StatusEffectID: "stamina_drain", Skills: map[string]bool{"darkMagic": true}, Level: 25},
+    },
+}
+```
+
 ### WeaponConfig
 
-Uses existing `Challenges` type (`[]Challenge`) for skill checks. Each Challenge has a Skill name and Level (difficulty). Results are **summed** - same as exits/descriptions.
+Skills are specified as `map[string]bool` - the attacker's effective level across those skills determines the outcome.
 
 ```go
 type WeaponConfig struct {
@@ -402,23 +487,26 @@ type WeaponConfig struct {
     // Picks, rapiers, armor-piercing weapons have high penetration
     ArmorPenetration map[string]float64
 
-    // Skill challenges (use existing Challenges type - results summed)
-    // Each Challenge has {Skill, Level, Message}
-    SpeedChallenges    Challenges  // e.g., [{Skill: "agility", Level: 10}, {Skill: "swordSpeed", Level: 5}]
-    AccuracyChallenges Challenges  // For hit chance
-    DamageChallenges   Challenges  // For damage bonus
-    FocusChallenges    Challenges  // For targeting specific body parts (rapier: easy, club: hard)
-    DefendChallenges   Challenges  // For protecting specific body parts (shield: easy, dagger: hard)
+    // Skills affecting combat (each maps skill names to true)
+    SpeedSkills       map[string]bool  // e.g., {"agility": true, "swordSpeed": true}
+    AccuracySkills    map[string]bool  // For hit chance
+    DamageBonusSkills map[string]bool  // For damage bonus
+    FocusSkills       map[string]bool  // For targeting specific body parts (rapier: easy, club: hard)
+    DefendSkills      map[string]bool  // For protecting specific body parts (shield: easy, dagger: hard)
 
     // Defense capabilities (per damage type - e.g., shield blocks physical well, not fire)
     // Empty map = cannot parry/block; presence of damage type key = can defend against that type
-    ParryChallenges   map[string]Challenges   // damage type -> skill challenges for parry (redirect, no damage)
-    BlockChallenges   map[string]Challenges   // damage type -> skill challenges for block (absorb, weapon takes damage)
+    ParrySkills map[string]map[string]bool  // damage type -> skills for parry (redirect, no damage)
+    BlockSkills map[string]map[string]bool  // damage type -> skills for block (absorb, weapon takes damage)
 
     // Parry can apply status effect to attacker (staggered, off-balance, disarmed, etc.)
     // Chance scales with parry success via sigmoid: baseChance * sigmoid(parryMargin)
     ParryStatusEffectID       string         // StatusEffectConfig to apply on successful parry (empty = none)
     ParryStatusEffectDuration time.Duration  // How long the effect lasts
+
+    // Status effects applied when this weapon deals damage (poison, burning, etc.)
+    // Each effect has a skill check - if attacker passes, effect is applied to target
+    ApplyStatusEffects []ApplyStatusEffect
 
     // Durability (0 = indestructible; blocking damage is 1:1)
     MaxHealth float64  // Maximum weapon health
@@ -457,12 +545,16 @@ type ArmorConfig struct {
     // e.g., {"physical": 0.5, "fire": 0.1} = 50% physical reduction, 10% fire reduction
     BaseReduction map[string]float64
 
-    // Skill challenges per damage type (affects armor effectiveness)
-    // e.g., {"physical": [{Skill: "heavyArmor", Level: 10}]}
-    ArmorChallenges map[string]Challenges
+    // Skills per damage type (affects armor effectiveness)
+    // e.g., {"physical": {"heavyArmor": true}}
+    ArmorSkills map[string]map[string]bool
 
     // Status effects while worn (movement penalty, heat, encumbrance)
     StatusEffects map[string]bool  // StatusEffectConfig IDs applied while wearing
+
+    // Status effects applied when this armor absorbs damage (retaliation, curses, etc.)
+    // Each effect has a skill check - if attacker fails to resist, effect is applied to them
+    ApplyStatusEffects []ApplyStatusEffect
 
     // Durability (0 = indestructible; absorbed damage is 1:1)
     MaxHealth float64  // Maximum armor health
@@ -497,13 +589,14 @@ func canWearOver(existingLayers []*ArmorConfig, newArmor *ArmorConfig) bool {
 type DamageTypeConfig struct {
     ID          string  // "slashing", "piercing", "bludgeoning", "fire", etc.
     Description string
-
-    // Wound effects
-    CanSever       bool  // Can this damage type sever body parts? (slashing, piercing = yes; bludgeoning, fire = no)
-    CanCauseBleeding bool  // Does this damage type cause bleeding wounds? (slashing, piercing = yes)
-    BleedingSeverity float64  // Multiplier for bleeding intensity (0 = none, 1 = normal, 2 = severe)
+    // Note: Bleeding and severing are now handled via ApplyStatusEffects on weapons/ammo
 }
 ```
+
+**Wound effects via ApplyStatusEffects:** Instead of special-casing bleeding/severing in damage types, these are now handled through the `ApplyStatusEffects` system on weapons. This allows more flexibility:
+- A magical sword might cause bleeding even with fire damage
+- A blunt weapon might cause "crushing" wounds instead of bleeding
+- Severing can be a status effect that the JS handler interprets to actually sever the body part
 
 ### CombatConfig
 
@@ -513,51 +606,47 @@ type CombatConfig struct {
     MinAttackInterval time.Duration  // e.g., 1s
     MaxAttackInterval time.Duration  // e.g., 10s
 
-    // Base challenges for dodge step of defense
-    DodgeChallenges Challenges  // e.g., [{Skill: "agility", Level: 5}]
+    // Base skills for dodge step of defense
+    DodgeSkills map[string]bool  // e.g., {"agility": true}
 
     // Critical hits
     BaseCritChance       float64  // e.g., 0.05 (5%)
     CritDamageMultiplier float64  // e.g., 2.0
 
-    // Severing
-    SeverThreshold float64  // Overkill multiplier to sever (e.g., 1.5 = 150% of max body part health as overkill)
-    SeverCritBonus float64  // Bonus to sever chance on critical hits (e.g., 0.5 = +50% threshold reduction)
-
-    // Bleeding
-    BleedingThresholds []BleedingThreshold  // Damage thresholds that trigger bleeding
+    // Note: Severing and bleeding are now handled via ApplyStatusEffects on weapons
+    // The JS handler receives event data including Overkill for sever decisions
 
     // Resource regeneration (lazy computation)
-    HealthRegenChallenges   Challenges
+    HealthRegenSkills       map[string]bool
     HealthRegenPerSecond    float64  // Base rate before skill modifier
-    StaminaRegenChallenges  Challenges
+    StaminaRegenSkills      map[string]bool
     StaminaRegenPerSecond   float64
-    FocusRegenChallenges    Challenges
+    FocusRegenSkills        map[string]bool
     FocusRegenPerSecond     float64
     InCombatRegenMultiplier float64  // e.g., 0.25 (quarter regen during combat)
 
     // Ranged combat
-    RangedDodgePenalty float64     // Penalty to dodge ranged attacks (e.g., -30)
-    AimChallenges      Challenges  // Skill affects aim rate
-    AimBonusPerSecond  float64     // Base aim bonus per second (e.g., +10)
-    MaxAimBonus        float64     // Cap on aim bonus (e.g., +50)
+    RangedDodgePenalty float64          // Penalty to dodge ranged attacks (e.g., -30)
+    AimSkills          map[string]bool  // Skill affects aim rate
+    AimBonusPerSecond  float64          // Base aim bonus per second (e.g., +10)
+    MaxAimBonus        float64          // Cap on aim bonus (e.g., +50)
 
     // Flanking
     FlankingBonusPerRatio float64  // Bonus per attacker beyond 1:1 (default: 10)
     MaxFlankingBonus      float64  // Cap on flanking bonus (default: 30)
 
     // Grappling
-    GrappleChallenges Challenges  // Skill challenges for grapple checks (levels ÷ power)
-    GrappleBreakBonus float64     // Bonus to break attempts (defender advantage)
+    GrappleSkills     map[string]bool  // Skills for grapple checks (levels ÷ power)
+    GrappleBreakBonus float64          // Bonus to break attempts (defender advantage)
 
     // Ambush
     AmbushAccuracyBonus float64  // Accuracy bonus when attacking from stealth
     AmbushAutoCrit      bool     // First attack from stealth auto-crits
 
-    // Weapon switching (EquipChallenges affects both time and dodge penalty)
-    EquipChallenges          Challenges     // Skill for faster swaps and reduced penalty
-    BaseEquipTime            time.Duration  // e.g., 2s (modified by EquipTimeMultRange)
-    WeaponSwitchDodgePenalty float64        // e.g., -20 (modified by EquipPenaltyMultRange)
+    // Weapon switching (EquipSkills affects both time and dodge penalty)
+    EquipSkills              map[string]bool  // Skill for faster swaps and reduced penalty
+    BaseEquipTime            time.Duration    // e.g., 2s (modified by EquipTimeMultRange)
+    WeaponSwitchDodgePenalty float64          // e.g., -20 (modified by EquipPenaltyMultRange)
 
     // Tuning constants (grouped by subsystem, with sane defaults)
 
@@ -570,6 +659,9 @@ type CombatConfig struct {
 
     // Stance tuning
     StanceMultRange [2]float64  // Default: [0.0, 2.0] - stance effect multiplier
+
+    // Ambidextrous tuning (dual-wielding)
+    AmbidextrousPenaltyRange [2]float64  // Default: [-30, 0] - off-hand accuracy penalty (low skill = -30, high = 0)
 
     // Armor tuning
     ArmorSkillMultRange [2]float64  // Default: [0.5, 1.0] - armor effectiveness from skill
@@ -597,10 +689,7 @@ type CombatConfig struct {
     MaxStatusEffects int  // Default: 100 - max status effects per object
 }
 
-type BleedingThreshold struct {
-    DamagePercent   float64  // % of max health as damage to trigger (e.g., 0.1 = 10% of max health)
-    StatusEffectID  string   // Which bleeding status effect to apply (e.g., "bleeding_light")
-}
+// BleedingThreshold removed - bleeding now handled via ApplyStatusEffects on weapons
 ```
 
 ---
@@ -669,9 +758,9 @@ const config = getWeaponConfig("longsword");
 
 // Example: Create a new weapon config
 const success = updateWeaponConfig("longsword", null, {
-    BaseDamage: 15.0,
-    AttackIntervalChallenges: [{Skill: "swords", Challenge: 50}],
-    AccuracyChallenges: [{Skill: "swords", Challenge: 40}],
+    DamageTypes: {physical: 15.0},
+    SpeedSkills: {swords: true, agility: true},
+    AccuracySkills: {swords: true},
     // ... other fields
 });
 
@@ -740,8 +829,8 @@ ServerConfig implements `MarshalJSON`/`UnmarshalJSON` to serialize the private f
 Health, Stamina, and Focus regenerate lazily - computed on access, not via timers:
 
 ```go
-func getResourceWithRegen(current, max float64, lastRegenAt time.Time,
-                          regenEnabled bool, regenChallenges Challenges,
+func getResourceWithRegen(ctx Context, current, max float64, lastRegenAt time.Time,
+                          regenEnabled bool, regenSkills map[string]bool,
                           baseRegenPerSec float64, obj *Object) (newValue float64, newTimestamp time.Time) {
     now := time.Now()
     if !regenEnabled || current >= max {
@@ -754,7 +843,7 @@ func getResourceWithRegen(current, max float64, lastRegenAt time.Time,
     }
 
     // Skill affects regen rate via sigmoid (uses config.RegenMultRange)
-    result := regenChallenges.Check(obj, "")
+    result := obj.EffectiveSkills(ctx, regenSkills)
     sigmoid := 1.0 / (1.0 + math.Exp(-result/config.SigmoidDivisor))  // 0 to 1
     mult := config.RegenMultRange[0] + sigmoid*(config.RegenMultRange[1]-config.RegenMultRange[0])
 
@@ -764,7 +853,7 @@ func getResourceWithRegen(current, max float64, lastRegenAt time.Time,
 }
 ```
 
-**Regeneration fields:** See `CombatConfig` above for `HealthRegenChallenges`, `HealthRegenPerSecond`, `StaminaRegenChallenges`, `StaminaRegenPerSecond`, `FocusRegenChallenges`, `FocusRegenPerSecond`, `InCombatRegenMultiplier`.
+**Regeneration fields:** See `CombatConfig` above for `HealthRegenSkills`, `HealthRegenPerSecond`, `StaminaRegenSkills`, `StaminaRegenPerSecond`, `FocusRegenSkills`, `FocusRegenPerSecond`, `InCombatRegenMultiplier`.
 
 ### Attack Cycle
 
@@ -800,7 +889,7 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    **Multi-attack timing:** Each attacking body part has its own independent attack timer, just like dual-wielding weapons. Each body part rolls its own speed challenges and maintains its own attack cycle. Attacks may land at different times depending on speed rolls - a fast punch might land before a slower kick from the same combatant.
 
 2. **Accuracy Check**:
-   - Attacker rolls `AccuracyChallenges.Check()`
+   - Attacker computes effective accuracy via `EffectiveSkills(ctx, weapon.AccuracySkills)`
    - Add stance's `AccuracyModifier`
    - Add status effect modifiers
    - Subtract focus penalty (if focusing and rolled poorly, see Body Part Targeting)
@@ -811,9 +900,9 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Store `isCrit` flag for later
 
 4. **Parry** (whole attack, weapon or unarmed):
-   - Use weapon's `ParryChallenges` if weapon equipped and healthy
-   - Otherwise use defender's body part `UnarmedParryChallenges` (if any)
-   - Defender rolls `ParryChallenges.Check()` (uses highest skill among equipped parry options)
+   - Use weapon's `ParrySkills` if weapon equipped and healthy
+   - Otherwise use defender's body part `UnarmedParrySkills` (if any)
+   - Defender rolls using `Roll(ctx, parrySkills, ...)`
    - Add stance's `ParryModifier`
    - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
    - -> if `parryScore > hitScore`, attack is parried entirely (all damage types deflected)
@@ -823,7 +912,7 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Failed parry continues to next step
 
 5. **Dodge**:
-   - Defender rolls `DodgeChallenges.Check()`
+   - Defender rolls using `Roll(ctx, config.DodgeSkills, ...)`
    - Add stance's `DodgeModifier`
    - Add status effect modifiers
    - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
@@ -832,8 +921,8 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
 6. **Block** (whole attack, requires wielding):
    - Skip entirely if parry or dodge succeeded
    - Skip if not wielding anything (no unarmed blocking)
-   - Use wielded item's `BlockChallenges` if item is healthy (health > 0)
-   - Defender rolls `BlockChallenges.Check()` (uses highest skill among equipped block options)
+   - Use wielded item's `BlockSkills` if item is healthy (health > 0)
+   - Defender rolls using `Roll(ctx, blockSkills, ...)`
    - Add stance's `BlockModifier`
    - Subtract defend penalty (if defending a body part and rolled poorly, see Body Part Targeting)
    - -> if `blockScore > hitScore`, attack is blocked entirely:
@@ -846,7 +935,7 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
    - Find armor worn on the **hit body part** (from `Wearing` map)
    - If no armor on that body part, or armor health = 0, skip to next step
    - For each damage type in the attack:
-     - If `ArmorChallenges[damageType]` exists, apply armor skill challenge
+     - If `ArmorSkills[damageType]` exists, apply armor skill modifier
      - Use sigmoid to map unbounded result to skill multiplier:
        - `sigmoid = 1 / (1 + exp(-challengeResult/config.SigmoidDivisor))`
        - `skillMult = config.ArmorSkillMultRange[0] + sigmoid * (config.ArmorSkillMultRange[1] - config.ArmorSkillMultRange[0])`
@@ -865,18 +954,20 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
 
 10. **Apply Damage** (to both body part and central health):
     - Reduce hit body part's health (`BodyParts[bodyPartID].Health`)
-    - **Severing check**: If damage type has `CanSever` AND body part health went below 0:
-      - Calculate overkill: `overkill = abs(newHealth)`
-      - If `overkill > bodyPart.MaxHealth * SeverThreshold` (reduced by `SeverCritBonus` on crit):
-        - Set `BodyParts[bodyPartID].Severed = true`
-        - Drop equipped items from that body part
-        - Optionally create severed body part object
-        - Emit `bodyPartSevered` event
-      - Else: body part is **disabled** (emit `bodyPartDisabled` event)
-    - **Bleeding check**: If damage type has `CanCauseBleeding`:
-      - Calculate `damagePercent = finalDamage / defender.MaxHealth`
-      - Apply highest matching `BleedingThreshold` status effect (scaled by `BleedingSeverity`)
+    - **Body part disabled**: If body part health <= 0 (emit `bodyPartDisabled` event)
     - Reduce defender's central `Health` by same amount
+
+11. **Apply Status Effects** (weapons, ammo, unarmed attacks):
+    - For each `ApplyStatusEffect` on the damage source:
+      - Attacker rolls `Roll(Skills)` vs `Level`
+      - If roll > 0, apply the status effect to defender
+      - Status effect JS handler receives `{Damage, DamageTypes, Overkill, BodyPart}` to decide severity
+      - Severing/bleeding are just status effects configured on appropriate weapons
+    - For each `ApplyStatusEffect` on defender's armor:
+      - Defender rolls `Roll(Skills)` vs `Level`
+      - If roll > 0, apply the status effect to **attacker** (thorns, reflection, etc.)
+
+12. **Death Check**:
     - If central Health <= 0:
       - Set `Active = false` (stops fighting, reacting, etc.)
       - Clear `CombatTargets` (stop attacking)
@@ -885,12 +976,12 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
 
 ### Attack Timing
 
-Uses existing `Challenges.Check()` - results are summed across all challenges. Uses sigmoid to handle unbounded inputs:
+Uses `EffectiveSkills()` to compute mean skill level, then maps via sigmoid to attack interval:
 
 ```go
-func calculateAttackInterval(attacker *Object, weapon *WeaponConfig, config *CombatConfig) time.Duration {
-    // Use existing Challenges.Check() - sums results from all challenges
-    speedResult := weapon.SpeedChallenges.Check(attacker, "")
+func calculateAttackInterval(ctx Context, attacker *Object, weapon *WeaponConfig, config *CombatConfig) time.Duration {
+    // Compute effective skill level (mean of all speed skills)
+    speedResult := attacker.EffectiveSkills(ctx, weapon.SpeedSkills)
 
     // Higher skill = shorter interval (faster attacks)
     // Use sigmoid to handle unbounded inputs smoothly
@@ -911,16 +1002,16 @@ Attackers can focus on specific body parts; defenders can protect specific body 
 
 ### Focus (Attacker)
 
-Set `FocusBodyPart` to target a specific body part. Uses weapon's `FocusChallenges` (or `UnarmedFocus` if unarmed).
+Set `FocusBodyPart` to target a specific body part. Uses weapon's `FocusSkills` (or `UnarmedFocusSkills` if unarmed).
 
 **Mechanics:**
 ```go
-func applyFocus(attacker *Object, weapon *WeaponConfig, weights map[string]float64, config *CombatConfig) float64 {
+func applyFocus(ctx Context, attacker *Object, weapon *WeaponConfig, weights map[string]float64, config *CombatConfig) float64 {
     if attacker.FocusBodyPart == "" {
         return 0  // No penalty
     }
 
-    focusResult := weapon.FocusChallenges.Check(attacker, "")
+    focusResult := attacker.EffectiveSkills(ctx, weapon.FocusSkills)
     sigmoid := 1.0 / (1.0 + math.Exp(-focusResult/config.SigmoidDivisor))
 
     // Map sigmoid to weight multiplier using TargetingWeightRange
@@ -942,16 +1033,16 @@ func applyFocus(attacker *Object, weapon *WeaponConfig, weights map[string]float
 
 ### Defend (Defender)
 
-Set `DefendBodyPart` to protect a specific body part. Uses weapon's `DefendChallenges` (or `UnarmedDefend` if unarmed).
+Set `DefendBodyPart` to protect a specific body part. Uses weapon's `DefendSkills` (or `UnarmedDefendSkills` if unarmed).
 
 **Mechanics:**
 ```go
-func applyDefend(defender *Object, weapon *WeaponConfig, weights map[string]float64, config *CombatConfig) float64 {
+func applyDefend(ctx Context, defender *Object, weapon *WeaponConfig, weights map[string]float64, config *CombatConfig) float64 {
     if defender.DefendBodyPart == "" {
         return 0  // No penalty
     }
 
-    defendResult := weapon.DefendChallenges.Check(defender, "")
+    defendResult := defender.EffectiveSkills(ctx, weapon.DefendSkills)
     sigmoid := 1.0 / (1.0 + math.Exp(-defendResult/config.SigmoidDivisor))
 
     // Map sigmoid to weight divisor using TargetingWeightRange
@@ -1128,7 +1219,7 @@ Combat can inflict persistent wounds via status effects.
 
 ### Bleeding
 
-Caused by damage types with `CanCauseBleeding: true`. Bleeding naturally **heals over time** (clotting) via the `ReplacedBy` mechanism.
+Caused by weapons with bleeding `ApplyStatusEffects` (e.g., slashing swords, serrated blades). Bleeding naturally **heals over time** (clotting) via the `ReplacedBy` mechanism.
 
 **Example configs:**
 ```go
@@ -1202,14 +1293,14 @@ type RangedWeaponConfig struct {
 
     // Weapon's damage contribution (added to ammo damage)
     // For bows: represents draw strength. For guns: usually empty.
-    DamageTypes      map[string]float64
-    DamageChallenges Challenges
+    DamageTypes         map[string]float64
+    DamageBonusSkills   map[string]bool
 
-    // Skill challenges
-    AccuracyChallenges Challenges
-    FireRateChallenges Challenges
-    MinFireInterval    time.Duration
-    MaxFireInterval    time.Duration
+    // Skills for ranged combat
+    AccuracySkills  map[string]bool
+    FireRateSkills  map[string]bool
+    MinFireInterval time.Duration
+    MaxFireInterval time.Duration
 
     // Defense difficulty (penalties to defender - higher = harder to defend)
     // Bows are slow and visible (low penalties); guns are fast (high penalties)
@@ -1218,18 +1309,21 @@ type RangedWeaponConfig struct {
     BlockPenalty float64  // Penalty to block attempts (shields vs bullets)
 
     // Ammunition
-    MagazineSize     int
-    ReloadTime       time.Duration   // Base reload time (mechanical)
-    ReloadChallenges Challenges      // Skill modifier (sigmoid: 0.5x to 1.5x of ReloadTime)
-    CompatibleAmmo   map[string]bool // Which AmmoConfig IDs this weapon can use
+    MagazineSize   int
+    ReloadTime     time.Duration    // Base reload time (mechanical)
+    ReloadSkills   map[string]bool  // Skill modifier (sigmoid: 0.5x to 1.5x of ReloadTime)
+    CompatibleAmmo map[string]bool  // Which AmmoConfig IDs this weapon can use
 
     // Fire modes
     FireModes []FireModeConfig
 
     // Reliability
-    JamChallenges   Challenges     // Higher skill = less jamming
-    UnjamTime       time.Duration  // Base unjam time (mechanical)
-    UnjamChallenges Challenges     // Skill modifier (sigmoid: 0.5x to 1.5x of UnjamTime)
+    JamSkills   map[string]bool  // Higher skill = less jamming
+    UnjamTime   time.Duration    // Base unjam time (mechanical)
+    UnjamSkills map[string]bool  // Skill modifier (sigmoid: 0.5x to 1.5x of UnjamTime)
+
+    // Status effects applied when this weapon deals damage
+    ApplyStatusEffects []ApplyStatusEffect
 
     // Durability (0 = indestructible)
     MaxHealth float64
@@ -1277,8 +1371,8 @@ type AmmoConfig struct {
     Description string
 
     // Ammo's damage contribution (added to weapon damage)
-    DamageTypes      map[string]float64  // e.g., {"piercing": 15}
-    DamageChallenges Challenges
+    DamageTypes       map[string]float64  // e.g., {"piercing": 15}
+    DamageBonusSkills map[string]bool
 
     // Armor penetration per damage type: ignores this fraction of armor/cover absorption
     // 0 = normal, 0.5 = ignores half of absorption, 1.0 = ignores all absorption
@@ -1288,9 +1382,8 @@ type AmmoConfig struct {
     // Note: Bleeding is controlled by DamageTypeConfig, not ammo
     // Ammo specifies DamageTypes which inherit bleeding properties from their DamageTypeConfig
 
-    // Special effects
-    StatusEffectID     string   // e.g., "burning" for incendiary
-    StatusEffectChance float64
+    // Status effects applied when this ammo deals damage (burning, poison, etc.)
+    ApplyStatusEffects []ApplyStatusEffect
 }
 ```
 
@@ -1335,14 +1428,14 @@ When point blank, PointBlankModifier applies:
 Aiming improves accuracy over time. Bonus computed lazily from `AimingSince`, with skill affecting the rate:
 
 ```go
-func getAimBonus(shooter *Object, config *CombatConfig) float64 {
+func getAimBonus(ctx Context, shooter *Object, config *CombatConfig) float64 {
     if shooter.AimingSince.IsZero() {
         return 0
     }
     elapsed := time.Since(shooter.AimingSince).Seconds()
 
     // Skill affects aim rate via AimMultRange
-    result := config.AimChallenges.Check(shooter, "")
+    result := shooter.EffectiveSkills(ctx, config.AimSkills)
     sigmoid := 1.0 / (1.0 + math.Exp(-result/config.SigmoidDivisor))
     mult := config.AimMultRange[0] + sigmoid*(config.AimMultRange[1]-config.AimMultRange[0])
 
@@ -1353,9 +1446,9 @@ func getAimBonus(shooter *Object, config *CombatConfig) float64 {
 
 **CombatConfig for aiming:**
 ```go
-AimChallenges     Challenges  // Skill affects aim rate (sigmoid: 0.5x to 1.5x)
-AimBonusPerSecond float64     // Base aim bonus per second (e.g., +10)
-MaxAimBonus       float64     // Cap on aim bonus (e.g., +50)
+AimSkills         map[string]bool  // Skill affects aim rate (sigmoid: 0.5x to 1.5x)
+AimBonusPerSecond float64          // Base aim bonus per second (e.g., +10)
+MaxAimBonus       float64          // Cap on aim bonus (e.g., +50)
 ```
 
 **Aim is broken by:** taking damage, moving, target moving rooms, being grappled, shooting.
@@ -1367,8 +1460,8 @@ MaxAimBonus       float64     // Cap on aim bonus (e.g., +50)
 Reload time is primarily mechanical (weapon design) with skill modifier:
 
 ```go
-func calculateReloadTime(weapon *RangedWeaponConfig, shooter *Object, config *CombatConfig) time.Duration {
-    result := weapon.ReloadChallenges.Check(shooter, "")
+func calculateReloadTime(ctx Context, weapon *RangedWeaponConfig, shooter *Object, config *CombatConfig) time.Duration {
+    result := shooter.EffectiveSkills(ctx, weapon.ReloadSkills)
     // sigmoid maps result to ReloadMultRange (higher skill = faster = lower multiplier)
     sigmoid := 1.0 / (1.0 + math.Exp(-result/config.SigmoidDivisor))
     // Invert: high sigmoid (good skill) = low mult (fast reload)
@@ -1384,14 +1477,14 @@ Jamming is skill-based, not random chance:
 ```go
 // Jam check per shot (modified by weapon health)
 healthPenalty := (1 - weapon.Health/weapon.MaxHealth) * 50
-jamResult := weapon.JamChallenges.Check(shooter, "") - healthPenalty
+jamResult := shooter.EffectiveSkills(ctx, weapon.JamSkills) - healthPenalty
 if jamResult < 0 {
     weapon.Jammed = true
 }
 
 // Unjam time: base time modified by skill (sigmoid: 0.5x to 1.5x)
-func calculateUnjamTime(weapon *RangedWeaponConfig, shooter *Object, config *CombatConfig) time.Duration {
-    result := weapon.UnjamChallenges.Check(shooter, "")
+func calculateUnjamTime(ctx Context, weapon *RangedWeaponConfig, shooter *Object, config *CombatConfig) time.Duration {
+    result := shooter.EffectiveSkills(ctx, weapon.UnjamSkills)
     // sigmoid maps result to ReloadMultRange (same tuning as reload)
     sigmoid := 1.0 / (1.0 + math.Exp(-result/config.SigmoidDivisor))
     // Invert: high sigmoid (good skill) = low mult (fast unjam)
@@ -1403,7 +1496,7 @@ func calculateUnjamTime(weapon *RangedWeaponConfig, shooter *Object, config *Com
 ### Ranged Defense Chain
 
 1. **Range Check** - Target within MaxRange rooms?
-2. **Accuracy Roll** - AccuracyChallenges.Check()
+2. **Accuracy Roll** - `EffectiveSkills(ctx, weapon.AccuracySkills)`
    - Subtract: RangePenalty (if shooting into adjacent room)
    - Add/Subtract: PointBlankModifier (if in active melee with target)
    - Add/Subtract: FireMode.AccuracyModifier
@@ -1425,7 +1518,7 @@ func calculateUnjamTime(weapon *RangedWeaponConfig, shooter *Object, config *Com
 7. **Armor Soak** - Normal armor chain (ArmorPenetration reduces effectiveness per damage type)
 8. **Apply Damage** - Normal (body part, bleeding, severing)
 
-**Ranged fields:** See `CombatConfig` above for `RangedDodgePenalty`, `AimChallenges`, `AimBonusPerSecond`, `MaxAimBonus`.
+**Ranged fields:** See `CombatConfig` above for `RangedDodgePenalty`, `AimSkills`, `AimBonusPerSecond`, `MaxAimBonus`.
 
 ### Example Weapons
 
@@ -1532,15 +1625,15 @@ Stealth uses the existing Description challenge system. An object is "hidden" fr
 
 ### Hiding
 
-Add perception challenges to all descriptions:
+Add perception challenge to descriptions:
 ```go
 Descriptions: []Description{
     {Content: "A figure lurks in shadows.",
-     Challenges: []Challenge{{Skill: "perception", Level: 15}}},
+     Challenge: Challenge{Skills: map[string]bool{"perception": true}, Level: 15}},
 }
 ```
 
-If observer fails all challenges, they don't see the object (existing `look`/movement rendering handles this).
+If observer fails the challenge, they don't see the object (existing `look`/movement rendering handles this).
 
 ### Ambush
 
@@ -1645,15 +1738,15 @@ When grappling (`Grappling` is set):
 
 | Action | Effect | Skill Check |
 |--------|--------|-------------|
-| `grapple` | Initiate grapple | GrappleChallenges (levels ÷ power) vs target |
-| `hold` | Maintain grapple, prevent escape | GrappleChallenges (levels ÷ power) |
-| `choke` | Deal damage over time while holding | GrappleChallenges + damage |
-| `throw` | Release + knockdown + damage | GrappleChallenges (levels ÷ power) |
-| `break` | Escape from being grappled | GrappleChallenges (levels ÷ power) vs grappler |
-| `reverse` | Escape AND become the grappler | GrappleChallenges (levels ÷ power), harder threshold |
+| `grapple` | Initiate grapple | GrappleSkills roll vs target |
+| `hold` | Maintain grapple, prevent escape | GrappleSkills roll |
+| `choke` | Deal damage over time while holding | GrappleSkills + damage |
+| `throw` | Release + knockdown + damage | GrappleSkills roll |
+| `break` | Escape from being grappled | GrappleSkills roll vs grappler |
+| `reverse` | Escape AND become the grappler | GrappleSkills roll, harder threshold |
 | `release` | Voluntarily release target | Automatic |
 
-**Grappling and ambush fields:** See `CombatConfig` above for `GrappleChallenges`, `GrappleBreakBonus`, `AmbushAccuracyBonus`, `AmbushAutoCrit`.
+**Grappling and ambush fields:** See `CombatConfig` above for `GrappleSkills`, `GrappleBreakBonus`, `AmbushAccuracyBonus`, `AmbushAutoCrit`.
 
 ---
 
@@ -1667,9 +1760,9 @@ Changing weapons mid-combat has tradeoffs similar to movement.
 - Cannot attack (busy swapping)
 - Cannot parry or block (hands occupied)
 - Dodge works but with WeaponSwitchDodgePenalty
-- Switching time determined by EquipChallenges
+- Switching time determined by EquipSkills
 
-**Weapon switching fields:** See `CombatConfig` above for `EquipChallenges`, `BaseEquipTime`, `WeaponSwitchDodgePenalty`, `EquipTimeMultRange`, `EquipPenaltyMultRange`.
+**Weapon switching fields:** See `CombatConfig` above for `EquipSkills`, `BaseEquipTime`, `WeaponSwitchDodgePenalty`, `EquipTimeMultRange`, `EquipPenaltyMultRange`.
 
 ---
 
@@ -1683,7 +1776,7 @@ Moving while fighting has tradeoffs. No special "flee" state - just movement wit
 - Cannot attack (busy moving)
 - Cannot parry or block (not defending position)
 - Dodge still works but with CombatMovementDodgePenalty
-- Movement speed determined by MovementChallenges
+- Movement speed determined by MovementSkills
 
 **Attacks delay movement:** If you attack while moving, your movement is delayed by the attack duration. This creates tactical tradeoffs:
 - Pure flight: move as fast as possible, no offense
@@ -1710,15 +1803,15 @@ This allows wizard-customizable chase behavior: chase range limits, give-up cond
 ```go
 type MovementConfig struct {
     // Movement timing
-    MovementChallenges  Challenges     // Higher skill = less delay
-    BaseMovementDelay   time.Duration  // e.g., 2s
-    MinMovementDelay    time.Duration  // e.g., 0.5s
+    MovementSkills    map[string]bool  // Higher skill = less delay
+    BaseMovementDelay time.Duration    // e.g., 2s
+    MinMovementDelay  time.Duration    // e.g., 0.5s
 
     // Combat movement
     CombatMovementDodgePenalty float64  // Penalty to dodge while moving in combat
 
     // Exit guarding
-    GuardChallenges Challenges  // Skill challenges for guard vs force-through
+    GuardSkills map[string]bool  // Skills for guard vs force-through
 }
 ```
 
@@ -1740,7 +1833,7 @@ GuardingExit string  // Exit direction being guarded (empty = not guarding)
 
 1. Object attempts to move through exit
 2. Check if any object in room has `GuardingExit` matching that direction
-3. If guarded: both sides roll `GuardChallenges`
+3. If guarded: both sides roll using `GuardSkills`
 4. If challenger wins: movement proceeds (guard may get free attack)
 5. If guard wins: movement blocked, optional message
 
@@ -2040,7 +2133,7 @@ GuardingExit string
 - Death emits `death` event
 
 **Attack flow (simplified, single weapon):**
-1. Roll accuracy (AccuracyChallenges)
+1. Roll accuracy (using weapon's AccuracySkills)
 2. Roll crit (BaseCritChance)
 3. Defender parries (whole attack) or it continues
 4. Defender dodges (whole attack) or it continues
@@ -2135,20 +2228,19 @@ GuardingExit string
 - Unarmed: all body parts with UnarmedDamage attack
 - Dual-wield: all wielded weapons attack independently
 - Each attack has its own speed roll and cycle
-- AmbidextrousChallenges for multi-wield penalty
-- UnarmedParryChallenges for parrying without weapon
+- AmbidextrousSkills + AmbidextrousPenaltyRange for multi-wield penalty
+- UnarmedParrySkills for parrying without weapon
 - No unarmed blocking
 
-**Wounds:**
-- Bleeding from CanCauseBleeding damage types
-- BleedingThresholds apply status effects by damage percent
-- Severing from CanSever damage types + overkill
-- Vital parts (head/torso): sever = death
-- Grip factor: partial severance degrades weapon use
+**Wounds via ApplyStatusEffects:**
+- Weapons/ammo/body parts define ApplyStatusEffects for bleeding, severing, poison, etc.
+- Each effect has Skills and Level for the application check
+- JS handler receives event with Damage, DamageTypes, Overkill, BodyPart
+- JS implements the actual bleeding/severing logic based on event data
 
 **Stances:**
 - StanceConfig modifiers apply to combat rolls
-- StanceChallenges scale modifier effectiveness
+- StanceSkills scale modifier effectiveness
 
 **Flanking:**
 - Count attackers vs defenders
@@ -2249,7 +2341,7 @@ GuardingExit string
 
 **Aiming:**
 - Aim bonus accumulates over time (lazy from AimingSince)
-- AimChallenges affect aim rate via sigmoid
+- AimSkills affect aim rate via sigmoid (EffectiveSkills → scaled modifier)
 - Capped at MaxAimBonus
 - Broken by: damage, movement, target moves, firing
 
@@ -2305,7 +2397,7 @@ GuardingExit string
 
 **Exit guarding:**
 - GuardingExit field specifies direction
-- GuardChallenges for contested passage
+- GuardSkills for contested passage (both sides roll)
 - Guard can get free attack on forced passage
 
 **Grappling:**
@@ -2578,17 +2670,17 @@ game/processing.go     - JS callbacks
 
 ### Phase 5: Resources - Integration
 
-**What exists:** Timestamp-based lazy computation used in skill system (LastUsedAt, forgetting decay). Challenge.Check() already uses time-based calculations.
+**What exists:** Timestamp-based lazy computation used in skill system (LastUsedAt, forgetting decay). EffectiveSkills() uses time-based calculations.
 
 **Integration approach:**
 1. Health/Stamina/Focus stored as current value + LastRegenAt timestamp
 2. `getHealth()` computes: `current + elapsed * regenRate * skillMod`
-3. Skill modifier uses existing `Challenges.Check()` with sigmoid mapping
+3. Skill modifier uses EffectiveSkills(RegenSkills) with sigmoid mapping
 4. Returns min(computed, max) and updates LastRegenAt
 
 **How it fits with existing systems:**
 - Identical pattern to skill forgetting/recharge calculations
-- Uses existing Challenge.Check() for skill-based regen rate
+- Uses EffectiveSkills() for skill-based regen rate
 - No timers needed - pure lazy computation
 
 **Risk assessment: LOW**
@@ -2611,7 +2703,7 @@ game/processing.go     - JS callbacks (getHealth, setHealth, etc.)
 **Integration approach:**
 1. `startCombat(targetID)` adds target to CombatTargets map, creates cancellable context, spawns goroutine
 2. Goroutine: select on context.Done() or timer, check constraints on wake, resolve attack, repeat
-3. Attack resolution calls Challenge.Check() for accuracy, defense, etc.
+3. Attack resolution uses EffectiveSkills() and Roll() for accuracy, defense, etc.
 4. Damage applied via setHealth() (with regen timestamp update)
 5. `stopCombat()` removes from CombatTargets, cancels context; goroutine wakes immediately and exits
 6. Death emits event, JS handles respawn/loot
@@ -2636,7 +2728,7 @@ func (g *Game) attackLoop(ctx context.Context, attackerID, targetID string) {
 ```
 
 **How it fits with existing systems:**
-- Challenge.Check() for all rolls - leverages entire skill system
+- EffectiveSkills() and Roll() for all skill checks - leverages entire skill system
 - Events (attackHit, death, etc.) use existing emit() mechanism
 - CombatTargets persists in ObjectDO - survives restart
 - Goroutines are ephemeral (combat timing lost on restart, but CombatTargets triggers resume)
@@ -2699,7 +2791,7 @@ Note: Callers must validate objects are non-nil before calling `WithLock`. If co
 
 **How it fits with existing systems:**
 - Weighted selection is straightforward (no existing utility, but simple to implement)
-- Challenge.Check() for Focus/Defend skill rolls
+- EffectiveSkills() and Roll() for Focus/Defend skill checks
 - Per-body-part state is just a map in ObjectDO
 
 **Risk assessment: MEDIUM**
@@ -2729,22 +2821,23 @@ structs/structs.go     - BodyParts initialization helper
 **Multi-attack:**
 - Iterate body parts with UnarmedDamage or Wielding entries
 - Each spawns independent attack goroutine with own timing
-- AmbidextrousChallenges check before multi-wield penalty
+- AmbidextrousSkills check determines off-hand penalty (scaled via AmbidextrousPenaltyRange)
 
-**Wounds:**
-- After damage, check DamageTypeConfig.CanCauseBleeding
-- If true, calculate damagePercent, find matching BleedingThreshold
-- Call ApplyStatusEffect() with bleeding effect
+**Wounds via ApplyStatusEffects:**
+- After damage, check weapon/ammo/body-part ApplyStatusEffects
+- For each ApplyStatusEffect: attacker rolls with Skills vs Level
+- On success, status effect applied to defender (bleeding, poison, etc.)
+- For armor ApplyStatusEffects: defender rolls with Skills vs Level to apply to attacker
 
-**Severing:**
-- After damage, if body part health < 0 and DamageTypeConfig.CanSever
-- Check overkill threshold, apply severing
-- Update BodyParts[id].Severed = true
+**Severing via Status Effects:**
+- Severing is a status effect like any other (configurable by wizards)
+- Applied via ApplyStatusEffects on weapons with severing capability
+- Status effect handler marks BodyParts[id].Severed = true
 - Drop equipment from severed part (moveObject to room)
 
 **Stances:**
 - StanceConfig loaded, modifiers applied in attack resolution
-- StanceChallenges.Check() scales modifier effectiveness
+- EffectiveSkills(StanceSkills) → sigmoid-scaled modifier effectiveness
 
 **Flanking:**
 - Count objects with defender in their CombatTargets
@@ -2775,13 +2868,13 @@ game/equipment.go      - Drop equipment on sever
 1. RangedWeaponConfig on equipped weapon determines ranged behavior
 2. CurrentAmmo, LoadedAmmoType, Jammed stored on weapon object (not wielder)
 3. Reload: check free wield slot, spawn goroutine for reload delay
-4. Jam check: JamChallenges.Check() on each shot
+4. Jam check: Roll(JamSkills) vs JamLevel on each shot
 5. Damage calculation: weapon.DamageTypes + ammo.DamageTypes
 
 **How it fits with existing systems:**
 - Uses same attack resolution pipeline, different damage source
 - Equipment system already tracks weapon objects
-- Challenges work the same way
+- Skill checks (EffectiveSkills/Roll) work the same way
 
 **Risk assessment: MEDIUM**
 - Straightforward extension of melee
@@ -2851,7 +2944,7 @@ structs.WithLock(func() error {
 
 **Exit guarding:**
 - Check for objects in room with GuardingExit matching direction
-- If found: contested GuardChallenges check
+- If found: contested check (guard rolls GuardSkills vs traveler's escape roll)
 - Winner determines if movement proceeds
 
 **Grappling:**
@@ -3034,7 +3127,7 @@ integration_test/      - Combat tests
 6. **Equipment degrades 1:1** - Blocking/absorbing damage costs equipment health 1:1; efficacy scales with health ratio
 7. **Death just emits event** - JS handles respawn/loot/etc.
 8. **Use goroutines with sleep** - Variable timing via skill checks, no persistence needed (CombatTargets handles restart)
-9. **Use existing Challenges type** - Leverages existing skill system infrastructure
+9. **Use existing skill system** - Leverages EffectiveSkills(), Roll() infrastructure
 10. **Status effects: lazy + tick** - All effects checked lazily on access; ticking effects also checked at each tick
 11. **Status effects emit events** - `statusApplied`, `statusExpired`, `statusTick`
 12. **Optional timeout = permanent** - Implants are just status effects with no expiry
@@ -3052,12 +3145,12 @@ integration_test/      - Combat tests
 24. **Dual-wield multi-attack** - When wielding weapons in multiple body parts, all weapons attack independently
 25. **Body part health** - Each body part has health; at 0 it's disabled and cannot attack or defend
 26. **Dual health tracking** - Damage applies to both body part AND central health; body parts can be disabled without death
-27. **Unarmed defense** - Parry possible with skill via UnarmedParryChallenges; blocking requires wielding something
+27. **Unarmed defense** - Parry possible with skill via UnarmedParrySkills; blocking requires wielding something
 28. **Multi-attack defense** - Defender rolls defense for each incoming attack; skill recharge makes repeated defenses harder
 29. **Ranged damage = weapon + ammo** - Both contribute; bows add draw strength, guns add nothing
 30. **Simple range model** - MaxRange 0 (same room) or 1 (adjacent); no exit configuration needed
 31. **Point blank = active melee** - PointBlankModifier applies when in melee combat with target
-32. **Jam/unjam skill-based** - JamChallenges and UnjamChallenges, not random chance
+32. **Jam/unjam skill-based** - JamSkills and UnjamSkills, not random chance
 33. **Aim bonus from time** - Computed lazily from AimingSince timestamp
 34. **Cover on objects and bodies** - CoverAbsorption + CoverAccuracyPenalty; bodies provide cover via BodyConfig
 35. **Cover degrades 1:1** - Cover takes damage equal to absorbed amount
@@ -3079,7 +3172,7 @@ integration_test/      - Combat tests
 51. **Weapon switching penalties** - Can't attack/parry/block while switching; dodge with penalty
 52. **Flanking bonus** - Outnumbered defenders suffer accuracy/defense penalties based on attacker ratio
 53. **Focus resource** - Mental actions use Focus (spells, aimed shots); Stamina for physical (feint, disarm)
-54. **Aim rate skill-based** - AimChallenges modify aim bonus accumulation rate via sigmoid
+54. **Aim rate skill-based** - AimSkills modify aim bonus accumulation rate via sigmoid
 55. **Body part targeting via HitWeight** - Random selection weighted by HitWeight; focus/defend modify weights
 56. **Focus/Defend risk-reward** - Good rolls improve targeting; bad rolls cause accuracy/defense penalties
 57. **Configurable tuning constants** - Sigmoid divisor, multiplier ranges, penalties grouped by subsystem in CombatConfig
