@@ -540,7 +540,7 @@ setDescriptions([
     {
         Short: 'rusty sword',
         Long: 'A sword covered in rust.',
-        Challenges: [{Skill: 'perception', Level: 30}]  // Optional
+        Challenge: {Skills: {perception: true}, Level: 30}  // Optional
     }
 ]);
 ```
@@ -553,8 +553,8 @@ setExits([
     {
         Descriptions: [{Short: 'north'}],
         Destination: 'room-id-here',
-        UseChallenges: [{Skill: 'strength', Level: 50, Message: 'Too heavy!'}],
-        TransmitChallenges: [{Skill: 'perception', Level: 20}]
+        UseChallenge: {Skills: {strength: true}, Level: 50, Message: 'Too heavy!'},
+        TransmitChallenge: {Skills: {perception: true}, Level: 20}
     }
 ]);
 ```
@@ -598,9 +598,9 @@ Send an event to a specific object.
 emit(targetId, 'ping', {data: 'hello'});
 
 // With skill challenge - target only receives if they pass
-emit(targetId, 'whisper', {secret: 'hidden'}, [
-    {Skill: 'perception', Level: 50}
-]);
+emit(targetId, 'whisper', {secret: 'hidden'},
+    {Skills: {perception: true}, Level: 50}
+);
 ```
 
 #### `emitToLocation(locationId, eventType, message, [challenges])`
@@ -806,7 +806,8 @@ First handler returning truthy stops the chain.
 | `movement` | Object detected moving (skill-checked) | `{Object, Source, Destination}` |
 | `received` | Container gains content (guaranteed) | `{Object}` |
 | `transmitted` | Container loses content (guaranteed) | `{Object}` |
-| `exitFailed` | Someone fails exit challenge | `{subject, exit, score, primaryFailure}` |
+| `exitFailed` | Someone fails exit challenge (async) | `{subject, exit, score, primaryFailure, blamedSkill}` |
+| `renderExitFailed` | Customize exit failure message (sync) | `{subject, exit, score, primaryFailure, blamedSkill}` |
 | `renderMovement` | Custom movement rendering | `{Observer, Source, Destination}` |
 | `handleMovement` | Player uses exit (after challenge passes) | `{Exit, Score}` |
 
@@ -849,13 +850,13 @@ setDescriptions([
     {
         Short: 'hidden gem',
         Long: 'A sparkling gem concealed within.',
-        Challenges: [{Skill: 'perception', Level: 50}]
+        Challenge: {Skills: {perception: true}, Level: 50}
     }
 ]);
 ```
 
-- No challenges = always visible
-- Multiple challenges are summed (must pass overall)
+- No challenge = always visible
+- Multi-skill challenges use arithmetic mean of all skills
 - First visible description's Short is used as the object's name
 
 #### Exit Challenges
@@ -864,13 +865,13 @@ setDescriptions([
 setExits([{
     Descriptions: [{Short: 'heavy door'}],
     Destination: 'room-id',
-    UseChallenges: [{Skill: 'strength', Level: 60, Message: 'Too heavy!'}],
-    TransmitChallenges: [{Skill: 'perception', Level: 30}]
+    UseChallenge: {Skills: {strength: true}, Level: 60, Message: 'Too heavy!'},
+    TransmitChallenge: {Skills: {perception: true}, Level: 30}
 }]);
 ```
 
-- `UseChallenges`: Must pass to traverse; Message shown on failure
-- `TransmitChallenges`: Added difficulty when viewing through exit
+- `UseChallenge`: Must pass to traverse; Message shown on failure
+- `TransmitChallenge`: Added difficulty when viewing through exit
 
 #### Secret Exits
 
@@ -878,7 +879,7 @@ setExits([{
 setExits([{
     Descriptions: [{
         Short: 'hidden passage',
-        Challenges: [{Skill: 'perception', Level: 80}]
+        Challenge: {Skills: {perception: true}, Level: 80}
     }],
     Destination: 'secret-room'
 }]);
@@ -947,6 +948,29 @@ addCallback('exitFailed', ['emit'], (msg) => {
     });
 });
 ```
+
+#### Custom Exit Failure Messages (renderExitFailed)
+
+The `renderExitFailed` callback runs BEFORE the failure message is shown and can customize it based on which skill was blamed. Return `{Message: '...'}` to override the exit's default failure message.
+
+```javascript
+// Room source - customize failure messages based on blamed skill
+setExits([{
+    Descriptions: [{Short: 'magical barrier'}],
+    Destination: 'wizard-tower',
+    UseChallenge: {Skills: {sorcery: true, enchantment: true}, Level: 80}
+}]);
+
+addCallback('renderExitFailed', ['emit'], (msg) => {
+    var skill = msg.blamedSkill || 'magic';
+    return {Message: 'Your weak ' + skill + ' prevents you from passing the barrier!'};
+});
+```
+
+- Called on the **container** (room), not the player
+- `msg.blamedSkill`: Probabilistically chosen skill (weaker skills blamed more often)
+- Return `{Message: '...'}` to customize; omit to use exit's default Message
+- The `exitFailed` event still fires afterward for announcements
 
 #### Custom Movement Rendering
 
