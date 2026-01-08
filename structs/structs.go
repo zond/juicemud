@@ -28,6 +28,45 @@ var (
 	lastEventCounter uint64 = 0
 )
 
+// MinValue is the floor value for skill rolls to prevent -Inf and division by zero.
+const MinValue = 1e-9
+
+// SkillsKey returns a canonical string key for a set of skills.
+// Skills are sorted alphabetically and comma-joined (e.g., "awareness,senses").
+// Used for looking up ChallengeDurations and seeding deterministic RNG.
+func SkillsKey(skills map[string]bool) string {
+	names := make([]string, 0, len(skills))
+	for name := range skills {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
+}
+
+// Context provides game-time and configuration access for skill operations.
+// Game time pauses when the server is down, so skills don't decay/recharge
+// during maintenance.
+type Context interface {
+	context.Context
+	Now() time.Time           // Game time (may differ from wall clock)
+	ServerConfig() *ServerConfig
+}
+
+// gameContext is the standard implementation of Context.
+type gameContext struct {
+	context.Context
+	nowFn        func() time.Time
+	serverConfig *ServerConfig
+}
+
+func (c *gameContext) Now() time.Time           { return c.nowFn() }
+func (c *gameContext) ServerConfig() *ServerConfig { return c.serverConfig }
+
+// NewContext creates a Context with the given time source and server config.
+func NewContext(ctx context.Context, nowFn func() time.Time, serverConfig *ServerConfig) Context {
+	return &gameContext{Context: ctx, nowFn: nowFn, serverConfig: serverConfig}
+}
+
 type Timestamp uint64
 
 func (t Timestamp) Uint64() uint64 {
@@ -190,92 +229,114 @@ func (e *Event) CreateKey() {
 	e.Key = string(k)
 }
 
-// Check tests the challenger's skill against this challenge's difficulty.
-// Returns positive for success, negative for failure. Updates skill state.
-func (c *Challenge) Check(cfg *ServerConfig, challenger *Object, targetID string) float64 {
-	challenger.Lock()
-	defer challenger.Unlock()
+// Check tests the challenger's skills against this challenge's difficulty.
+// Returns positive for success (score = 10 * log10(yourRoll / challengeRoll)), negative for failure.
+// Uses uniform roll comparison - both sides roll in [0, 10^(level/10)].
+// If rng is nil, generates one internally using multiSkillRng.
+// If rng is provided, uses it (allows CheckWithDetails to continue the sequence for blame).
+// Updates skill state (LastUsedAt, LastBase) and applies learning if enabled.
+// IMPORTANT: Caller must hold write access to the challenger (modifies Skills).
+func (c *Challenge) Check(ctx Context, challenger *Object, targetID string, rng *rnd.Rand) float64 {
+	if !c.HasChallenge() {
+		return 1 // No challenge means automatic success (positive score)
+	}
 
-	skill := challenger.Unsafe.Skills[c.Skill]
-	skill.Name = c.Skill
+	// Compute mean effective level (includes forgetting persistence and recharge folding)
+	effective := challenger.EffectiveSkills(ctx, c.Skills)
 
-	// Use Unsafe.Learning directly since we already hold the lock
-	// (calling GetLearning() would deadlock - RWMutex is not reentrant)
-	result := skillUse{
-		cfg:       cfg,
-		skill:     &skill,
-		user:      challenger.Unsafe.Id,
-		challenge: float64(c.Level),
-		at:        time.Now(),
-		target:    targetID,
-	}.check(challenger.Unsafe.Learning)
+	// Generate RNG if not provided
+	if rng == nil {
+		rng = multiSkillRng(ctx, c.Skills, challenger.Unsafe.Id, targetID)
+	}
 
-	challenger.Unsafe.Skills[c.Skill] = skill
+	// Your roll (also applies side effects: learning, state updates)
+	yourRoll := challenger.Roll(ctx, c.Skills, targetID, effective, float64(c.Level), rng)
 
+	// Challenge roll from same RNG sequence
+	challengeMax := math.Pow(10, float64(c.Level)/10)
+	challengeRoll := math.Max(MinValue, rng.Float64()*challengeMax)
+
+	// Score: positive for success, negative for failure
+	return 10 * math.Log10(yourRoll/challengeRoll)
+}
+
+// CheckWithDetails is like Check but also returns the name of a blamed skill on failure.
+// Blame is probabilistic, weighted by inverse effective level (weaker skills blamed more often).
+func (c *Challenge) CheckWithDetails(ctx Context, challenger *Object, targetID string) (float64, string) {
+	// Generate RNG once, use for both check and blame
+	rng := multiSkillRng(ctx, c.Skills, challenger.Unsafe.Id, targetID)
+
+	score := c.Check(ctx, challenger, targetID, rng)
+	if score > 0 {
+		return score, ""
+	}
+
+	// Compute blame weights: weaker skills (lower effective) get higher weight
+	// Weight = 1 / max(1, effective) so lower effective = higher probability of blame
+	type skillWeight struct {
+		name   string
+		weight float64
+	}
+	weights := make([]skillWeight, 0, len(c.Skills))
+	totalWeight := 0.0
+
+	for name := range c.Skills {
+		skill := challenger.Unsafe.Skills[name]
+		effective := skill.chargedPracticalLevel(ctx)
+		// Use inverse of effective as weight (clamped to avoid division by zero/negative)
+		weight := 1.0 / math.Max(1, effective)
+		weights = append(weights, skillWeight{name, weight})
+		totalWeight += weight
+	}
+
+	// Use next value from same RNG sequence for consistent blame
+	r := rng.Float64() * totalWeight
+
+	// Pick skill based on weighted random selection
+	cumulative := 0.0
+	for _, sw := range weights {
+		cumulative += sw.weight
+		if r < cumulative {
+			return score, sw.name
+		}
+	}
+
+	// Fallback to last skill (shouldn't happen)
+	if len(weights) > 0 {
+		return score, weights[len(weights)-1].name
+	}
+	return score, ""
+}
+
+// HasChallenge returns true if the challenge has any skills defined.
+func (c *Challenge) HasChallenge() bool {
+	return len(c.Skills) > 0
+}
+
+// Merge combines two challenges by unioning their Skills and adding their Levels.
+// If c has no skills, returns other. If other has no skills, returns c.
+func (c Challenge) Merge(other Challenge) Challenge {
+	if !c.HasChallenge() {
+		return other
+	}
+	if !other.HasChallenge() {
+		return c
+	}
+	result := Challenge{
+		Skills:  make(map[string]bool, len(c.Skills)+len(other.Skills)),
+		Level:   c.Level + other.Level, // Sum: stacked challenges are harder
+		Message: c.Message,
+	}
+	for skill := range c.Skills {
+		result.Skills[skill] = true
+	}
+	for skill := range other.Skills {
+		result.Skills[skill] = true
+	}
+	if result.Message == "" {
+		result.Message = other.Message
+	}
 	return result
-}
-
-type Challenges []Challenge
-
-// Merge adds levels from mergeChallenges to challenges with matching skills.
-func (c Challenges) Merge(mergeChallenges map[string]Challenge) Challenges {
-	// Track which skills we've already included
-	included := make(map[string]bool, len(c))
-	newChallenges := Challenges{}
-	// First, add all challenges from c, merging levels where both have the skill
-	for _, challenge := range c {
-		if mergeChallenge, found := mergeChallenges[challenge.Skill]; found {
-			challenge.Level += mergeChallenge.Level
-		}
-		newChallenges = append(newChallenges, challenge)
-		included[challenge.Skill] = true
-	}
-	// Then, add any challenges from mergeChallenges that weren't in c
-	for skill, mergeChallenge := range mergeChallenges {
-		if !included[skill] {
-			newChallenges = append(newChallenges, mergeChallenge)
-		}
-	}
-	return newChallenges
-}
-
-func (c Challenges) Map() map[string]Challenge {
-	result := map[string]Challenge{}
-	for _, challenge := range c {
-		result[challenge.Skill] = challenge
-	}
-	return result
-}
-
-// Check sums results of all challenges. Positive = success, negative = failure.
-// Empty challenges return 1.0 (auto-success).
-func (c Challenges) Check(cfg *ServerConfig, challenger *Object, targetID string) float64 {
-	score, _ := c.CheckWithDetails(cfg, challenger, targetID)
-	return score
-}
-
-// CheckWithDetails is like Check but also returns the primary failure on failure.
-// Returns (score, nil) on success, or (score, primaryFailure) on failure.
-// The primary failure is the challenge with the most negative individual result.
-func (c Challenges) CheckWithDetails(cfg *ServerConfig, challenger *Object, targetID string) (float64, *Challenge) {
-	if len(c) == 0 {
-		return 1.0, nil
-	}
-	result := 0.0
-	var primaryFailure *Challenge
-	worstScore := 0.0
-	for i := range c {
-		score := c[i].Check(cfg, challenger, targetID)
-		result += score
-		if score < worstScore {
-			worstScore = score
-			primaryFailure = &c[i]
-		}
-	}
-	if result > 0 {
-		return result, nil
-	}
-	return result, primaryFailure
 }
 
 type Descriptions []Description
@@ -297,13 +358,14 @@ func (d Descriptions) Matches(pattern string) bool {
 }
 
 // Detect returns all descriptions the viewer can perceive.
-// This includes descriptions with no challenges (always visible) and
-// descriptions where the viewer overcomes the challenges.
+// This includes descriptions with no challenge (always visible) and
+// descriptions where the viewer overcomes the challenge.
 // Returns nil if no descriptions are visible.
-func (d Descriptions) Detect(cfg *ServerConfig, viewer *Object, targetID string) []Description {
+func (d Descriptions) Detect(ctx Context, viewer *Object, targetID string) []Description {
 	var result []Description
 	for _, desc := range d {
-		if Challenges(desc.Challenges).Check(cfg, viewer, targetID) > 0 {
+		// No challenge = always visible, or check the challenge
+		if !desc.Challenge.HasChallenge() || desc.Challenge.Check(ctx, viewer, targetID, nil) > 0 {
 			result = append(result, desc)
 		}
 	}
@@ -322,34 +384,105 @@ func (d Descriptions) Long() string {
 	return strings.Join(parts, " ")
 }
 
-// AddDescriptionChallenges returns a copy with added difficulty on all descriptions.
-func (o *Object) AddDescriptionChallenges(addedChallenges Challenges) (*Object, error) {
+// AddDescriptionChallenge returns a copy with added difficulty on all descriptions.
+// The added challenge is merged into each description's existing challenge.
+func (o *Object) AddDescriptionChallenge(added Challenge) (*Object, error) {
+	if !added.HasChallenge() {
+		return o, nil
+	}
 	cpy, err := Clone(o)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 
-	mergeChallenges := addedChallenges.Map()
-	for currDescIdx := range cpy.Unsafe.Descriptions {
-		cpy.Unsafe.Descriptions[currDescIdx].Challenges = Challenges(cpy.Unsafe.Descriptions[currDescIdx].Challenges).Merge(mergeChallenges)
+	for i := range cpy.Unsafe.Descriptions {
+		cpy.Unsafe.Descriptions[i].Challenge = cpy.Unsafe.Descriptions[i].Challenge.Merge(added)
 	}
 
 	return cpy, nil
 }
 
+// EffectiveSkills computes the mean effective level for a set of skills.
+// For each skill: applies forgetting (persisted to Practical), folds recharge into effective.
+// Returns the arithmetic mean of all effective values.
+// IMPORTANT: Must be called immediately before Roll since Roll updates LastUsedAt.
+// IMPORTANT: Caller must hold write access to the object (modifies Skills).
+func (o *Object) EffectiveSkills(ctx Context, skills map[string]bool) float64 {
+	if len(skills) == 0 {
+		return 0
+	}
+
+	sum := 0.0
+	for name := range skills {
+		skill := o.Unsafe.Skills[name]
+		if skill.Name == "" {
+			skill.Name = name
+		}
+
+		// Apply forgetting decay and persist to Practical
+		skill.Practical = float32(skill.practicalPostForget(ctx))
+		o.Unsafe.Skills[name] = skill
+
+		// Get effective level (Practical + recharge penalty)
+		sum += skill.chargedPracticalLevel(ctx)
+	}
+
+	return sum / float64(len(skills))
+}
+
+// Roll generates a uniform roll and handles side effects.
+// Returns a value in [MinValue, 10^(precomputedEffective/10)] for comparison.
+// Updates LastUsedAt, LastBase for all skills and applies learning if object has Learning enabled.
+// If rng is nil, generates one internally using multiSkillRng.
+// If rng is provided, uses it (for static challenges needing multiple rolls from same sequence).
+// IMPORTANT: Caller must hold write access to the object (modifies Skills).
+func (o *Object) Roll(ctx Context, skills map[string]bool, target string, precomputedEffective, opposingEffective float64, rng *rnd.Rand) float64 {
+	if rng == nil {
+		rng = multiSkillRng(ctx, skills, o.Unsafe.Id, target)
+	}
+
+	at := Stamp(ctx.Now())
+	maxRoll := math.Pow(10, precomputedEffective/10)
+	roll := math.Max(MinValue, rng.Float64()*maxRoll)
+
+	// Update each skill's state and apply learning
+	for name := range skills {
+		skill := o.Unsafe.Skills[name]
+		if skill.Name == "" {
+			skill.Name = name
+		}
+
+		// Apply learning BEFORE updating LastUsedAt (learning uses time since last use)
+		if o.Unsafe.Learning {
+			recovery, growth := skill.learningGains(ctx, opposingEffective)
+			skill.Practical += float32(recovery + growth)
+			skill.Theoretical += float32(growth)
+		}
+
+		// Update state after learning
+		rechargeCoeff := skill.rechargeCoeff(ctx)
+		skill.LastBase = float32(rechargeCoeff)
+		skill.LastUsedAt = at.Uint64()
+
+		o.Unsafe.Skills[name] = skill
+	}
+
+	return roll
+}
+
 // Filter returns a copy with only descriptions and exits the viewer can perceive.
 // Multiple descriptions may be included if the viewer overcomes challenges for multiple descriptions.
-func (o *Object) Filter(cfg *ServerConfig, viewer *Object) (*Object, error) {
+func (o *Object) Filter(ctx Context, viewer *Object) (*Object, error) {
 	cpy, err := Clone(o)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 
-	cpy.Unsafe.Descriptions = Descriptions(cpy.Unsafe.Descriptions).Detect(cfg, viewer, cpy.Unsafe.Id)
+	cpy.Unsafe.Descriptions = Descriptions(cpy.Unsafe.Descriptions).Detect(ctx, viewer, cpy.Unsafe.Id)
 
 	exits := Exits{}
 	for _, exit := range cpy.Unsafe.Exits {
-		exitDescs := Descriptions(exit.Descriptions).Detect(cfg, viewer, cpy.Unsafe.Id)
+		exitDescs := Descriptions(exit.Descriptions).Detect(ctx, viewer, cpy.Unsafe.Id)
 		if len(exitDescs) > 0 {
 			exit.Descriptions = exitDescs
 			exits = append(exits, exit)
@@ -422,18 +555,21 @@ func (l *Location) Describe() string {
 	return string(b)
 }
 
-func (l *Location) AddDescriptionChallenges(addedChallenges Challenges) (*Location, error) {
+func (l *Location) AddDescriptionChallenge(added Challenge) (*Location, error) {
+	if !added.HasChallenge() {
+		return l, nil
+	}
 	result := &Location{
 		Content: Content{},
 	}
 	var err error
-	result.Container, err = l.Container.AddDescriptionChallenges(addedChallenges)
+	result.Container, err = l.Container.AddDescriptionChallenge(added)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 
 	for id := range l.Content {
-		if result.Content[id], err = l.Content[id].AddDescriptionChallenges(addedChallenges); err != nil {
+		if result.Content[id], err = l.Content[id].AddDescriptionChallenge(added); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}
@@ -441,21 +577,21 @@ func (l *Location) AddDescriptionChallenges(addedChallenges Challenges) (*Locati
 	return result, nil
 }
 
-func (l *Location) Filter(cfg *ServerConfig, viewer *Object) (*Location, error) {
+func (l *Location) Filter(ctx Context, viewer *Object) (*Location, error) {
 	result := &Location{
 		Content: Content{},
 	}
 	for id := range l.Content {
 		if id == viewer.GetId() {
 			result.Content[id] = l.Content[id]
-		} else if cont, err := l.Content[id].Filter(cfg, viewer); err != nil {
+		} else if cont, err := l.Content[id].Filter(ctx, viewer); err != nil {
 			return nil, juicemud.WithStack(err)
 		} else if len(cont.GetDescriptions()) > 0 {
 			result.Content[id] = cont
 		}
 	}
 	var err error
-	if result.Container, err = l.Container.Filter(cfg, viewer); err != nil {
+	if result.Container, err = l.Container.Filter(ctx, viewer); err != nil {
 		return nil, juicemud.WithStack(err)
 	}
 	return result, nil
@@ -524,13 +660,14 @@ type LocationEmit struct {
 	Perspective Perspective
 }
 
-// Observers yields each object in the location that passes the given challenges.
+// Observers yields each object in the location that passes the given challenge.
 // Objects with the same ID as targetID are excluded (you can't observe yourself).
-func (l *Location) Observers(cfg *ServerConfig, targetID string, challenges Challenges) iter.Seq[*Object] {
+func (l *Location) Observers(ctx Context, targetID string, challenge Challenge) iter.Seq[*Object] {
 	return func(yield func(*Object) bool) {
 		for viewer := range l.All() {
 			if viewer.GetId() != targetID {
-				if challenges.Check(cfg, viewer, targetID) > 0 {
+				// No challenge = always pass, or check the challenge
+				if !challenge.HasChallenge() || challenge.Check(ctx, viewer, targetID, nil) > 0 {
 					if !yield(viewer) {
 						return
 					}
@@ -540,24 +677,24 @@ func (l *Location) Observers(cfg *ServerConfig, targetID string, challenges Chal
 	}
 }
 
-// Observation represents an observer and the challenges they overcame to perceive.
+// Observation represents an observer and the challenge they overcame to perceive.
 type Observation struct {
 	Subject     *Object     // The observer
-	Challenges  Challenges  // Combined challenges: baseChallenges (+ TransmitChallenges for neighbours)
+	Challenge   Challenge   // Combined challenge: baseChallenge merged with TransmitChallenge for neighbours
 	Perspective Perspective // Where the event came from (observer's perspective)
 }
 
 // Observers yields observations for all objects that can perceive targetID.
-// For observers in the same location, Challenges = baseChallenges.
-// For observers in neighbouring locations, Challenges = baseChallenges + exit.TransmitChallenges.
+// For observers in the same location, Challenge = baseChallenge.
+// For observers in neighbouring locations, Challenge = baseChallenge merged with exit.TransmitChallenge.
 // Perspective indicates where the observation is from (here, via exit, or unknown).
-func (n *DeepNeighbourhood) Observers(cfg *ServerConfig, targetID string, baseChallenges Challenges) iter.Seq[*Observation] {
+func (n *DeepNeighbourhood) Observers(ctx Context, targetID string, baseChallenge Challenge) iter.Seq[*Observation] {
 	return func(yield func(*Observation) bool) {
 		// Observers in the same location - perspective is "here"
-		for viewer := range n.Location.Observers(cfg, targetID, baseChallenges) {
+		for viewer := range n.Location.Observers(ctx, targetID, baseChallenge) {
 			if !yield(&Observation{
 				Subject:     viewer,
-				Challenges:  baseChallenges,
+				Challenge:   baseChallenge,
 				Perspective: Perspective{Here: true},
 			}) {
 				return
@@ -569,15 +706,15 @@ func (n *DeepNeighbourhood) Observers(cfg *ServerConfig, targetID string, baseCh
 			if !found {
 				continue
 			}
-			// Combine base challenges with exit's TransmitChallenges
-			combined := baseChallenges.Merge(Challenges(exit.TransmitChallenges).Map())
+			// Combine base challenge with exit's TransmitChallenge
+			combined := baseChallenge.Merge(exit.TransmitChallenge)
 			// Find the return exit (observer→source) for perspective
 			returnExit := neighbour.Container.FindExit(n.Location.Container.GetId())
 			perspective := Perspective{Here: false, Exit: returnExit}
-			for viewer := range neighbour.Observers(cfg, targetID, combined) {
+			for viewer := range neighbour.Observers(ctx, targetID, combined) {
 				if !yield(&Observation{
 					Subject:     viewer,
-					Challenges:  combined,
+					Challenge:   combined,
 					Perspective: perspective,
 				}) {
 					return
@@ -597,11 +734,11 @@ type Detection struct {
 // The perspective describes where the event came from (from the observer's point of view).
 // The target should have all challenges applied via AddDescriptionChallenges before calling.
 // Typically this includes TransmitChallenges from exits when observing through an exit.
-func (l *Location) Detections(cfg *ServerConfig, target *Object, perspective Perspective) iter.Seq2[*Detection, error] {
+func (l *Location) Detections(ctx Context, target *Object, perspective Perspective) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
 		for viewer := range l.All() {
 			if viewer.GetId() != target.GetId() {
-				if filtered, err := target.Filter(cfg, viewer); err != nil {
+				if filtered, err := target.Filter(ctx, viewer); err != nil {
 					if !yield(nil, juicemud.WithStack(err)) {
 						return
 					}
@@ -617,12 +754,12 @@ func (l *Location) Detections(cfg *ServerConfig, target *Object, perspective Per
 
 // Detections yields all objects that can perceive the target, including via exits.
 // Sensory events travel from source (n.Location) to observers in neighbours.
-// TransmitChallenges on the source→neighbour exit are added to the target's description challenges.
+// TransmitChallenge on the source→neighbour exit is added to the target's description challenge.
 // The perspective is set to the observer→source exit (or unknown if no return exit).
-func (n *DeepNeighbourhood) Detections(cfg *ServerConfig, target *Object) iter.Seq2[*Detection, error] {
+func (n *DeepNeighbourhood) Detections(ctx Context, target *Object) iter.Seq2[*Detection, error] {
 	return func(yield func(*Detection, error) bool) {
 		// Observers in the same location as target - perspective is "here"
-		for det, err := range n.Location.Detections(cfg, target, Perspective{Here: true}) {
+		for det, err := range n.Location.Detections(ctx, target, Perspective{Here: true}) {
 			if !yield(det, err) {
 				return
 			}
@@ -633,8 +770,8 @@ func (n *DeepNeighbourhood) Detections(cfg *ServerConfig, target *Object) iter.S
 			if !found {
 				continue
 			}
-			// Add source→neighbour exit's TransmitChallenges to target
-			challenged, err := target.AddDescriptionChallenges(Challenges(exit.TransmitChallenges))
+			// Add source→neighbour exit's TransmitChallenge to target
+			challenged, err := target.AddDescriptionChallenge(exit.TransmitChallenge)
 			if err != nil {
 				if !yield(nil, juicemud.WithStack(err)) {
 					return
@@ -644,7 +781,7 @@ func (n *DeepNeighbourhood) Detections(cfg *ServerConfig, target *Object) iter.S
 			// Perspective: observer→source exit (nil if no return exit found)
 			returnExit := neighbour.Container.FindExit(n.Location.Container.GetId())
 			perspective := Perspective{Here: false, Exit: returnExit}
-			for det, err := range neighbour.Detections(cfg, challenged, perspective) {
+			for det, err := range neighbour.Detections(ctx, challenged, perspective) {
 				if !yield(det, err) {
 					return
 				}
@@ -674,21 +811,21 @@ func (n *DeepNeighbourhood) Describe() string {
 }
 
 // Filter returns a copy with only what the viewer can perceive.
-func (n *DeepNeighbourhood) Filter(cfg *ServerConfig, viewer *Object) (*DeepNeighbourhood, error) {
+func (n *DeepNeighbourhood) Filter(ctx Context, viewer *Object) (*DeepNeighbourhood, error) {
 	result := &DeepNeighbourhood{
 		Neighbours: map[string]*Location{},
 	}
 
 	var err error
-	if result.Location, err = n.Location.Filter(cfg, viewer); err != nil {
+	if result.Location, err = n.Location.Filter(ctx, viewer); err != nil {
 		return nil, err
 	}
 
 	for _, exit := range n.Location.Container.GetExits() {
 		if neighbour, found := n.Neighbours[exit.Destination]; found {
-			if challenged, err := neighbour.AddDescriptionChallenges(exit.TransmitChallenges); err != nil {
+			if challenged, err := neighbour.AddDescriptionChallenge(exit.TransmitChallenge); err != nil {
 				return nil, juicemud.WithStack(err)
-			} else if filtered, err := challenged.Filter(cfg, viewer); err != nil {
+			} else if filtered, err := challenged.Filter(ctx, viewer); err != nil {
 				return nil, juicemud.WithStack(err)
 			} else if len(filtered.Container.GetDescriptions()) > 0 {
 				result.Neighbours[exit.Destination] = filtered
@@ -785,121 +922,136 @@ func Duration(d time.Duration) SkillDuration {
 }
 
 type SkillConfig struct {
-	// Time after a skill check is 50% likely to be reused.
-	Duration SkillDuration
 	// Time for a skill to be fully ready for reuse.
 	Recharge SkillDuration
-	// Multiplier for success chance when imediately reused.
+	// Multiplier for success chance when immediately reused.
 	Reuse float64
 	// Time for skill to be forgotten down to 50% of theoretical level.
 	Forget SkillDuration
 }
 
-// specificRecharge computes the base recharge coefficient (0-1) using a sigmoid curve.
+// specificRecharge computes the base recharge coefficient (0-1) using a square curve.
 func (s *Skill) specificRecharge(at Timestamp, recharge SkillDuration) float64 {
+	if s.LastUsedAt == 0 {
+		return 1.0 // Never used = fully recharged
+	}
 	nanosSinceLastUse := at.Nanoseconds() - Timestamp(s.LastUsedAt).Nanoseconds()
 	rechargeFraction := float64(nanosSinceLastUse) / float64(recharge.Nanoseconds())
-	return math.Min(1, math.Pow(0.5, -(8*rechargeFraction-8))-math.Pow(0.5, 8))
+	// Square curve: recharges fast at the end, at 0.5 gives 0.25, at 1.0 gives 1.0
+	return math.Min(1, rechargeFraction*rechargeFraction)
 }
 
-// improvement calculates skill XP gain based on recharge, skill level, and challenge difficulty.
-func (s *Skill) improvement(cfg *ServerConfig, at Timestamp, challenge float64, effective float64) float64 {
-	recharge := 6 * time.Minute
-	if sk, found := cfg.GetSkillConfig(s.Name); found && sk.Recharge.Duration() > recharge {
-		recharge = sk.Recharge.Duration()
+
+// learningGains calculates skill improvement split into recovery and growth.
+// Learning uses max(6 minutes, configured Recharge) to prevent speed-learning exploits.
+//
+// Recovery: Practical catching up to Theoretical ("muscle memory").
+// - Always applies when Practical < Theoretical
+// - Based on rechargeCoeff and gap size
+// - Doesn't depend on challenge difficulty
+//
+// Growth: Increasing Theoretical ("true learning").
+// - Only when Practical ≈ Theoretical (you're at your peak)
+// - Only when Theoretical ≈ challengeLevel (appropriate difficulty)
+// - Harder at higher levels (diminishing returns)
+//
+// Returns (recoveryGain, growthGain). Caller should:
+// - Add recoveryGain to Practical
+// - Add growthGain to both Practical and Theoretical
+func (s *Skill) learningGains(ctx Context, challengeLevel float64) (recoveryGain, growthGain float64) {
+	// Use same recharge calculation as skill use (includes cumulative Reuse penalty)
+	rechargeCoeff := s.rechargeCoeff(ctx)
+
+	// Part 1: Recovery (Practical → Theoretical)
+	// Recover proportional to gap, modified by recharge
+	gap := float64(s.Theoretical - s.Practical)
+	if gap > 0 {
+		// Recover 5% of gap per fully-recharged use
+		recoveryGain = 0.05 * rechargeCoeff * gap
 	}
-	rechargeCoeff := math.Min(1, float64(at.Time().Sub(Timestamp(s.LastUsedAt).Time()))/float64(recharge))
-	skillCoeff := 0.0355 * math.Pow(0.9, effective)
-	theoryCoeff := math.Max(1, float64(1+3*(s.Theoretical-s.Practical)))
-	challengeCoeff := 1 / (1 + math.Abs(challenge-effective))
-	perUse := float64(recharge) / float64(6*time.Minute)
-	return rechargeCoeff * skillCoeff * theoryCoeff * challengeCoeff * perUse
+
+	// Part 2: Growth (Theoretical increases)
+	// Condition 1: Practical must be close to Theoretical (you're "up to speed")
+	// Smooth coefficient: 1 when gap=0, 0.5 when gap=1, etc.
+	upToSpeedCoeff := 1 / (1 + gap)
+
+	// Condition 2: Theoretical must be close to challenge (appropriate difficulty)
+	challengeGap := math.Abs(float64(s.Theoretical) - challengeLevel)
+	challengeCoeff := 1 / (1 + challengeGap)
+
+	// Diminishing returns at higher levels
+	skillCoeff := 0.0355 * math.Pow(0.9, float64(s.Theoretical))
+
+	growthGain = rechargeCoeff * skillCoeff * upToSpeedCoeff * challengeCoeff
+
+	return recoveryGain, growthGain
 }
 
-// Returns the effective level of this skill considering amount forgotten since last use.
-func (s *Skill) Effective(cfg *ServerConfig, at Timestamp) float64 {
-	if config, found := cfg.GetSkillConfig(s.Name); found && config.Forget != 0 {
-		nanosSinceLastUse := at.Nanoseconds() - Timestamp(s.LastUsedAt).Nanoseconds()
-		forgetFraction := float64(nanosSinceLastUse) / float64(config.Forget.Nanoseconds())
-		forgetCoeff := 1 + (-1 / (1 + math.Exp(8-8*forgetFraction))) + (1 / math.Exp(8))
-		permanentSkill := 0.5 * s.Theoretical
-		forgettableSkill := float64(s.Practical - permanentSkill)
-		return forgettableSkill*forgetCoeff + float64(permanentSkill)
+// practicalPostForget returns the practical level after applying forgetting decay.
+// If Forget is 0 (disabled) or skill has never been used (LastUsedAt=0), returns Practical unchanged.
+func (s *Skill) practicalPostForget(ctx Context) float64 {
+	if s.LastUsedAt == 0 {
+		return float64(s.Practical) // Never used, no decay
 	}
-
-	return float64(s.Practical)
+	cfg := ctx.ServerConfig()
+	config := cfg.GetSkillConfig(s.Name)
+	if config.Forget == 0 {
+		return float64(s.Practical)
+	}
+	at := Stamp(ctx.Now())
+	nanosSinceLastUse := at.Nanoseconds() - Timestamp(s.LastUsedAt).Nanoseconds()
+	forgetFraction := float64(nanosSinceLastUse) / float64(config.Forget.Nanoseconds())
+	forgetCoeff := 1 + (-1 / (1 + math.Exp(8-8*forgetFraction))) + (1 / math.Exp(8))
+	permanentSkill := 0.5 * s.Theoretical
+	forgettableSkill := float64(s.Practical - permanentSkill)
+	return forgettableSkill*forgetCoeff + float64(permanentSkill)
 }
 
-// Returns the amount of skill level useable considering recharge time.
-func (s *Skill) rechargeCoeff(cfg *ServerConfig, at Timestamp) float64 {
+// rechargeCoeff returns the amount of skill level useable considering recharge time.
+// If Recharge is 0 (no cooldown), returns 1.0 (fully available).
+func (s *Skill) rechargeCoeff(ctx Context) float64 {
 	if s.LastUsedAt == 0 {
 		return 1.0
 	}
 
-	if sk, found := cfg.GetSkillConfig(s.Name); found && sk.Recharge != 0 {
-		rechargeCoeff := s.specificRecharge(at, sk.Recharge)
-		cumulativeReuse := float64(s.LastBase) * sk.Reuse
-		return cumulativeReuse + (1-cumulativeReuse)*rechargeCoeff
+	cfg := ctx.ServerConfig()
+	sk := cfg.GetSkillConfig(s.Name)
+	if sk.Recharge == 0 {
+		return 1.0
 	}
-
-	return 1.0
+	at := Stamp(ctx.Now())
+	rechargeCoeff := s.specificRecharge(at, sk.Recharge)
+	cumulativeReuse := float64(s.LastBase) * sk.Reuse
+	return cumulativeReuse + (1-cumulativeReuse)*rechargeCoeff
 }
 
-type skillUse struct {
-	cfg       *ServerConfig
-	skill     *Skill
-	user      string
-	target    string
-	challenge float64
-	at        time.Time
+// chargedPracticalLevel returns the skill's practical level with recharge penalty applied.
+// effective = Practical + 10 * log10(rechargeCoeff)
+// Caller should ensure forgetting has been applied to Practical if needed.
+func (s *Skill) chargedPracticalLevel(ctx Context) float64 {
+	rechargeCoeff := math.Max(MinValue, s.rechargeCoeff(ctx))
+	return float64(s.Practical) + 10*math.Log10(rechargeCoeff)
 }
 
-// check performs the skill check and returns positive for success, negative for failure.
-// If improve is true, also applies forgetting and learning to the skill.
-func (s skillUse) check(improve bool) float64 {
-	stamp := Stamp(s.at)
+// multiSkillRng returns a deterministic RNG seeded by user, skills, target, and time window.
+func multiSkillRng(ctx Context, skills map[string]bool, user, target string) *rnd.Rand {
+	skillKey := SkillsKey(skills)
 
-	effective := float64(s.skill.Practical)
-	if improve {
-		effective = s.skill.Effective(s.cfg, stamp)
-		s.skill.Practical = float32(effective)
-	}
-
-	rechargeCoeff := s.skill.rechargeCoeff(s.cfg, stamp)
-	successChance := rechargeCoeff / (1.0 + math.Pow(10, (s.challenge-effective)*0.1))
-
-	if improve {
-		s.skill.Practical += float32(s.skill.improvement(s.cfg, stamp, s.challenge, effective))
-		if s.skill.Practical > s.skill.Theoretical {
-			s.skill.Theoretical = s.skill.Practical
-		}
-	}
-
-	s.skill.LastBase = float32(rechargeCoeff)
-	s.skill.LastUsedAt = stamp.Uint64()
-
-	random := s.rng().Float64()
-	// Unified formula: score is based on ratio of random to successChance.
-	// - Success (random < successChance): ratio < 1, log negative, score positive
-	// - Failure (random > successChance): ratio > 1, log positive, score negative
-	// This makes harder challenges (low successChance) produce worse failure scores.
-	return -10 * math.Log10(random/successChance)
-}
-
-// rng returns a deterministic RNG seeded by user, skill, target, and time window.
-// This ensures consistent results for repeated checks within the skill's Duration.
-func (s skillUse) rng() *rnd.Rand {
 	h := fnv.New64()
-	h.Write([]byte(s.user))
-	h.Write([]byte(s.skill.Name))
-	h.Write([]byte(s.target))
+	h.Write([]byte(user))
+	h.Write([]byte(skillKey))
+	h.Write([]byte(target))
 
-	skillConfig, _ := s.cfg.GetSkillConfig(s.skill.Name)
+	cfg := ctx.ServerConfig()
+	at := ctx.Now()
 
-	// Seed the hash with time step based on skill duration.
-	step := uint64(s.at.UnixNano())
-	if skillConfig.Duration != 0 {
-		step = uint64(s.at.UnixNano() / skillConfig.Duration.Nanoseconds() / 3)
+	// Look up duration for this skill combination
+	duration := cfg.GetChallengeDuration(skillKey)
+
+	// Seed the hash with time step based on duration.
+	step := uint64(at.UnixNano())
+	if duration != 0 {
+		step = uint64(at.UnixNano() / duration.Nanoseconds() / 3)
 	}
 	b := make([]byte, binary.Size(step))
 	binary.BigEndian.PutUint64(b, step)
@@ -908,10 +1060,10 @@ func (s skillUse) rng() *rnd.Rand {
 	// Use the hash to seed an rng.
 	result := rnd.New(rnd.NewSource(int64(h.Sum64())))
 
-	// If the skill has a duration then reseed with a second step based on a random offset.
-	if skillConfig.Duration != 0 {
-		offset := result.Int63n(skillConfig.Duration.Nanoseconds())
-		binary.BigEndian.PutUint64(b, uint64((s.at.UnixNano()+offset)/skillConfig.Duration.Nanoseconds()/3))
+	// If there's a duration, reseed with a second step based on a random offset.
+	if duration != 0 {
+		offset := result.Int63n(duration.Nanoseconds())
+		binary.BigEndian.PutUint64(b, uint64((at.UnixNano()+offset)/duration.Nanoseconds()/3))
 		h.Write(b)
 		result = rnd.New(rnd.NewSource(int64(h.Sum64())))
 	}

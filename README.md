@@ -669,51 +669,53 @@ Get configuration for a skill. Returns null if not configured.
 
 ```javascript
 var config = getSkillConfig('perception');
-// config.Forget - seconds until decay
-// config.Recharge - seconds for full XP gain
-// config.Duration - seconds for deterministic results
+// config.Forget - seconds until skill decays to 50% of theoretical
+// config.Recharge - seconds until skill is fully usable again
+// config.Reuse - fraction of depleted state carried forward on repeated rapid reuse
 ```
 
-#### `updateSkillConfig(skillName, oldConfig, newConfig)`
-Atomically updates skill configuration if current value matches oldConfig. Returns true if successful.
+#### `setSkillConfig(skillName, config)`
+Sets or resets a skill configuration. If config is null, resets to default.
 
 ```javascript
-// Create new config (oldConfig = null)
-updateSkillConfig('stealth', null, {Forget: 3600, Recharge: 1000, Duration: 60});
+// Set a new config
+setSkillConfig('stealth', {Forget: 3600, Recharge: 1000, Reuse: 0.5});
 
 // Update existing config
 var old = getSkillConfig('stealth');
-updateSkillConfig('stealth', old, {Forget: 7200, Recharge: old.Recharge, Duration: old.Duration});
+setSkillConfig('stealth', {Forget: 7200, Recharge: old.Recharge, Reuse: old.Reuse});
 
-// Delete config (newConfig = null)
-updateSkillConfig('stealth', old, null);
+// Reset to default
+setSkillConfig('stealth', null);
 ```
 
 ### Data Structures
 
 #### Challenge
 ```javascript
-{Skill: 'perception', Level: 50, Message: 'You fail to notice.'}
+{Skills: {perception: true}, Level: 50, Message: 'You fail to notice.'}
+// Multi-skill challenge (arithmetic mean of all skills):
+{Skills: {perception: true, stealth: true}, Level: 30}
 ```
-- `Skill`: String - skill name
+- `Skills`: Object - map of skill names to true (multi-skill uses arithmetic mean)
 - `Level`: Number - difficulty (0-100+)
 - `Message`: String (optional) - shown on failure
 
 #### Description
 ```javascript
-{Short: 'golden key', Long: 'A small golden key.', Challenges: [...]}
+{Short: 'golden key', Long: 'A small golden key.', Challenge: {Skills: {perception: true}, Level: 30}}
 ```
 - `Short`: String - brief name (shown in lists)
 - `Long`: String - detailed description (shown on examine)
-- `Challenges`: Array (optional) - skill checks to perceive
+- `Challenge`: Object (optional) - skill check to perceive
 
 #### Exit
 ```javascript
 {
     Descriptions: [{Short: 'north', Long: 'A dark passage.'}],
     Destination: 'room-id',
-    UseChallenges: [...],      // Must pass to traverse
-    TransmitChallenges: [...]  // Added when viewing through exit
+    UseChallenge: {Skills: {strength: true}, Level: 50},     // Must pass to traverse
+    TransmitChallenge: {Skills: {perception: true}, Level: 30}  // Must pass to perceive events through exit
 }
 ```
 

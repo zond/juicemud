@@ -12,9 +12,14 @@ import (
 	"github.com/zond/juicemud/structs"
 )
 
+// TimePersister is called periodically to persist the current game time.
+// This allows resuming from the saved time on restart, preventing skills
+// from decaying/recharging during server downtime.
+type TimePersister func(structs.Timestamp) error
+
 // Queue is a persistent priority queue for scheduled events, backed by a B-tree.
 // Events are processed in timestamp order. The offset field handles time jumps
-// on restart by adjusting all timestamps relative to the earliest queued event.
+// on restart by adjusting all timestamps relative to persisted game time.
 //
 // Shutdown is context-based: cancel the context passed to Start() to stop processing.
 // Events pushed after context cancellation may be persisted but not processed in
@@ -26,16 +31,26 @@ import (
 // 1.7e18 + 9e18 ≈ 1.1e19, well within uint64's 1.8e19 limit. The system would
 // need to run until year 2554 for current time alone to overflow int64.
 type Queue struct {
-	tree   *dbm.TypeTree[structs.Event, *structs.Event]
-	offset atomic.Int64  // Nanosecond offset for time adjustment on restart
-	wake   chan struct{} // Buffered(1), signals new event pushed
+	tree          *dbm.TypeTree[structs.Event, *structs.Event]
+	offset        atomic.Int64   // Nanosecond offset for time adjustment on restart
+	wake          chan struct{}  // Buffered(1), signals new event pushed
+	timePersister TimePersister  // Called every second to persist game time
 }
 
-func New(_ context.Context, t *dbm.TypeTree[structs.Event, *structs.Event]) *Queue {
-	return &Queue{
-		tree: t,
-		wake: make(chan struct{}, 1),
+// New creates a new Queue. If lastGameTime is non-zero, the queue will resume
+// from that time (preventing skill decay during downtime). The timePersister
+// callback is called every second to save current game time.
+func New(_ context.Context, t *dbm.TypeTree[structs.Event, *structs.Event], lastGameTime structs.Timestamp, timePersister TimePersister) *Queue {
+	q := &Queue{
+		tree:          t,
+		wake:          make(chan struct{}, 1),
+		timePersister: timePersister,
 	}
+	// If we have a saved game time, compute offset so Now() returns that time
+	if lastGameTime != 0 {
+		q.offset.Store(int64(lastGameTime) - time.Now().UnixNano())
+	}
+	return q
 }
 
 func (q *Queue) After(dur time.Duration) structs.Timestamp {
@@ -48,6 +63,12 @@ func (q *Queue) At(t time.Time) structs.Timestamp {
 
 func (q *Queue) Now() structs.Timestamp {
 	return structs.Timestamp(time.Now().UnixNano() + q.offset.Load())
+}
+
+// NowTime returns the current game time as time.Time.
+// This is used by juicemud.Context for skill operations.
+func (q *Queue) NowTime() time.Time {
+	return q.Now().Time()
 }
 
 func (q *Queue) until(at structs.Timestamp) time.Duration {
@@ -106,12 +127,39 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 		return juicemud.WithStack(ctx.Err())
 	}
 
+	// Only set offset from first event if we don't already have a persisted time
+	if q.offset.Load() == 0 {
+		next, err := q.peekFirst()
+		if err != nil {
+			return juicemud.WithStack(err)
+		}
+		if next != nil {
+			q.offset.Store(int64(next.At))
+		}
+	}
+
+	// Start goroutine to persist game time every second
+	if q.timePersister != nil {
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					// Best-effort persistence - ignore errors
+					_ = q.timePersister(q.Now())
+				case <-ctx.Done():
+					// Final persistence on shutdown
+					_ = q.timePersister(q.Now())
+					return
+				}
+			}
+		}()
+	}
+
 	next, err := q.peekFirst()
 	if err != nil {
 		return juicemud.WithStack(err)
-	}
-	if next != nil {
-		q.offset.Store(int64(next.At))
 	}
 
 	// Create a stopped, drained timer for reuse. We create an already-expired timer

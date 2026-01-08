@@ -184,6 +184,13 @@ func (g *Game) GetServerConfig() *structs.ServerConfig {
 	return g.serverConfig
 }
 
+// Context creates a structs.Context that combines the given context with
+// game time (from Queue) and server config. This is used for skill checks
+// and other operations that need both timing and configuration.
+func (g *Game) Context(ctx context.Context) structs.Context {
+	return structs.NewContext(ctx, g.storage.Queue().NowTime, g.serverConfig)
+}
+
 // loadServerConfig loads the server config from the root object's state into memory.
 // Called at startup to initialize the in-memory config.
 func (g *Game) loadServerConfig(ctx context.Context) error {

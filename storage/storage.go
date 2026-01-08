@@ -56,7 +56,7 @@ func New(ctx context.Context, dir string) (*Storage, error) {
 		sourceObjects: sourceObjects,
 		objects:       objects,
 		intervals:     NewIntervals(intervalsTree),
-		queue:         queue.New(ctx, queueTree),
+		queue:         queue.New(ctx, queueTree, 0, nil),  // TODO: wire up game time persistence
 		audit:         audit,
 		resolver:      imports.NewResolver(),
 	}

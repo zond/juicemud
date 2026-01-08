@@ -267,12 +267,14 @@ func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *st
 	fromDetectors := juicemud.Set[string]{}
 	toDetectors := juicemud.Set[string]{}
 
+	gameCtx := g.Context(ctx)
+
 	if mov.Source != nil {
 		fromNeigh, err := g.loadDeepNeighbourhoodAt(ctx, *mov.Source)
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		for det, err := range fromNeigh.Detections(g.GetServerConfig(), mov.Object) {
+		for det, err := range fromNeigh.Detections(gameCtx, mov.Object) {
 			if err != nil {
 				return juicemud.WithStack(err)
 			}
@@ -288,7 +290,7 @@ func (g *Game) emitMovement(ctx context.Context, obj *structs.Object, source *st
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		for det, err := range toNeigh.Detections(g.GetServerConfig(), mov.Object) {
+		for det, err := range toNeigh.Detections(gameCtx, mov.Object) {
 			if err != nil {
 				return juicemud.WithStack(err)
 			}
@@ -509,16 +511,14 @@ func (g *Game) loadNeighbourhoodAt(ctx context.Context, loc string) (*structs.Ne
 // 2. Wizards are trusted to configure the game
 // 3. Skill configs are game balance settings, not security-sensitive
 func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
-	// getSkillConfig(name) -> config or null
+	// getSkillConfig(name) -> config (always returns valid config, defaults if not explicitly set)
 	callbacks["getSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 1 || !args[0].IsString() {
 			return rc.Throw("getSkillConfig takes [string] arguments")
 		}
-		skill, found := g.serverConfig.GetSkillConfig(args[0].String())
-		if !found {
-			return rc.Null()
-		}
+		// Always returns a config - unconfigured skills get DefaultSkillConfig()
+		skill := g.serverConfig.GetSkillConfig(args[0].String())
 		res, err := rc.JSFromGo(skill)
 		if err != nil {
 			return rc.Throw("trying to convert %v to *v8go.Value: %v", skill, err)
@@ -526,71 +526,47 @@ func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
 		return res
 	}
 
-	// updateSkillConfig(name, oldConfig, newConfig) -> boolean
-	// Atomically updates a skill config if current value matches oldConfig.
-	// - oldConfig null: succeeds only if key doesn't exist (insert)
-	// - newConfig null: deletes the key (if oldConfig matched)
-	// Returns true if update succeeded, false if current value didn't match oldConfig.
-	callbacks["updateSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+	// setSkillConfig(name, config) - sets or resets a skill config
+	// If config is null, resets to default (deletes explicit entry).
+	// Returns nothing (throws on error).
+	callbacks["setSkillConfig"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
-		if len(args) != 3 || !args[0].IsString() {
-			return rc.Throw("updateSkillConfig takes [string, Object|null, Object|null] arguments")
+		if len(args) != 2 || !args[0].IsString() {
+			return rc.Throw("setSkillConfig takes [string, Object|null] arguments")
 		}
 
 		name := args[0].String()
 
-		var oldConfig *structs.SkillConfig
-		if !args[1].IsNull() && !args[1].IsUndefined() {
+		// Save old state for rollback on persist failure
+		snapshot := g.serverConfig.SkillConfigsSnapshot()
+		oldCfg, wasExplicit := snapshot[name]
+
+		if args[1].IsNull() || args[1].IsUndefined() {
+			// Reset to default
+			g.serverConfig.DeleteSkillConfig(name)
+		} else {
 			if !args[1].IsObject() {
-				return rc.Throw("updateSkillConfig: oldConfig must be Object or null")
+				return rc.Throw("setSkillConfig: config must be Object or null")
 			}
-			old := structs.SkillConfig{}
-			if err := rc.Copy(&old, args[1]); err != nil {
-				return rc.Throw("trying to convert oldConfig: %v", err)
+			cfg := structs.SkillConfig{}
+			if err := rc.Copy(&cfg, args[1]); err != nil {
+				return rc.Throw("trying to convert config: %v", err)
 			}
-			oldConfig = &old
-		}
-
-		var newConfig *structs.SkillConfig
-		if !args[2].IsNull() && !args[2].IsUndefined() {
-			if !args[2].IsObject() {
-				return rc.Throw("updateSkillConfig: newConfig must be Object or null")
-			}
-			new := structs.SkillConfig{}
-			if err := rc.Copy(&new, args[2]); err != nil {
-				return rc.Throw("trying to convert newConfig: %v", err)
-			}
-			newConfig = &new
-		}
-
-		// Atomically update in-memory config
-		swapped := g.serverConfig.CompareAndSwapSkillConfig(name, oldConfig, newConfig)
-		if !swapped {
-			res, err := rc.JSFromGo(false)
-			if err != nil {
-				return rc.Throw("trying to convert result: %v", err)
-			}
-			return res
+			g.serverConfig.SetSkillConfig(name, cfg)
 		}
 
 		// Persist to root object state
 		if err := g.persistServerConfig(ctx); err != nil {
-			// Revert the in-memory change on persist failure.
-			// Use unconditional set to ensure revert succeeds even if another
-			// goroutine modified the config between our CAS and persist failure.
-			if oldConfig == nil {
-				g.serverConfig.DeleteSkillConfig(name)
+			// Rollback in-memory change
+			if wasExplicit {
+				g.serverConfig.SetSkillConfig(name, oldCfg)
 			} else {
-				g.serverConfig.SetSkillConfig(name, *oldConfig)
+				g.serverConfig.DeleteSkillConfig(name)
 			}
-			return rc.Throw("updateSkillConfig: failed to persist config: %v", err)
+			return rc.Throw("setSkillConfig: failed to persist config: %v", err)
 		}
 
-		res, err := rc.JSFromGo(true)
-		if err != nil {
-			return rc.Throw("trying to convert result: %v", err)
-		}
-		return res
+		return nil
 	}
 }
 
@@ -749,11 +725,11 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 			return rc.Throw("trying to serialize %v: %v", args[2], err)
 		}
 
-		// Parse optional challenges
-		var challenges structs.Challenges
+		// Parse optional challenge
+		var challenge structs.Challenge
 		if len(args) == 4 && !args[3].IsNullOrUndefined() {
-			if err := rc.Copy(&challenges, args[3]); err != nil {
-				return rc.Throw("invalid challenges: %v", err)
+			if err := rc.Copy(&challenge, args[3]); err != nil {
+				return rc.Throw("invalid challenge: %v", err)
 			}
 		}
 
@@ -763,10 +739,10 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 			return rc.Throw("target %q not found: %v", targetId, err)
 		}
 
-		// If challenges provided, check recipient's skills
-		// challenges.Check(recipient, emitterID) - can recipient perceive event from emitter?
-		if len(challenges) > 0 {
-			if challenges.Check(g.GetServerConfig(), recipient, object.GetId()) <= 0 {
+		// If challenge provided, check recipient's skills
+		// challenge.Check(recipient, emitterID) - can recipient perceive event from emitter?
+		if challenge.HasChallenge() {
+			if challenge.Check(g.Context(ctx), recipient, object.GetId(), nil) <= 0 {
 				// Recipient fails challenge - silently don't emit
 				return nil
 			}
@@ -781,7 +757,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		args := info.Args()
 		// Accept 3 or 4 arguments
 		if len(args) < 3 || len(args) > 4 || !args[0].IsString() || !args[1].IsString() {
-			return rc.Throw("emitToLocation takes [string, string, any, challenges?] arguments")
+			return rc.Throw("emitToLocation takes [string, string, any, challenge?] arguments")
 		}
 
 		locationId := args[0].String()
@@ -796,11 +772,11 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 			return rc.Throw("invalid message data: %v", err)
 		}
 
-		// Parse optional challenges
-		var challenges structs.Challenges
+		// Parse optional challenge
+		var challenge structs.Challenge
 		if len(args) == 4 && !args[3].IsNullOrUndefined() {
-			if err := rc.Copy(&challenges, args[3]); err != nil {
-				return rc.Throw("invalid challenges: %v", err)
+			if err := rc.Copy(&challenge, args[3]); err != nil {
+				return rc.Throw("invalid challenge: %v", err)
 			}
 		}
 
@@ -813,8 +789,8 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		at := g.storage.Queue().After(defaultReactionDelay)
 		emitterId := object.GetId()
 
-		// Iterate over all observers who pass the challenges
-		for obs := range neighbourhood.Observers(g.GetServerConfig(), emitterId, challenges) {
+		// Iterate over all observers who pass the challenge
+		for obs := range neighbourhood.Observers(g.Context(ctx), emitterId, challenge) {
 			if err := g.storage.Queue().Push(ctx, &structs.AnyEvent{
 				At:     at,
 				Object: obs.Subject.GetId(),

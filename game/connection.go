@@ -230,7 +230,7 @@ func (c *Connection) scan() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if neigh, err = neigh.Filter(c.game.GetServerConfig(), viewer); err != nil {
+	if neigh, err = neigh.Filter(c.game.Context(c.ctx), viewer); err != nil {
 		return juicemud.WithStack(err)
 	}
 	if err := c.describeLocation(neigh.Location); err != nil {
@@ -423,7 +423,7 @@ func (c *Connection) look() error {
 	if err != nil {
 		return juicemud.WithStack(err)
 	}
-	if loc, err = loc.Filter(c.game.GetServerConfig(), viewer); err != nil {
+	if loc, err = loc.Filter(c.game.Context(c.ctx), viewer); err != nil {
 		return juicemud.WithStack(err)
 	}
 	return c.describeLocation(loc)
@@ -564,7 +564,7 @@ func (c *Connection) identifyingCommand(def defaultObject, maxTargets int, f fun
 				if err != nil {
 					return juicemud.WithStack(err)
 				}
-				if loc, err = loc.Filter(c.game.GetServerConfig(), obj); err != nil {
+				if loc, err = loc.Filter(c.game.Context(c.ctx), obj); err != nil {
 					return juicemud.WithStack(err)
 				}
 				return f(c, obj, rest, loc)
@@ -576,7 +576,7 @@ func (c *Connection) identifyingCommand(def defaultObject, maxTargets int, f fun
 		if err != nil {
 			return juicemud.WithStack(err)
 		}
-		if loc, err = loc.Filter(c.game.GetServerConfig(), obj); err != nil {
+		if loc, err = loc.Filter(c.game.Context(c.ctx), obj); err != nil {
 			return juicemud.WithStack(err)
 		}
 		targets := []*structs.Object{}
@@ -695,7 +695,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		// Location couldn't be loaded at all - can't continue
 		return false, nil
 	}
-	if loc, err = loc.Filter(c.game.GetServerConfig(), obj); err != nil {
+	if loc, err = loc.Filter(c.game.Context(c.ctx), obj); err != nil {
 		return false, juicemud.WithStack(err)
 	}
 
@@ -711,7 +711,7 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 
 	for _, exit := range loc.GetExits() {
 		if exit.Name() == name || exit.Name() == expandedName {
-			score, primaryFailure := structs.Challenges(exit.UseChallenges).CheckWithDetails(c.game.GetServerConfig(), obj, loc.GetId())
+			score := exit.UseChallenge.Check(c.game.Context(c.ctx), obj, loc.GetId(), nil)
 			if score > 0 {
 				// Check if the object has a handleMovement callback
 				if obj.HasCallback(handleMovementEventType, emitEventTag) {
@@ -736,16 +736,16 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 				return true, juicemud.WithStack(c.game.moveObject(c.ctx, obj, exit.Destination))
 			}
 			// Challenge failed - print message if available
-			if primaryFailure != nil && primaryFailure.Message != "" {
-				fmt.Fprintln(c.term, primaryFailure.Message)
+			if exit.UseChallenge.Message != "" {
+				fmt.Fprintln(c.term, exit.UseChallenge.Message)
 			}
 			// Emit exitFailed to container so room JS can handle advanced scenarios.
 			// Use the queue to ensure the canonical object is used and to avoid blocking.
 			exitFailedContent := map[string]any{
-				"subject":        obj,
-				"exit":           exit,
-				"score":          score,
-				"primaryFailure": primaryFailure,
+				"subject":   obj,
+				"exit":      exit,
+				"score":     score,
+				"challenge": exit.UseChallenge,
 			}
 			exitFailedJSON, err := json.Marshal(exitFailedContent)
 			if err != nil {

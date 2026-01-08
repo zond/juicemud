@@ -19,7 +19,7 @@ func TestQueue(t *testing.T) {
 	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
 		got := []string{}
 		mut := &sync.Mutex{}
-		q := New(ctx, tr)
+		q := New(ctx, tr, 0, nil)
 
 		// Start the queue first to ensure offset is initialized.
 		runWG := &sync.WaitGroup{}
@@ -73,7 +73,7 @@ func TestQueueFutureEventsNotDrained(t *testing.T) {
 
 	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
 		var handlerCalls atomic.Int32
-		q := New(ctx, tr)
+		q := New(ctx, tr, 0, nil)
 
 		// Start the queue BEFORE pushing events to avoid offset calculation issues.
 		// The offset is set on Start() based on existing events, so starting first
@@ -136,7 +136,7 @@ func TestQueueHandlerError(t *testing.T) {
 	defer cancel()
 
 	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
-		q := New(ctx, tr)
+		q := New(ctx, tr, 0, nil)
 
 		// Start the queue.
 		runWG := &sync.WaitGroup{}
@@ -183,7 +183,7 @@ func TestQueueConcurrentPush(t *testing.T) {
 
 	dbm.WithTypeTree(t, func(tr *dbm.TypeTree[structs.Event, *structs.Event]) {
 		var processed atomic.Int32
-		q := New(ctx, tr)
+		q := New(ctx, tr, 0, nil)
 
 		// Start the queue.
 		runWG := &sync.WaitGroup{}

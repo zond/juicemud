@@ -982,7 +982,7 @@ setExits([
 	{
 		Descriptions: [{Short: 'blocked'}],
 		Destination: 'genesis',
-		UseChallenges: [{Skill: 'telekinesis', Level: 100, Message: 'The door remains firmly shut.'}],
+		UseChallenge: {Skills: {telekinesis: true}, Level: 100, Message: 'The door remains firmly shut.'},
 	},
 ]);
 addCallback('exitFailed', ['emit'], (msg) => {
@@ -1796,7 +1796,7 @@ addCallback('secret', ['emit'], (msg) => {
 addCallback('whisper', ['action'], (msg) => {
 	const parts = msg.line.split(' ');
 	const targetId = parts[1];
-	emit(targetId, 'secret', {secret: 'hidden'}, [{Skill: 'perception', Level: 50}]);
+	emit(targetId, 'secret', {secret: 'hidden'}, {Skills: {perception: true}, Level: 50});
 	setDescriptions([{Short: 'whisperer orb (sent)'}]);
 });
 `
@@ -2020,7 +2020,7 @@ addCallback('mindcast', ['emit'], (msg) => {
 	telepathPath := uniqueSourcePath("telepath")
 	telepathSource := `setDescriptions([{Short: 'telepath orb'}]);
 addCallback('mindspeak', ['action'], (msg) => {
-	emitToLocation(getLocation(), 'mindcast', {thought: 'secret thought'}, [{Skill: 'telepathy', Level: 50}]);
+	emitToLocation(getLocation(), 'mindcast', {thought: 'secret thought'}, {Skills: {telepathy: true}, Level: 50});
 	setDescriptions([{Short: 'telepath orb (sent)'}]);
 });
 `
@@ -2246,7 +2246,7 @@ func TestTransmitChallenges(t *testing.T) {
 setExits([{
 	Descriptions: [{Short: 'foggy passage'}],
 	Destination: '%s',
-	TransmitChallenges: [{Skill: 'perception', Level: 50}]
+	TransmitChallenge: {Skills: {perception: true}, Level: 50}
 }]);
 `, roomBID)
 	if err := ts.WriteSource(roomAPath, roomASource); err != nil {
@@ -3318,31 +3318,23 @@ func TestSkillConfig(t *testing.T) {
 	sourcePath := uniqueSourcePath("skill_config_test")
 	// Use unique skill name to avoid conflicts with other tests
 	skillName := fmt.Sprintf("TestConfigSkill_%d", sourceCounter.Load())
+	// Default config: Forget=5184000 (60*24*3600 seconds = 2 months), Recharge=0, Reuse=0
 	skillConfigSource := fmt.Sprintf(`setDescriptions([{Short: 'skill config tester (ready)'}]);
 addCallback('getconfig', ['action'], (msg) => {
 	const config = getSkillConfig('%s');
-	if (config === null) {
-		setDescriptions([{Short: 'skill config tester (config:null)'}]);
-	} else {
-		setDescriptions([{Short: 'skill config tester (config:forget=' + config.Forget + ')'}]);
-	}
+	// Config always exists (defaults if not explicitly set)
+	setDescriptions([{Short: 'skill config tester (config:forget=' + config.Forget + ')'}]);
 });
 addCallback('setconfig', ['action'], (msg) => {
-	// Use updateSkillConfig to set config - null as old value means "doesn't exist yet"
-	const newConfig = {Forget: 3600, Recharge: 1000};
-	const success = updateSkillConfig('%s', null, newConfig);
-	setDescriptions([{Short: 'skill config tester (set:' + success + ')'}]);
+	// Set a new config
+	setSkillConfig('%s', {Forget: 3600, Recharge: 1000, Reuse: 0});
+	setDescriptions([{Short: 'skill config tester (set:done)'}]);
 });
 addCallback('updateconfig', ['action'], (msg) => {
-	// Use updateSkillConfig to update existing config
+	// Update existing config
 	const oldConfig = getSkillConfig('%s');
-	if (oldConfig === null) {
-		setDescriptions([{Short: 'skill config tester (update:noexist)'}]);
-		return;
-	}
-	const newConfig = {Forget: 7200, Recharge: oldConfig.Recharge};
-	const success = updateSkillConfig('%s', oldConfig, newConfig);
-	setDescriptions([{Short: 'skill config tester (update:' + success + ')'}]);
+	setSkillConfig('%s', {Forget: 7200, Recharge: oldConfig.Recharge, Reuse: oldConfig.Reuse});
+	setDescriptions([{Short: 'skill config tester (update:done)'}]);
 });
 `, skillName, skillName, skillName, skillName)
 	if err := ts.WriteSource(sourcePath, skillConfigSource); err != nil {
@@ -3352,16 +3344,16 @@ addCallback('updateconfig', ['action'], (msg) => {
 		t.Fatalf("create skill_config_test: %v", err)
 	}
 
-	// First query - should be null (doesn't exist yet)
+	// First query - should return default config (Forget=5184000)
 	if err := tc.sendLine("getconfig"); err != nil {
 		t.Fatalf("getconfig command: %v", err)
 	}
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		t.Fatal("getconfig command did not complete")
 	}
-	_, found := tc.waitForObject("*skill config tester*config:null*", defaultWaitTimeout)
+	_, found := tc.waitForObject("*skill config tester*config:forget=5184000*", defaultWaitTimeout)
 	if !found {
-		t.Fatal("skill config should be null initially")
+		t.Fatal("skill config should return default initially (Forget=5184000)")
 	}
 
 	// Set the config
@@ -3371,9 +3363,9 @@ addCallback('updateconfig', ['action'], (msg) => {
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		t.Fatal("setconfig command did not complete")
 	}
-	_, found = tc.waitForObject("*skill config tester*set:true*", defaultWaitTimeout)
+	_, found = tc.waitForObject("*skill config tester*set:done*", defaultWaitTimeout)
 	if !found {
-		t.Fatal("updateSkillConfig should return true for new config")
+		t.Fatal("setSkillConfig should complete successfully")
 	}
 
 	// Query again - should now have value
@@ -3388,16 +3380,16 @@ addCallback('updateconfig', ['action'], (msg) => {
 		t.Fatal("skill config should have Forget=3600 after set")
 	}
 
-	// Update the config using CAS
+	// Update the config
 	if err := tc.sendLine("updateconfig"); err != nil {
 		t.Fatalf("updateconfig command: %v", err)
 	}
 	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
 		t.Fatal("updateconfig command did not complete")
 	}
-	_, found = tc.waitForObject("*skill config tester*update:true*", defaultWaitTimeout)
+	_, found = tc.waitForObject("*skill config tester*update:done*", defaultWaitTimeout)
 	if !found {
-		t.Fatal("updateSkillConfig should return true for valid update")
+		t.Fatal("setSkillConfig should complete successfully for update")
 	}
 
 	// Verify update took effect
@@ -3796,7 +3788,7 @@ setExits([
 	{
 		Descriptions: [{Short: 'locked'}],
 		Destination: 'genesis',
-		UseChallenges: [{Skill: 'strength', Level: 100}],
+		UseChallenge: {Skills: {strength: true}, Level: 100},
 	},
 ]);
 `
@@ -3813,7 +3805,7 @@ setExits([
 	hiddenGemSource := `setDescriptions([{
 	Short: 'hidden gem',
 	Long: 'A sparkling gem hidden in the shadows.',
-	Challenges: [{Skill: 'perception', Level: 100}],
+	Challenge: {Skills: {perception: true}, Level: 100},
 }]);
 `
 	if err := ts.WriteSource(hiddenGemPath, hiddenGemSource); err != nil {
@@ -4453,7 +4445,7 @@ func TestTransmitChallengesMovement(t *testing.T) {
 	// - exit to destination (where the object will move to)
 	roomASource := fmt.Sprintf(`setDescriptions([{Short: 'Movement Source Room', Unique: true}]);
 setExits([
-	{Descriptions: [{Short: 'foggy window'}], Destination: '%s', TransmitChallenges: [{Skill: 'perception', Level: 50}]},
+	{Descriptions: [{Short: 'foggy window'}], Destination: '%s', TransmitChallenge: {Skills: {perception: true}, Level: 50}},
 	{Descriptions: [{Short: 'exit'}], Destination: '%s'}
 ]);
 `, roomBID, destID)
