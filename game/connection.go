@@ -711,7 +711,8 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 
 	for _, exit := range loc.GetExits() {
 		if exit.Name() == name || exit.Name() == expandedName {
-			score := exit.UseChallenge.Check(c.game.Context(c.ctx), obj, loc.GetId(), nil)
+			// Use CheckWithDetails to get both score and blamed skill on failure
+			score, blamedSkill := exit.UseChallenge.CheckWithDetails(c.game.Context(c.ctx), obj, loc.GetId())
 			if score > 0 {
 				// Check if the object has a handleMovement callback
 				if obj.HasCallback(handleMovementEventType, emitEventTag) {
@@ -735,18 +736,38 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 				// Default movement (moveObject handles auto-look)
 				return true, juicemud.WithStack(c.game.moveObject(c.ctx, obj, exit.Destination))
 			}
-			// Challenge failed - print message if available
-			if exit.UseChallenge.Message != "" {
+			// Challenge failed - get message from container callback or use default
+			exitFailedContent := map[string]any{
+				"subject":     obj,
+				"exit":        exit,
+				"score":       score,
+				"challenge":   exit.UseChallenge,
+				"blamedSkill": blamedSkill,
+			}
+
+			// Check if container has renderExitFailed callback for custom messages
+			if loc.HasCallback(renderExitFailedEventType, emitEventTag) {
+				value, err := c.game.run(c.ctx, loc, &structs.AnyCall{
+					Name:    renderExitFailedEventType,
+					Tag:     emitEventTag,
+					Content: exitFailedContent,
+				}, nil)
+				if err != nil {
+					log.Printf("renderExitFailed callback error for %s: %v", loc.GetId(), err)
+				} else if value != nil {
+					var resp exitFailedRenderedResponse
+					if err := json.Unmarshal([]byte(*value), &resp); err != nil {
+						log.Printf("renderExitFailed: invalid JSON from %s: %v", loc.GetId(), err)
+					} else if resp.Message != "" {
+						fmt.Fprintln(c.term, resp.Message)
+					}
+				}
+			} else if exit.UseChallenge.Message != "" {
+				// No callback - use default message if available
 				fmt.Fprintln(c.term, exit.UseChallenge.Message)
 			}
-			// Emit exitFailed to container so room JS can handle advanced scenarios.
-			// Use the queue to ensure the canonical object is used and to avoid blocking.
-			exitFailedContent := map[string]any{
-				"subject":   obj,
-				"exit":      exit,
-				"score":     score,
-				"challenge": exit.UseChallenge,
-			}
+
+			// Emit async exitFailed event for additional handling
 			exitFailedJSON, err := json.Marshal(exitFailedContent)
 			if err != nil {
 				return true, juicemud.WithStack(err)

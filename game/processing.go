@@ -248,6 +248,11 @@ type handleMovementRequest struct {
 	Score float64       // The challenge score (how well they passed)
 }
 
+// exitFailedRenderedResponse is returned from a renderExitFailed callback with the message to display.
+type exitFailedRenderedResponse struct {
+	Message string
+}
+
 // emitMovement notifies all objects that can perceive the moving object about the movement.
 // Also notifies source and destination containers about content changes:
 // - source container receives "transmitted" event (lost content)

@@ -1069,6 +1069,121 @@ addCallback('exitFailed', ['emit'], (msg) => {
 	}
 }
 
+// TestRenderExitFailed tests the renderExitFailed callback for custom failure messages.
+func TestRenderExitFailed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := wizardClient
+	ts := testServer
+
+	// Ensure we're in genesis
+	if err := tc.sendLine("/enter #genesis"); err != nil {
+		t.Fatalf("/enter genesis for renderExitFailed: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter genesis for renderExitFailed did not complete")
+	}
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		t.Fatal("should be in genesis for renderExitFailed test")
+	}
+
+	// Create a room with:
+	// 1. An exit with a high-level skill challenge
+	// 2. A renderExitFailed callback that returns a custom message with the blamed skill
+	renderExitFailedRoomPath := uniqueSourcePath("render_exit_failed_room")
+	renderExitFailedRoomSource := `// Room for testing renderExitFailed callback
+setDescriptions([{
+	Short: 'Render Exit Failed Test Room',
+	Unique: true,
+	Long: 'A room for testing the renderExitFailed callback.',
+}]);
+setExits([
+	{
+		Descriptions: [{Short: 'out'}],
+		Destination: 'genesis',
+	},
+	{
+		Descriptions: [{Short: 'magic'}],
+		Destination: 'genesis',
+		UseChallenge: {Skills: {sorcery: true, enchantment: true}, Level: 100},
+	},
+]);
+addCallback('renderExitFailed', ['emit'], (msg) => {
+	// Return custom message using blamedSkill
+	var blamedSkill = msg.blamedSkill || 'unknown skill';
+	return {Message: 'Your weak ' + blamedSkill + ' prevents you from passing!'};
+});
+`
+	if err := ts.WriteSource(renderExitFailedRoomPath, renderExitFailedRoomSource); err != nil {
+		t.Fatalf("failed to create %s: %v", renderExitFailedRoomPath, err)
+	}
+
+	// Create the room
+	renderExitFailedRoomID, err := tc.createObject(renderExitFailedRoomPath)
+	if err != nil {
+		t.Fatalf("create render_exit_failed_room: %v", err)
+	}
+
+	// Enter the room
+	if err := tc.sendLine(fmt.Sprintf("/enter #%s", renderExitFailedRoomID)); err != nil {
+		t.Fatalf("/enter render_exit_failed_room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/enter render_exit_failed_room did not complete")
+	}
+	if !tc.waitForLocation("", renderExitFailedRoomID, defaultWaitTimeout) {
+		t.Fatal("user did not move to render_exit_failed_room")
+	}
+
+	// Try to use the magic exit (should fail - no sorcery/enchantment skills)
+	if err := tc.sendLine("magic"); err != nil {
+		t.Fatalf("magic exit command: %v", err)
+	}
+	// Wait for the custom failure message from renderExitFailed callback
+	output, ok := tc.waitForPrompt(defaultWaitTimeout)
+	if !ok {
+		t.Fatal("magic exit command did not complete")
+	}
+	// Should contain our custom message with blamedSkill
+	if !strings.Contains(output, "Your weak") || !strings.Contains(output, "prevents you from passing") {
+		t.Fatalf("expected custom renderExitFailed message, got: %q", output)
+	}
+	// Should mention either sorcery or enchantment (the blamed skill)
+	if !strings.Contains(output, "sorcery") && !strings.Contains(output, "enchantment") {
+		t.Fatalf("expected blamedSkill (sorcery or enchantment) in message, got: %q", output)
+	}
+
+	// Verify user is still in the room
+	selfInspect, err := tc.inspect("")
+	if err != nil {
+		t.Fatalf("failed to inspect self after renderExitFailed: %v", err)
+	}
+	if selfInspect.GetLocation() != renderExitFailedRoomID {
+		t.Fatalf("user should still be in render_exit_failed_room after failed exit, but is in %q", selfInspect.GetLocation())
+	}
+
+	// Cleanup: exit back to genesis
+	if err := tc.sendLine("out"); err != nil {
+		t.Fatalf("out exit command: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("out exit command did not complete")
+	}
+	if !tc.waitForLocation("", "genesis", defaultWaitTimeout) {
+		t.Fatal("user did not return to genesis after cleanup")
+	}
+
+	// Remove the test room
+	if err := tc.sendLine(fmt.Sprintf("/remove #%s", renderExitFailedRoomID)); err != nil {
+		t.Fatalf("/remove render_exit_failed_room: %v", err)
+	}
+	if _, ok := tc.waitForPrompt(defaultWaitTimeout); !ok {
+		t.Fatal("/remove render_exit_failed_room did not complete")
+	}
+}
+
 // TestSetInterval tests setInterval() and clearInterval() for periodic events.
 func TestSetInterval(t *testing.T) {
 	if testing.Short() {

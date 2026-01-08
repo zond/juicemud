@@ -50,6 +50,11 @@ const (
 	// If no callback is registered, normal movement occurs automatically.
 	handleMovementEventType = "handleMovement"
 
+	// renderExitFailedEventType is sent synchronously to a container when exit challenge fails.
+	// The callback should return a string message to display to the user.
+	// If no callback exists, the exit's UseChallenge.Message is used.
+	renderExitFailedEventType = "renderExitFailed"
+
 	// messageEventType is sent to objects to display a message.
 	// When received by an object with an active connection, the message is printed to their terminal.
 	// Useful for NPC dialogue, system messages, etc.
