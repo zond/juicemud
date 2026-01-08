@@ -2,7 +2,12 @@ package queue
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"os"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -11,11 +16,6 @@ import (
 	"github.com/zond/juicemud/storage/dbm"
 	"github.com/zond/juicemud/structs"
 )
-
-// TimePersister is called periodically to persist the current game time.
-// This allows resuming from the saved time on restart, preventing skills
-// from decaying/recharging during server downtime.
-type TimePersister func(structs.Timestamp) error
 
 // Queue is a persistent priority queue for scheduled events, backed by a B-tree.
 // Events are processed in timestamp order. The offset field handles time jumps
@@ -31,26 +31,52 @@ type TimePersister func(structs.Timestamp) error
 // 1.7e18 + 9e18 ≈ 1.1e19, well within uint64's 1.8e19 limit. The system would
 // need to run until year 2554 for current time alone to overflow int64.
 type Queue struct {
-	tree          *dbm.TypeTree[structs.Event, *structs.Event]
-	offset        atomic.Int64   // Nanosecond offset for time adjustment on restart
-	wake          chan struct{}  // Buffered(1), signals new event pushed
-	timePersister TimePersister  // Called every second to persist game time
+	tree         *dbm.TypeTree[structs.Event, *structs.Event]
+	offset       atomic.Int64  // Nanosecond offset for time adjustment on restart
+	wake         chan struct{} // Buffered(1), signals new event pushed
+	timeFilePath string        // Path to file for persisting game time (empty = no persistence)
 }
 
-// New creates a new Queue. If lastGameTime is non-zero, the queue will resume
-// from that time (preventing skill decay during downtime). The timePersister
-// callback is called every second to save current game time.
-func New(_ context.Context, t *dbm.TypeTree[structs.Event, *structs.Event], lastGameTime structs.Timestamp, timePersister TimePersister) *Queue {
+// New creates a new Queue. If timeFilePath is non-empty, the queue reads the
+// last game time from that file on startup (if it exists) and persists the
+// current game time to it every second during Start(). The parent directory
+// of timeFilePath must exist.
+func New(_ context.Context, t *dbm.TypeTree[structs.Event, *structs.Event], timeFilePath string) *Queue {
 	q := &Queue{
-		tree:          t,
-		wake:          make(chan struct{}, 1),
-		timePersister: timePersister,
+		tree:         t,
+		wake:         make(chan struct{}, 1),
+		timeFilePath: timeFilePath,
 	}
-	// If we have a saved game time, compute offset so Now() returns that time
-	if lastGameTime != 0 {
-		q.offset.Store(int64(lastGameTime) - time.Now().UnixNano())
+	// Try to read last game time from file
+	if timeFilePath != "" {
+		data, err := os.ReadFile(timeFilePath)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				log.Printf("WARNING: failed to read game time from %s: %v (starting fresh)", timeFilePath, err)
+			}
+		} else {
+			ts, parseErr := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+			if parseErr != nil {
+				log.Printf("WARNING: failed to parse game time from %s: %v (starting fresh)", timeFilePath, parseErr)
+			} else if ts != 0 {
+				q.offset.Store(int64(ts) - time.Now().UnixNano())
+			}
+		}
 	}
 	return q
+}
+
+// persistTime writes the current game time to the time file atomically.
+// Uses write-to-temp + rename pattern to prevent corruption on crash.
+func (q *Queue) persistTime() error {
+	if q.timeFilePath == "" {
+		return nil
+	}
+	tmpFile := q.timeFilePath + ".tmp"
+	if err := os.WriteFile(tmpFile, []byte(fmt.Sprintf("%d\n", q.Now())), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpFile, q.timeFilePath)
 }
 
 func (q *Queue) After(dur time.Duration) structs.Timestamp {
@@ -139,18 +165,21 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 	}
 
 	// Start goroutine to persist game time every second
-	if q.timePersister != nil {
+	var persistWG sync.WaitGroup
+	if q.timeFilePath != "" {
+		persistWG.Add(1)
 		go func() {
+			defer persistWG.Done()
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
 					// Best-effort persistence - ignore errors
-					_ = q.timePersister(q.Now())
+					_ = q.persistTime()
 				case <-ctx.Done():
 					// Final persistence on shutdown
-					_ = q.timePersister(q.Now())
+					_ = q.persistTime()
 					return
 				}
 			}
@@ -212,6 +241,7 @@ func (q *Queue) Start(ctx context.Context, handler EventHandler) error {
 				return juicemud.WithStack(err)
 			}
 		case <-ctx.Done():
+			persistWG.Wait() // Wait for final time persistence
 			return juicemud.WithStack(ctx.Err())
 		}
 	}
