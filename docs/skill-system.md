@@ -318,7 +318,7 @@ The offset is randomized per-check to prevent predictable boundaries. The divisi
 
 ## Skill Improvement (Learning)
 
-When `object.Learning` is enabled, skills grow through use. Learning is split into two parts:
+Learning is split into two parts with different requirements:
 
 ### Recovery (Practical catching up to Theoretical)
 
@@ -330,12 +330,15 @@ if gap > 0 {
 skill.Practical += recoveryGain
 ```
 
-- **Always applies** when Practical < Theoretical
+- **Always applies** when Practical < Theoretical (even if `object.Learning` is false)
 - **5% of gap** per fully-recharged use
 - **Doesn't depend on challenge difficulty** - you recover muscle memory regardless
 - **Scales with recharge** - spamming doesn't help recovery
+- **Compensates for forgetting** - NPCs with Learning disabled won't permanently decay
 
 ### Growth (Theoretical increases)
+
+Only applies when `object.Learning` is enabled:
 
 ```go
 upToSpeedCoeff = 1 / (1 + gap)           // Must be at your peak to grow

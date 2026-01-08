@@ -438,9 +438,12 @@ func (o *Object) Roll(ctx Context, skills map[string]bool, target string, precom
 		}
 
 		// Apply learning BEFORE updating LastUsedAt (learning uses time since last use)
+		// Recovery always happens (compensates for forgetting decay)
+		// Growth only happens if Learning is enabled
+		recovery, growth := skill.learningGains(ctx, opposingEffective)
+		skill.Practical += float32(recovery)
 		if o.Unsafe.Learning {
-			recovery, growth := skill.learningGains(ctx, opposingEffective)
-			skill.Practical += float32(recovery + growth)
+			skill.Practical += float32(growth)
 			skill.Theoretical += float32(growth)
 		}
 
