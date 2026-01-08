@@ -166,6 +166,17 @@ func initialObjects() map[string]*structs.ObjectDO {
 	}
 }
 
+// gameContext implements structs.Context, providing game time and server config
+// to skill operations. This is the only implementation of structs.Context.
+type gameContext struct {
+	context.Context
+	nowFn        func() time.Time
+	serverConfig *structs.ServerConfig
+}
+
+func (c *gameContext) Now() time.Time                  { return c.nowFn() }
+func (c *gameContext) ServerConfig() *structs.ServerConfig { return c.serverConfig }
+
 type Game struct {
 	storage              *storage.Storage
 	jsStats              *JSStats
@@ -188,7 +199,7 @@ func (g *Game) GetServerConfig() *structs.ServerConfig {
 // game time (from Queue) and server config. This is used for skill checks
 // and other operations that need both timing and configuration.
 func (g *Game) Context(ctx context.Context) structs.Context {
-	return structs.NewContext(ctx, g.storage.Queue().NowTime, g.serverConfig)
+	return &gameContext{Context: ctx, nowFn: g.storage.Queue().NowTime, serverConfig: g.serverConfig}
 }
 
 // loadServerConfig loads the server config from the root object's state into memory.

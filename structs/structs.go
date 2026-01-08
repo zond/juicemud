@@ -45,26 +45,11 @@ func SkillsKey(skills map[string]bool) string {
 
 // Context provides game-time and configuration access for skill operations.
 // Game time pauses when the server is down, so skills don't decay/recharge
-// during maintenance.
+// during maintenance. The implementation lives in the game package.
 type Context interface {
 	context.Context
 	Now() time.Time           // Game time (may differ from wall clock)
 	ServerConfig() *ServerConfig
-}
-
-// gameContext is the standard implementation of Context.
-type gameContext struct {
-	context.Context
-	nowFn        func() time.Time
-	serverConfig *ServerConfig
-}
-
-func (c *gameContext) Now() time.Time           { return c.nowFn() }
-func (c *gameContext) ServerConfig() *ServerConfig { return c.serverConfig }
-
-// NewContext creates a Context with the given time source and server config.
-func NewContext(ctx context.Context, nowFn func() time.Time, serverConfig *ServerConfig) Context {
-	return &gameContext{Context: ctx, nowFn: nowFn, serverConfig: serverConfig}
 }
 
 type Timestamp uint64
