@@ -1518,3 +1518,99 @@ func TestTakeDamage(t *testing.T) {
 		}
 	})
 }
+
+func TestSelectBodyPart(t *testing.T) {
+	cfg := NewServerConfig()
+	for name, body := range DefaultBodyConfigs() {
+		cfg.SetBodyConfig(name, body)
+	}
+
+	t.Run("selects body parts weighted by HitWeight", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
+		}
+
+		// Run many selections and count frequencies
+		counts := make(map[string]int)
+		rng := rand.New(rand.NewPCG(42, 0))
+		iterations := 10000
+
+		for i := 0; i < iterations; i++ {
+			part, err := obj.SelectBodyPart(ctx, rng)
+			if err != nil {
+				t.Fatalf("SelectBodyPart failed: %v", err)
+			}
+			counts[part]++
+		}
+
+		// Verify torso (highest weight 0.30) is selected more than head (0.10)
+		if counts["torso"] <= counts["head"] {
+			t.Errorf("torso (%d) should be selected more often than head (%d)", counts["torso"], counts["head"])
+		}
+
+		// Verify all non-zero weight parts were selected at least once
+		humanoid := DefaultBodyConfigs()["humanoid"]
+		for partID, partCfg := range humanoid.Parts {
+			if partCfg.HitWeight > 0 && counts[partID] == 0 {
+				t.Errorf("part %q was never selected", partID)
+			}
+		}
+	})
+
+	t.Run("excludes severed parts", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
+		}
+
+		// Sever the torso (normally highest weight)
+		torso := obj.Unsafe.BodyParts["torso"]
+		torso.Severed = true
+		obj.Unsafe.BodyParts["torso"] = torso
+
+		rng := rand.New(rand.NewPCG(42, 0))
+		for i := 0; i < 100; i++ {
+			part, err := obj.SelectBodyPart(ctx, rng)
+			if err != nil {
+				t.Fatalf("SelectBodyPart failed: %v", err)
+			}
+			if part == "torso" {
+				t.Error("severed torso should not be selected")
+			}
+		}
+	})
+
+	t.Run("returns error when all parts severed", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
+		}
+
+		// Sever all parts
+		for partID, state := range obj.Unsafe.BodyParts {
+			state.Severed = true
+			obj.Unsafe.BodyParts[partID] = state
+		}
+
+		rng := rand.New(rand.NewPCG(42, 0))
+		_, err := obj.SelectBodyPart(ctx, rng)
+		if err == nil {
+			t.Error("expected error when all parts severed")
+		}
+	})
+
+	t.Run("returns error for non-combatant", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+
+		rng := rand.New(rand.NewPCG(42, 0))
+		_, err := obj.SelectBodyPart(ctx, rng)
+		if err == nil {
+			t.Error("expected error for non-combatant")
+		}
+	})
+}

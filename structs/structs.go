@@ -19,7 +19,7 @@ import (
 	"github.com/zond/juicemud"
 	"github.com/zond/juicemud/lang"
 
-	rnd "math/rand"
+	"math/rand/v2"
 
 	goccy "github.com/goccy/go-json"
 )
@@ -224,7 +224,7 @@ func (e *Event) CreateKey() {
 // If rng is provided, uses it (allows CheckWithDetails to continue the sequence for blame).
 // Updates skill state (LastUsedAt, LastBase) and applies learning if enabled.
 // IMPORTANT: Caller must hold write access to the challenger (modifies Skills).
-func (c *Challenge) Check(ctx Context, challenger *Object, targetID string, rng *rnd.Rand) float64 {
+func (c *Challenge) Check(ctx Context, challenger *Object, targetID string, rng *rand.Rand) float64 {
 	if !c.HasChallenge() {
 		return 1 // No challenge means automatic success (positive score)
 	}
@@ -424,7 +424,7 @@ func (o *Object) EffectiveSkills(ctx Context, skills map[string]bool) float64 {
 // If rng is nil, generates one internally using multiSkillRng.
 // If rng is provided, uses it (for static challenges needing multiple rolls from same sequence).
 // IMPORTANT: Caller must hold write access to the object (modifies Skills).
-func (o *Object) Roll(ctx Context, skills map[string]bool, target string, precomputedEffective, opposingEffective float64, rng *rnd.Rand) float64 {
+func (o *Object) Roll(ctx Context, skills map[string]bool, target string, precomputedEffective, opposingEffective float64, rng *rand.Rand) float64 {
 	if rng == nil {
 		rng = multiSkillRng(ctx, skills, o.Unsafe.Id, target)
 	}
@@ -1025,7 +1025,7 @@ func (s *Skill) chargedPracticalLevel(ctx Context) float64 {
 }
 
 // multiSkillRng returns a deterministic RNG seeded by user, skills, target, and time window.
-func multiSkillRng(ctx Context, skills map[string]bool, user, target string) *rnd.Rand {
+func multiSkillRng(ctx Context, skills map[string]bool, user, target string) *rand.Rand {
 	skillKey := SkillsKey(skills)
 
 	h := fnv.New64()
@@ -1049,14 +1049,14 @@ func multiSkillRng(ctx Context, skills map[string]bool, user, target string) *rn
 	h.Write(b)
 
 	// Use the hash to seed an rng.
-	result := rnd.New(rnd.NewSource(int64(h.Sum64())))
+	result := rand.New(rand.NewPCG(h.Sum64(), 0))
 
 	// If there's a duration, reseed with a second step based on a random offset.
 	if duration != 0 {
-		offset := result.Int63n(duration.Nanoseconds())
+		offset := result.Int64N(duration.Nanoseconds())
 		binary.BigEndian.PutUint64(b, uint64((at.UnixNano()+offset)/duration.Nanoseconds()/3))
 		h.Write(b)
-		result = rnd.New(rnd.NewSource(int64(h.Sum64())))
+		result = rand.New(rand.NewPCG(h.Sum64(), 0))
 	}
 
 	return result

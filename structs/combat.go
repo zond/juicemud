@@ -1,6 +1,10 @@
 package structs
 
-import "github.com/pkg/errors"
+import (
+	"math/rand/v2"
+
+	"github.com/pkg/errors"
+)
 
 // WoundLevel constants define bleeding severity.
 const (
@@ -113,6 +117,61 @@ func (o *Object) BodyPartsInitialized() bool {
 	o.RLock()
 	defer o.RUnlock()
 	return len(o.Unsafe.BodyParts) > 0
+}
+
+// SelectBodyPart selects a random body part weighted by HitWeight.
+// Severed parts are excluded from selection.
+// Returns the selected body part ID, or error if no valid parts exist.
+// This method is thread-safe.
+func (o *Object) SelectBodyPart(ctx Context, rng *rand.Rand) (string, error) {
+	o.RLock()
+	defer o.RUnlock()
+
+	if o.Unsafe.BodyConfigID == "" {
+		return "", errors.New("object has no body config")
+	}
+
+	bodyCfg, ok := ctx.ServerConfig().GetBodyConfig(o.Unsafe.BodyConfigID)
+	if !ok {
+		return "", errors.Errorf("body config %q not found", o.Unsafe.BodyConfigID)
+	}
+
+	// Build list of valid (non-severed) parts with their weights
+	type weightedPart struct {
+		id     string
+		weight float64
+	}
+	var parts []weightedPart
+	var totalWeight float64
+
+	for partID, partCfg := range bodyCfg.Parts {
+		state, exists := o.Unsafe.BodyParts[partID]
+		if !exists || state.Severed {
+			continue
+		}
+		if partCfg.HitWeight > 0 {
+			parts = append(parts, weightedPart{partID, partCfg.HitWeight})
+			totalWeight += partCfg.HitWeight
+		}
+	}
+
+	if len(parts) == 0 || totalWeight <= 0 {
+		return "", errors.New("no valid body parts to hit")
+	}
+
+	// Select based on weighted roll
+	roll := rng.Float64()
+	target := roll * totalWeight
+	cumulative := 0.0
+	for _, p := range parts {
+		cumulative += p.weight
+		if target < cumulative {
+			return p.id, nil
+		}
+	}
+
+	// Fallback to last part (handles floating point edge cases)
+	return parts[len(parts)-1].id, nil
 }
 
 // findCentralPartID returns the ID of the central body part (typically "torso").
