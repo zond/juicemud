@@ -656,6 +656,84 @@ type objectAttempter struct {
 	id string
 }
 
+// findExitByDirection returns the first exit matching the command name.
+// It expands direction aliases (e.g., "n" -> "north") and matches both
+// the original name and the expanded alias.
+func findExitByDirection(exits []structs.Exit, name string) *structs.Exit {
+	expandedName := name
+	if alias, ok := directionAliases[name]; ok {
+		expandedName = alias
+	}
+	for i := range exits {
+		if exits[i].Name() == name || exits[i].Name() == expandedName {
+			return &exits[i]
+		}
+	}
+	return nil
+}
+
+// handleExitChallengeFailed handles a failed exit challenge by displaying an error message.
+// It first checks for a custom renderExitFailed callback on the container,
+// then falls back to the exit's default message.
+func (o objectAttempter) handleExitChallengeFailed(c *Connection, loc *structs.Object, obj *structs.Object, exit *structs.Exit, score float64, blamedSkill string) error {
+	exitFailedContent := map[string]any{
+		"subject":     obj,
+		"exit":        exit,
+		"score":       score,
+		"challenge":   exit.UseChallenge,
+		"blamedSkill": blamedSkill,
+	}
+
+	if loc.HasCallback(renderExitFailedEventType, emitEventTag) {
+		value, err := c.game.run(c.ctx, loc, &structs.AnyCall{
+			Name:    renderExitFailedEventType,
+			Tag:     emitEventTag,
+			Content: exitFailedContent,
+		}, nil)
+		if err != nil {
+			log.Printf("renderExitFailed callback error for %s: %v", loc.GetId(), err)
+		} else if value != nil {
+			var resp exitFailedRenderedResponse
+			if err := json.Unmarshal([]byte(*value), &resp); err != nil {
+				log.Printf("renderExitFailed: invalid JSON from %s: %v", loc.GetId(), err)
+			} else if resp.Message != "" {
+				fmt.Fprintln(c.term, resp.Message)
+			}
+		}
+	} else if exit.UseChallenge.Message != "" {
+		fmt.Fprintln(c.term, exit.UseChallenge.Message)
+	}
+
+	// Emit async exitFailed event for additional handling
+	exitFailedJSON, err := json.Marshal(exitFailedContent)
+	if err != nil {
+		return juicemud.WithStack(err)
+	}
+	return juicemud.WithStack(c.game.emitJSON(c.ctx, c.game.storage.Queue().After(0), loc.GetId(), "exitFailed", string(exitFailedJSON)))
+}
+
+// handleExitMovement handles moving an object through an exit.
+// If the object has a handleMovement callback, it lets JS decide whether to move.
+// Otherwise, it performs the default movement.
+func (o objectAttempter) handleExitMovement(c *Connection, obj *structs.Object, exit *structs.Exit, score float64) error {
+	if obj.HasCallback(handleMovementEventType, emitEventTag) {
+		_, err := c.game.run(c.ctx, obj, &structs.AnyCall{
+			Name: handleMovementEventType,
+			Tag:  emitEventTag,
+			Content: &handleMovementRequest{
+				Exit:  exit,
+				Score: score,
+			},
+		}, nil)
+		if err == nil {
+			return nil
+		}
+		// JS error - log for debugging, fall through to default movement
+		log.Printf("handleMovement callback error for %s: %v", obj.GetId(), err)
+	}
+	return juicemud.WithStack(c.game.moveObject(c.ctx, obj, exit.Destination))
+}
+
 func (o objectAttempter) attempt(c *Connection, name string, line string) (found bool, err error) {
 	obj, err := c.game.accessObject(c.ctx, o.id)
 	if err != nil {
@@ -699,84 +777,13 @@ func (o objectAttempter) attempt(c *Connection, name string, line string) (found
 		return false, juicemud.WithStack(err)
 	}
 
-	// Check for direction alias (e.g., "n" -> "north").
-	// We match both the original name AND the expanded alias, so:
-	// - "n" matches exits named "n" or "north"
-	// - "north" matches exits named "north"
-	// This allows short aliases while still supporting custom exit names.
-	expandedName := name
-	if alias, ok := directionAliases[name]; ok {
-		expandedName = alias
-	}
-
-	for _, exit := range loc.GetExits() {
-		if exit.Name() == name || exit.Name() == expandedName {
-			// Use CheckWithDetails to get both score and blamed skill on failure
-			score, blamedSkill := exit.UseChallenge.CheckWithDetails(c.game.Context(c.ctx), obj, loc.GetId())
-			if score > 0 {
-				// Check if the object has a handleMovement callback
-				if obj.HasCallback(handleMovementEventType, emitEventTag) {
-					// Let JS handle the movement decision
-					// JS can call moveObject(getId(), exit.Destination) if it wants to move
-					_, err := c.game.run(c.ctx, obj, &structs.AnyCall{
-						Name: handleMovementEventType,
-						Tag:  emitEventTag,
-						Content: &handleMovementRequest{
-							Exit:  &exit,
-							Score: score,
-						},
-					}, nil)
-					if err == nil {
-						// JS handled it (moveObject handles auto-look)
-						return true, nil
-					}
-					// JS error - log for debugging, fall through to default movement
-					log.Printf("handleMovement callback error for %s: %v", obj.GetId(), err)
-				}
-				// Default movement (moveObject handles auto-look)
-				return true, juicemud.WithStack(c.game.moveObject(c.ctx, obj, exit.Destination))
-			}
-			// Challenge failed - get message from container callback or use default
-			exitFailedContent := map[string]any{
-				"subject":     obj,
-				"exit":        exit,
-				"score":       score,
-				"challenge":   exit.UseChallenge,
-				"blamedSkill": blamedSkill,
-			}
-
-			// Check if container has renderExitFailed callback for custom messages
-			if loc.HasCallback(renderExitFailedEventType, emitEventTag) {
-				value, err := c.game.run(c.ctx, loc, &structs.AnyCall{
-					Name:    renderExitFailedEventType,
-					Tag:     emitEventTag,
-					Content: exitFailedContent,
-				}, nil)
-				if err != nil {
-					log.Printf("renderExitFailed callback error for %s: %v", loc.GetId(), err)
-				} else if value != nil {
-					var resp exitFailedRenderedResponse
-					if err := json.Unmarshal([]byte(*value), &resp); err != nil {
-						log.Printf("renderExitFailed: invalid JSON from %s: %v", loc.GetId(), err)
-					} else if resp.Message != "" {
-						fmt.Fprintln(c.term, resp.Message)
-					}
-				}
-			} else if exit.UseChallenge.Message != "" {
-				// No callback - use default message if available
-				fmt.Fprintln(c.term, exit.UseChallenge.Message)
-			}
-
-			// Emit async exitFailed event for additional handling
-			exitFailedJSON, err := json.Marshal(exitFailedContent)
-			if err != nil {
-				return true, juicemud.WithStack(err)
-			}
-			if err := c.game.emitJSON(c.ctx, c.game.storage.Queue().After(0), loc.GetId(), "exitFailed", string(exitFailedJSON)); err != nil {
-				return true, juicemud.WithStack(err)
-			}
-			return true, nil
+	// Check if the command matches an exit (with direction alias expansion)
+	if exit := findExitByDirection(loc.GetExits(), name); exit != nil {
+		score, blamedSkill := exit.UseChallenge.CheckWithDetails(c.game.Context(c.ctx), obj, loc.GetId())
+		if score > 0 {
+			return true, o.handleExitMovement(c, obj, exit, score)
 		}
+		return true, o.handleExitChallengeFailed(c, loc, obj, exit, score, blamedSkill)
 	}
 
 	cont := loc.GetContent()
