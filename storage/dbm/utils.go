@@ -3,6 +3,7 @@ package dbm
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,84 +21,56 @@ func withFile(t testing.TB, suffix string, f func(string)) {
 	f(filepath.Join(tmpDir, fmt.Sprintf("test%s", suffix)))
 }
 
-func WithHash(t testing.TB, f func(*Hash)) {
+func withDB[T io.Closer](t testing.TB, suffix string, open func(string) (T, error), f func(T)) {
 	t.Helper()
-	withFile(t, ".tkh", func(path string) {
-		dbm, err := OpenHash(path)
+	withFile(t, suffix, func(path string) {
+		db, err := open(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() {
-			if err := dbm.Close(); err != nil {
+			if err := db.Close(); err != nil {
 				t.Fatal(err)
 			}
 		}()
-		f(dbm)
+		f(db)
 	})
+}
+
+func WithHash(t testing.TB, f func(*Hash)) {
+	t.Helper()
+	withDB(t, ".tkh", OpenHash, f)
 }
 
 func WithTypeHash[T any, S structs.Serializable[T]](t testing.TB, f func(*TypeHash[T, S])) {
 	t.Helper()
-	withFile(t, ".tkh", func(path string) {
-		dbm, err := OpenTypeHash[T, S](path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() {
-			if err := dbm.Close(); err != nil {
-				t.Fatal(err)
-			}
-		}()
-		f(dbm)
-	})
+	withDB(t, ".tkh", OpenTypeHash[T, S], f)
 }
 
 func WithLiveTypeHash[T any, S structs.Snapshottable[T]](t testing.TB, f func(*LiveTypeHash[T, S])) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	withFile(t, ".tkh", func(path string) {
-		dbm, err := OpenLiveTypeHash[T, S](ctx, path)
+		db, err := OpenLiveTypeHash[T, S](ctx, path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() {
-			cancel() // Cancel context first so flush goroutine stops
-			if err := dbm.Close(); err != nil {
+			cancel()
+			if err := db.Close(); err != nil {
 				t.Fatal(err)
 			}
 		}()
-		f(dbm)
+		f(db)
 	})
 }
 
 func WithTree(t testing.TB, f func(*Tree)) {
 	t.Helper()
-	withFile(t, ".tkt", func(path string) {
-		dbm, err := OpenTree(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() {
-			if err := dbm.Close(); err != nil {
-				t.Fatal(err)
-			}
-		}()
-		f(dbm)
-	})
+	withDB(t, ".tkt", OpenTree, f)
 }
 
 func WithTypeTree[T any, S structs.Serializable[T]](t testing.TB, f func(*TypeTree[T, S])) {
 	t.Helper()
-	withFile(t, ".tkt", func(path string) {
-		dbm, err := OpenTypeTree[T, S](path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() {
-			if err := dbm.Close(); err != nil {
-				t.Fatal(err)
-			}
-		}()
-		f(dbm)
-	})
+	withDB(t, ".tkt", OpenTypeTree[T, S], f)
 }
