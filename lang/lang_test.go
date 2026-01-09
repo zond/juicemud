@@ -55,10 +55,12 @@ func TestCapitalize(t *testing.T) {
 		input    string
 		expected string
 	}{
+		{"", ""},
 		{"sword", "Sword"},
 		{"hello world", "Hello world"},
 		{"ALREADY", "ALREADY"},
 		{"a", "A"},
+		{"A", "A"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -154,6 +156,12 @@ func TestEnumerator(t *testing.T) {
 		elements []string
 		expected string
 	}{
+		{
+			name:     "empty",
+			enum:     Enumerator{},
+			elements: []string{},
+			expected: "",
+		},
 		{
 			name:     "single element",
 			enum:     Enumerator{},
