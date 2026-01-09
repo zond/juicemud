@@ -39,6 +39,30 @@ Last updated: 2026-01-09
   - Extracted `addLifecycleCallbacks` (getNeighbourhood, getId, createObject, removeObject, print)
   - Pure refactoring, no behavioral changes
 
+### storage/dbm/utils.go - Test helpers
+- **Before:** 5 nearly identical `With*` functions (~90 lines)
+- **After:** Generic `withDB[T io.Closer]` helper (~76 lines, -27 lines)
+- **Changes:**
+  - Created generic helper handling open/close pattern
+  - 4 functions reduced from 14 lines to 3 lines each
+  - WithLiveTypeHash kept separate (unique context handling)
+
+### storage/dbm/dbm.go - Status error handling
+- **Before:** Same status check pattern repeated ~10 times
+- **After:** `checkStatus` helper function (-12 lines)
+- **Changes:**
+  - Added `checkStatus(stat, notFoundMsg)` helper
+  - Applied to 6 call sites
+  - Fixed gopls hints (loop variable captures, backoff simplification)
+
+### js/js.go - Target.Run
+- **Before:** ~70-line function doing setup, execution, callback, result
+- **After:** Split into Run (~27 lines) + invokeCallback (~45 lines)
+- **Changes:**
+  - Extracted callback invocation to separate method
+  - Cleaner control flow with early returns
+  - Eliminated variable shadowing
+
 ---
 
 ## Medium Priority
@@ -135,47 +159,9 @@ Last updated: 2026-01-09
 - Extract complex handlers to named methods
 - Use consistent argument parsing pattern
 
-### 10. storage/dbm/utils.go - Test helpers (~90 lines)
-**Priority: MEDIUM** - High impact, reduces duplication
-
-**Issues:**
-- 5 nearly identical `With*` functions (WithHash, WithTypeHash, WithLiveTypeHash, WithTree, WithTypeTree)
-- Each differs only in type and open function
-
-**Suggested fix:**
-- Create generic helper `withDB[T any](open, close func)` or table-driven approach
-- Could reduce to ~40 lines
-
----
-
-### 11. storage/dbm/dbm.go - Status error handling pattern
-**Priority: MEDIUM** - Appears ~10 times
-
-**Issues:**
-- Same `if stat.GetCode() == tkrzw.StatusNotFoundError ... else if !stat.IsOK()` pattern repeated
-- ~50 lines scattered across file
-
-**Suggested fix:**
-- Create `checkStatus(stat, notFoundFormat, args...)` helper
-
----
-
-### 12. js/js.go - Target.Run (~70 lines)
-**Priority: MEDIUM**
-
-**Issues:**
-- Large function: setup, script execution, callback lookup, result collection
-- Callback invocation block (lines 342-385) is distinct concern
-
-**Suggested fix:**
-- Extract `invokeCallback()` method
-- Could reduce to ~45 lines
-
----
-
 ## Low Priority
 
-### 13. game/connection.go - parseShellTokens (~60 lines)
+### 10. game/connection.go - parseShellTokens (~60 lines)
 **Issues:** Complex state machine, already using `shellwords` elsewhere
 **Suggested fix:** Replace with `shellwords` library or document edge cases
 
