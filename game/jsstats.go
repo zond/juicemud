@@ -535,24 +535,27 @@ func (s *JSStats) RecordExecution(sourcePath, objectID string, duration time.Dur
 	}
 }
 
-// RecordError records a JavaScript execution error with its context.
-// This should be called from run() when JS execution fails.
-// sourcePath is the source file path (e.g., "/user.js").
-// objectID is the object that executed the script.
-// err is the error that occurred.
-// duration is the execution time up until the error (0 if unknown, may be partial).
-// intervalInfo is optional interval metadata (nil for non-interval events).
-func (s *JSStats) RecordError(sourcePath, objectID string, err error, duration time.Duration, intervalInfo *IntervalExecInfo) {
+// errorRecordParams contains parameters for recording an error.
+type errorRecordParams struct {
+	sourcePath   string
+	objectID     string
+	duration     time.Duration
+	intervalInfo *IntervalExecInfo
+	// updateScript controls whether per-script stats are updated
+	updateScript bool
+	// updateObject controls whether per-object stats are updated
+	updateObject bool
+	// updateObjectScript controls whether obj.ByScript is updated
+	updateObjectScript bool
+}
+
+// recordErrorInternal is the unified internal implementation for all error recording.
+// It handles global counters, per-entity stats, location stats, and recent records.
+func (s *JSStats) recordErrorInternal(err error, params errorRecordParams) {
 	if err == nil {
 		return
 	}
 
-	// Handle edge cases
-	if sourcePath == "" {
-		sourcePath = "(no source)"
-	}
-
-	// Classify the error
 	category, location, message := classifyError(err)
 	locStr := location.String()
 	truncMsg := truncateMessage(message)
@@ -567,36 +570,42 @@ func (s *JSStats) RecordError(sourcePath, objectID string, err error, duration t
 	s.byCategory[category]++
 
 	// Update per-script stats
-	script, _ := s.scripts.Get(sourcePath)
-	if script == nil {
-		script = newScriptStats()
+	if params.updateScript && params.sourcePath != "" {
+		script, _ := s.scripts.Get(params.sourcePath)
+		if script == nil {
+			script = newScriptStats()
+		}
+		script.Errors++
+		script.LastError = now
+		script.ByCategory[category]++
+		script.ByLocation[locStr]++
+		limitCountMap(script.ByLocation, maxLocationsPerEntity)
+		s.scripts.Set(params.sourcePath, script, 0)
 	}
-	script.Errors++
-	script.LastError = now
-	script.ByCategory[category]++
-	script.ByLocation[locStr]++
-	limitCountMap(script.ByLocation, maxLocationsPerEntity)
-	s.scripts.Set(sourcePath, script, 0)
 
 	// Update per-object stats
-	obj, _ := s.objects.Get(objectID)
-	if obj == nil {
-		obj = newObjectExecStats()
+	if params.updateObject && params.objectID != "" {
+		obj, _ := s.objects.Get(params.objectID)
+		if obj == nil {
+			obj = newObjectExecStats()
+		}
+		obj.Errors++
+		obj.LastError = now
+		obj.ByCategory[category]++
+		obj.ByLocation[locStr]++
+		limitCountMap(obj.ByLocation, maxLocationsPerEntity)
+		if params.updateObjectScript && params.sourcePath != "" {
+			obj.ByScript[params.sourcePath]++
+			limitCountMap(obj.ByScript, maxLocationsPerEntity)
+			obj.SourcePath = params.sourcePath
+		}
+		s.objects.Set(params.objectID, obj, 0)
 	}
-	obj.Errors++
-	obj.LastError = now
-	obj.ByCategory[category]++
-	obj.ByLocation[locStr]++
-	limitCountMap(obj.ByLocation, maxLocationsPerEntity)
-	obj.ByScript[sourcePath]++
-	limitCountMap(obj.ByScript, maxLocationsPerEntity)
-	obj.SourcePath = sourcePath // Update current source
-	s.objects.Set(objectID, obj, 0)
 
-	// Update per-interval stats if this is an interval execution
+	// Update per-interval stats
 	var intervalID string
-	if intervalInfo != nil && intervalInfo.IntervalID != "" {
-		intervalID = intervalInfo.IntervalID
+	if params.intervalInfo != nil && params.intervalInfo.IntervalID != "" {
+		intervalID = params.intervalInfo.IntervalID
 		interval, _ := s.intervals.Get(intervalID)
 		if interval == nil {
 			interval = newIntervalExecStats()
@@ -606,8 +615,10 @@ func (s *JSStats) RecordError(sourcePath, objectID string, err error, duration t
 		interval.ByCategory[category]++
 		interval.ByLocation[locStr]++
 		limitCountMap(interval.ByLocation, maxLocationsPerEntity)
-		interval.ObjectID = objectID
-		interval.EventName = intervalInfo.EventName
+		interval.ObjectID = params.objectID
+		if params.intervalInfo.EventName != "" {
+			interval.EventName = params.intervalInfo.EventName
+		}
 		s.intervals.Set(intervalID, interval, 0)
 	}
 
@@ -626,16 +637,38 @@ func (s *JSStats) RecordError(sourcePath, objectID string, err error, duration t
 	// Add to recent records buffer
 	s.recentRecords[s.recordIndex] = ExecutionRecord{
 		Timestamp:  now,
-		ObjectID:   objectID,
-		SourcePath: sourcePath,
+		ObjectID:   params.objectID,
+		SourcePath: params.sourcePath,
 		IntervalID: intervalID,
-		Duration:   duration,
+		Duration:   params.duration,
 		IsError:    true,
 		Category:   category,
 		Location:   location,
 		Message:    truncMsg,
 	}
 	s.recordIndex = (s.recordIndex + 1) % recentBufferSize
+}
+
+// RecordError records a JavaScript execution error with its context.
+// This should be called from run() when JS execution fails.
+// sourcePath is the source file path (e.g., "/user.js").
+// objectID is the object that executed the script.
+// err is the error that occurred.
+// duration is the execution time up until the error (0 if unknown, may be partial).
+// intervalInfo is optional interval metadata (nil for non-interval events).
+func (s *JSStats) RecordError(sourcePath, objectID string, err error, duration time.Duration, intervalInfo *IntervalExecInfo) {
+	if sourcePath == "" {
+		sourcePath = "(no source)"
+	}
+	s.recordErrorInternal(err, errorRecordParams{
+		sourcePath:         sourcePath,
+		objectID:           objectID,
+		duration:           duration,
+		intervalInfo:       intervalInfo,
+		updateScript:       true,
+		updateObject:       true,
+		updateObjectScript: true,
+	})
 }
 
 // RecordLoadError records a pre-run loading error (e.g., AccessObject failure).
@@ -643,123 +676,22 @@ func (s *JSStats) RecordError(sourcePath, objectID string, err error, duration t
 // objectID is the object that failed to load.
 // err is the error that occurred.
 func (s *JSStats) RecordLoadError(objectID string, err error) {
-	if err == nil {
-		return
-	}
-
-	// Classify the error
-	category, location, message := classifyError(err)
-	locStr := location.String()
-	truncMsg := truncateMessage(message)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now()
-
-	// Update global counters
-	s.totalErrors++
-	s.byCategory[category]++
-
-	// Update per-object stats (no script path for load errors)
-	obj, _ := s.objects.Get(objectID)
-	if obj == nil {
-		obj = newObjectExecStats()
-	}
-	obj.Errors++
-	obj.LastError = now
-	obj.ByCategory[category]++
-	limitCountMap(obj.ByLocation, maxLocationsPerEntity)
-	obj.ByLocation[locStr]++
-	s.objects.Set(objectID, obj, 0)
-
-	// Update per-location stats
-	loc, _ := s.locations.Get(locStr)
-	if loc == nil {
-		loc = &LocationStats{
-			Location:  locStr,
-			FirstSeen: now,
-		}
-	}
-	loc.Count++
-	loc.LastSeen = now
-	s.locations.Set(locStr, loc, 0)
-
-	// Add to recent records buffer
-	s.recentRecords[s.recordIndex] = ExecutionRecord{
-		Timestamp:  now,
-		ObjectID:   objectID,
-		SourcePath: "(load error)",
-		Duration:   0,
-		IsError:    true,
-		Category:   category,
-		Location:   location,
-		Message:    truncMsg,
-	}
-	s.recordIndex = (s.recordIndex + 1) % recentBufferSize
+	s.recordErrorInternal(err, errorRecordParams{
+		sourcePath:   "(load error)",
+		objectID:     objectID,
+		updateObject: true,
+	})
 }
 
 // RecordBootError records a boot.js execution error.
 // Boot JS doesn't go through run(), so it needs separate handling.
 // err is the error that occurred during boot.js execution.
 func (s *JSStats) RecordBootError(err error) {
-	if err == nil {
-		return
-	}
-
-	const bootSourcePath = "(boot.js)"
-	const bootObjectID = "(boot)"
-
-	// Classify the error
-	category, location, message := classifyError(err)
-	locStr := location.String()
-	truncMsg := truncateMessage(message)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now()
-
-	// Update global counters
-	s.totalErrors++
-	s.byCategory[category]++
-
-	// Update per-script stats for boot
-	script, _ := s.scripts.Get(bootSourcePath)
-	if script == nil {
-		script = newScriptStats()
-	}
-	script.Errors++
-	script.LastError = now
-	script.ByCategory[category]++
-	limitCountMap(script.ByLocation, maxLocationsPerEntity)
-	script.ByLocation[locStr]++
-	s.scripts.Set(bootSourcePath, script, 0)
-
-	// Update per-location stats
-	loc, _ := s.locations.Get(locStr)
-	if loc == nil {
-		loc = &LocationStats{
-			Location:  locStr,
-			FirstSeen: now,
-		}
-	}
-	loc.Count++
-	loc.LastSeen = now
-	s.locations.Set(locStr, loc, 0)
-
-	// Add to recent records buffer
-	s.recentRecords[s.recordIndex] = ExecutionRecord{
-		Timestamp:  now,
-		ObjectID:   bootObjectID,
-		SourcePath: bootSourcePath,
-		Duration:   0,
-		IsError:    true,
-		Category:   category,
-		Location:   location,
-		Message:    truncMsg,
-	}
-	s.recordIndex = (s.recordIndex + 1) % recentBufferSize
+	s.recordErrorInternal(err, errorRecordParams{
+		sourcePath:   "(boot.js)",
+		objectID:     "(boot)",
+		updateScript: true,
+	})
 }
 
 // RecordRecoveryError records an interval recovery or re-enqueue error.
@@ -768,78 +700,16 @@ func (s *JSStats) RecordBootError(err error) {
 // intervalID is the interval that failed recovery.
 // err is the error that occurred.
 func (s *JSStats) RecordRecoveryError(objectID, intervalID string, err error) {
-	if err == nil {
-		return
-	}
-
-	const recoverySourcePath = "(recovery)"
-
-	// Classify the error
-	category, location, message := classifyError(err)
-	locStr := location.String()
-	truncMsg := truncateMessage(message)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now()
-
-	// Update global counters
-	s.totalErrors++
-	s.byCategory[category]++
-
-	// Update per-object stats
-	obj, _ := s.objects.Get(objectID)
-	if obj == nil {
-		obj = newObjectExecStats()
-	}
-	obj.Errors++
-	obj.LastError = now
-	obj.ByCategory[category]++
-	limitCountMap(obj.ByLocation, maxLocationsPerEntity)
-	obj.ByLocation[locStr]++
-	s.objects.Set(objectID, obj, 0)
-
-	// Update per-interval stats
+	var intervalInfo *IntervalExecInfo
 	if intervalID != "" {
-		interval, _ := s.intervals.Get(intervalID)
-		if interval == nil {
-			interval = newIntervalExecStats()
-		}
-		interval.Errors++
-		interval.LastError = now
-		interval.ByCategory[category]++
-		interval.ByLocation[locStr]++
-		limitCountMap(interval.ByLocation, maxLocationsPerEntity)
-		interval.ObjectID = objectID
-		s.intervals.Set(intervalID, interval, 0)
+		intervalInfo = &IntervalExecInfo{IntervalID: intervalID}
 	}
-
-	// Update per-location stats
-	loc, _ := s.locations.Get(locStr)
-	if loc == nil {
-		loc = &LocationStats{
-			Location:  locStr,
-			FirstSeen: now,
-		}
-	}
-	loc.Count++
-	loc.LastSeen = now
-	s.locations.Set(locStr, loc, 0)
-
-	// Add to recent records buffer
-	s.recentRecords[s.recordIndex] = ExecutionRecord{
-		Timestamp:  now,
-		ObjectID:   objectID,
-		SourcePath: recoverySourcePath,
-		IntervalID: intervalID,
-		Duration:   0,
-		IsError:    true,
-		Category:   category,
-		Location:   location,
-		Message:    truncMsg,
-	}
-	s.recordIndex = (s.recordIndex + 1) % recentBufferSize
+	s.recordErrorInternal(err, errorRecordParams{
+		sourcePath:   "(recovery)",
+		objectID:     objectID,
+		intervalInfo: intervalInfo,
+		updateObject: true,
+	})
 }
 
 // UpdateRates should be called periodically to update EMA rate calculations.
@@ -940,6 +810,48 @@ type TimeRateSnapshot struct {
 	PerDay    float64 // JS sec/wall sec, 24h EMA window
 }
 
+// snapshot returns a RateSnapshot from RateStats.
+func (r *RateStats) snapshot() RateSnapshot {
+	return RateSnapshot{
+		PerSecond: r.SecondRate,
+		PerMinute: r.MinuteRate,
+		PerHour:   r.HourRate,
+		PerDay:    r.DayRate,
+	}
+}
+
+// snapshot returns a TimeRateSnapshot from TimeRateStats.
+func (r *TimeRateStats) snapshot() TimeRateSnapshot {
+	return TimeRateSnapshot{
+		PerSecond: r.SecondRate,
+		PerMinute: r.MinuteRate,
+		PerHour:   r.HourRate,
+		PerDay:    r.DayRate,
+	}
+}
+
+// execStatsMetrics holds computed snapshot metrics from execution statistics.
+type execStatsMetrics struct {
+	avgTimeMs    float64
+	minTimeMs    float64
+	maxTimeMs    float64
+	slowPercent  float64
+	errorPercent float64
+}
+
+// calcExecMetrics computes derived metrics from raw execution statistics.
+func calcExecMetrics(executions, totalTimeNs, minTimeNs, maxTimeNs, slowCount, errors uint64) execStatsMetrics {
+	var m execStatsMetrics
+	m.maxTimeMs = float64(maxTimeNs) / 1e6
+	if executions > 0 {
+		m.avgTimeMs = float64(totalTimeNs) / float64(executions) / 1e6
+		m.minTimeMs = float64(minTimeNs) / 1e6
+		m.slowPercent = float64(slowCount) / float64(executions) * 100
+		m.errorPercent = float64(errors) / float64(executions) * 100
+	}
+	return m
+}
+
 // ScriptSnapshot contains stats for one script path.
 type ScriptSnapshot struct {
 	// Identity
@@ -1028,6 +940,26 @@ type LocationSnapshot struct {
 	LastSeen  time.Time
 }
 
+// sortable interface implementations for snapshot types
+
+func (s ScriptSnapshot) totalTime() float64    { return s.AvgTimeMs * float64(s.Executions) }
+func (s ScriptSnapshot) executions() uint64    { return s.Executions }
+func (s ScriptSnapshot) slowCount() uint64     { return s.SlowCount }
+func (s ScriptSnapshot) errors() uint64        { return s.Errors }
+func (s ScriptSnapshot) errorPercent() float64 { return s.ErrorPercent }
+
+func (s ObjectExecSnapshot) totalTime() float64    { return s.AvgTimeMs * float64(s.Executions) }
+func (s ObjectExecSnapshot) executions() uint64    { return s.Executions }
+func (s ObjectExecSnapshot) slowCount() uint64     { return s.SlowCount }
+func (s ObjectExecSnapshot) errors() uint64        { return s.Errors }
+func (s ObjectExecSnapshot) errorPercent() float64 { return s.ErrorPercent }
+
+func (s IntervalExecSnapshot) totalTime() float64    { return s.AvgTimeMs * float64(s.Executions) }
+func (s IntervalExecSnapshot) executions() uint64    { return s.Executions }
+func (s IntervalExecSnapshot) slowCount() uint64     { return s.SlowCount }
+func (s IntervalExecSnapshot) errors() uint64        { return s.Errors }
+func (s IntervalExecSnapshot) errorPercent() float64 { return s.ErrorPercent }
+
 // GlobalSnapshot returns overall JS execution and error statistics.
 func (s *JSStats) GlobalSnapshot() GlobalJSSnapshot {
 	s.mu.RLock()
@@ -1075,15 +1007,71 @@ func (s *JSStats) GlobalSnapshot() GlobalJSSnapshot {
 	}
 }
 
-// ScriptSortField specifies how to sort script results.
-type ScriptSortField int
+// SortField is a unified sort field type for scripts, objects, and intervals.
+// All entity types use the same sort criteria (time, execs, slow, errors, error rate).
+type SortField int
 
 const (
-	SortScriptByTime      ScriptSortField = iota // Total execution time
-	SortScriptByExecs                            // Execution count
-	SortScriptBySlow                             // Slow count
-	SortScriptByErrors                           // Error count
-	SortScriptByErrorRate                        // Error percentage
+	SortByTime      SortField = iota // Total execution time
+	SortByExecs                      // Execution count
+	SortBySlow                       // Slow count
+	SortByErrors                     // Error count
+	SortByErrorRate                  // Error percentage
+)
+
+// sortable is an interface for snapshot types that can be sorted.
+type sortable interface {
+	totalTime() float64
+	executions() uint64
+	slowCount() uint64
+	errors() uint64
+	errorPercent() float64
+}
+
+// sortSnapshots sorts a slice of sortable items by the given field.
+func sortSnapshots[T sortable](items []T, by SortField) {
+	switch by {
+	case SortByTime:
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].totalTime() > items[j].totalTime()
+		})
+	case SortByExecs:
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].executions() > items[j].executions()
+		})
+	case SortBySlow:
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].slowCount() > items[j].slowCount()
+		})
+	case SortByErrors:
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].errors() > items[j].errors()
+		})
+	case SortByErrorRate:
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].errorPercent() > items[j].errorPercent()
+		})
+	}
+}
+
+// limitSlice returns at most n items from the slice.
+func limitSlice[T any](items []T, n int) []T {
+	if n > 0 && len(items) > n {
+		return items[:n]
+	}
+	return items
+}
+
+// ScriptSortField specifies how to sort script results.
+// Deprecated: Use SortField instead.
+type ScriptSortField = SortField
+
+const (
+	SortScriptByTime      = SortByTime
+	SortScriptByExecs     = SortByExecs
+	SortScriptBySlow      = SortBySlow
+	SortScriptByErrors    = SortByErrors
+	SortScriptByErrorRate = SortByErrorRate
 )
 
 // TopScripts returns the top n scripts sorted by the specified field.
@@ -1101,90 +1089,39 @@ func (s *JSStats) TopScripts(by ScriptSortField, n int) []ScriptSnapshot {
 		result = append(result, s.scriptSnapshotLocked(path, script))
 	}
 
-	switch by {
-	case SortScriptByTime:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].AvgTimeMs*float64(result[i].Executions) >
-				result[j].AvgTimeMs*float64(result[j].Executions)
-		})
-	case SortScriptByExecs:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].Executions > result[j].Executions
-		})
-	case SortScriptBySlow:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].SlowCount > result[j].SlowCount
-		})
-	case SortScriptByErrors:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].Errors > result[j].Errors
-		})
-	case SortScriptByErrorRate:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].ErrorPercent > result[j].ErrorPercent
-		})
-	}
-
-	if n > 0 && len(result) > n {
-		result = result[:n]
-	}
-	return result
+	sortSnapshots(result, by)
+	return limitSlice(result, n)
 }
 
 func (s *JSStats) scriptSnapshotLocked(path string, script *ScriptStats) ScriptSnapshot {
-	var avgTimeMs, minTimeMs, slowPercent, errorPercent float64
-	if script.Executions > 0 {
-		avgTimeMs = float64(script.TotalTimeNs) / float64(script.Executions) / 1e6
-		minTimeMs = float64(script.MinTimeNs) / 1e6
-		slowPercent = float64(script.SlowCount) / float64(script.Executions) * 100
-		errorPercent = float64(script.Errors) / float64(script.Executions) * 100
-	}
+	m := calcExecMetrics(script.Executions, script.TotalTimeNs, script.MinTimeNs,
+		script.MaxTimeNs, script.SlowCount, script.Errors)
 
 	var importChain []string
 	if s.resolver != nil {
-		// Copy the slice to avoid referencing cache internals
 		cached := s.resolver.GetCachedDeps(path)
 		importChain = make([]string, len(cached))
 		copy(importChain, cached)
 	}
 
-	// Copy error maps
-	byCategory := maps.Clone(script.ByCategory)
-	byLocation := maps.Clone(script.ByLocation)
-
 	return ScriptSnapshot{
 		SourcePath:    path,
 		Executions:    script.Executions,
-		AvgTimeMs:     avgTimeMs,
-		MinTimeMs:     minTimeMs,
-		MaxTimeMs:     float64(script.MaxTimeNs) / 1e6,
+		AvgTimeMs:     m.avgTimeMs,
+		MinTimeMs:     m.minTimeMs,
+		MaxTimeMs:     m.maxTimeMs,
 		SlowCount:     script.SlowCount,
-		SlowPercent:   slowPercent,
+		SlowPercent:   m.slowPercent,
 		LastExecution: script.LastExecution,
 		ImportChain:   importChain,
-		ExecRates: RateSnapshot{
-			PerSecond: script.execRate.SecondRate,
-			PerMinute: script.execRate.MinuteRate,
-			PerHour:   script.execRate.HourRate,
-			PerDay:    script.execRate.DayRate,
-		},
-		TimeRates: TimeRateSnapshot{
-			PerSecond: script.timeRate.SecondRate,
-			PerMinute: script.timeRate.MinuteRate,
-			PerHour:   script.timeRate.HourRate,
-			PerDay:    script.timeRate.DayRate,
-		},
-		Errors:       script.Errors,
-		ErrorPercent: errorPercent,
-		LastError:    script.LastError,
-		ByCategory:   byCategory,
-		ByLocation:   byLocation,
-		ErrorRates: RateSnapshot{
-			PerSecond: script.errorRate.SecondRate,
-			PerMinute: script.errorRate.MinuteRate,
-			PerHour:   script.errorRate.HourRate,
-			PerDay:    script.errorRate.DayRate,
-		},
+		ExecRates:     script.execRate.snapshot(),
+		TimeRates:     script.timeRate.snapshot(),
+		Errors:        script.Errors,
+		ErrorPercent:  m.errorPercent,
+		LastError:     script.LastError,
+		ByCategory:    maps.Clone(script.ByCategory),
+		ByLocation:    maps.Clone(script.ByLocation),
+		ErrorRates:    script.errorRate.snapshot(),
 	}
 }
 
@@ -1202,14 +1139,15 @@ func (s *JSStats) ScriptSnapshot(sourcePath string) *ScriptSnapshot {
 }
 
 // ObjectSortField specifies how to sort object results.
-type ObjectSortField int
+// Deprecated: Use SortField instead.
+type ObjectSortField = SortField
 
 const (
-	SortObjectByTime      ObjectSortField = iota // Total execution time
-	SortObjectByExecs                            // Execution count
-	SortObjectBySlow                             // Slow count
-	SortObjectByErrors                           // Error count
-	SortObjectByErrorRate                        // Error percentage
+	SortObjectByTime      = SortByTime
+	SortObjectByExecs     = SortByExecs
+	SortObjectBySlow      = SortBySlow
+	SortObjectByErrors    = SortByErrors
+	SortObjectByErrorRate = SortByErrorRate
 )
 
 // TopObjects returns the top n objects sorted by the specified field.
@@ -1227,84 +1165,33 @@ func (s *JSStats) TopObjects(by ObjectSortField, n int) []ObjectExecSnapshot {
 		result = append(result, s.objectSnapshotLocked(id, obj))
 	}
 
-	switch by {
-	case SortObjectByTime:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].AvgTimeMs*float64(result[i].Executions) >
-				result[j].AvgTimeMs*float64(result[j].Executions)
-		})
-	case SortObjectByExecs:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].Executions > result[j].Executions
-		})
-	case SortObjectBySlow:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].SlowCount > result[j].SlowCount
-		})
-	case SortObjectByErrors:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].Errors > result[j].Errors
-		})
-	case SortObjectByErrorRate:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].ErrorPercent > result[j].ErrorPercent
-		})
-	}
-
-	if n > 0 && len(result) > n {
-		result = result[:n]
-	}
-	return result
+	sortSnapshots(result, by)
+	return limitSlice(result, n)
 }
 
 func (s *JSStats) objectSnapshotLocked(id string, obj *ObjectExecStats) ObjectExecSnapshot {
-	var avgTimeMs, minTimeMs, slowPercent, errorPercent float64
-	if obj.Executions > 0 {
-		avgTimeMs = float64(obj.TotalTimeNs) / float64(obj.Executions) / 1e6
-		minTimeMs = float64(obj.MinTimeNs) / 1e6
-		slowPercent = float64(obj.SlowCount) / float64(obj.Executions) * 100
-		errorPercent = float64(obj.Errors) / float64(obj.Executions) * 100
-	}
-
-	// Copy error maps
-	byCategory := maps.Clone(obj.ByCategory)
-	byLocation := maps.Clone(obj.ByLocation)
-	byScript := maps.Clone(obj.ByScript)
+	m := calcExecMetrics(obj.Executions, obj.TotalTimeNs, obj.MinTimeNs,
+		obj.MaxTimeNs, obj.SlowCount, obj.Errors)
 
 	return ObjectExecSnapshot{
 		ObjectID:      id,
 		SourcePath:    obj.SourcePath,
 		Executions:    obj.Executions,
-		AvgTimeMs:     avgTimeMs,
-		MinTimeMs:     minTimeMs,
-		MaxTimeMs:     float64(obj.MaxTimeNs) / 1e6,
+		AvgTimeMs:     m.avgTimeMs,
+		MinTimeMs:     m.minTimeMs,
+		MaxTimeMs:     m.maxTimeMs,
 		SlowCount:     obj.SlowCount,
-		SlowPercent:   slowPercent,
+		SlowPercent:   m.slowPercent,
 		LastExecution: obj.LastExecution,
-		ExecRates: RateSnapshot{
-			PerSecond: obj.execRate.SecondRate,
-			PerMinute: obj.execRate.MinuteRate,
-			PerHour:   obj.execRate.HourRate,
-			PerDay:    obj.execRate.DayRate,
-		},
-		TimeRates: TimeRateSnapshot{
-			PerSecond: obj.timeRate.SecondRate,
-			PerMinute: obj.timeRate.MinuteRate,
-			PerHour:   obj.timeRate.HourRate,
-			PerDay:    obj.timeRate.DayRate,
-		},
-		Errors:       obj.Errors,
-		ErrorPercent: errorPercent,
-		LastError:    obj.LastError,
-		ByCategory:   byCategory,
-		ByLocation:   byLocation,
-		ByScript:     byScript,
-		ErrorRates: RateSnapshot{
-			PerSecond: obj.errorRate.SecondRate,
-			PerMinute: obj.errorRate.MinuteRate,
-			PerHour:   obj.errorRate.HourRate,
-			PerDay:    obj.errorRate.DayRate,
-		},
+		ExecRates:     obj.execRate.snapshot(),
+		TimeRates:     obj.timeRate.snapshot(),
+		Errors:        obj.Errors,
+		ErrorPercent:  m.errorPercent,
+		LastError:     obj.LastError,
+		ByCategory:    maps.Clone(obj.ByCategory),
+		ByLocation:    maps.Clone(obj.ByLocation),
+		ByScript:      maps.Clone(obj.ByScript),
+		ErrorRates:    obj.errorRate.snapshot(),
 	}
 }
 
@@ -1322,14 +1209,15 @@ func (s *JSStats) ObjectExecSnapshot(objectID string) *ObjectExecSnapshot {
 }
 
 // IntervalSortField specifies how to sort interval results.
-type IntervalSortField int
+// Deprecated: Use SortField instead.
+type IntervalSortField = SortField
 
 const (
-	SortIntervalByTime      IntervalSortField = iota // Total execution time
-	SortIntervalByExecs                              // Execution count
-	SortIntervalBySlow                               // Slow count
-	SortIntervalByErrors                             // Error count
-	SortIntervalByErrorRate                          // Error percentage
+	SortIntervalByTime      = SortByTime
+	SortIntervalByExecs     = SortByExecs
+	SortIntervalBySlow      = SortBySlow
+	SortIntervalByErrors    = SortByErrors
+	SortIntervalByErrorRate = SortByErrorRate
 )
 
 // TopIntervals returns the top n intervals sorted by the specified field.
@@ -1347,83 +1235,33 @@ func (s *JSStats) TopIntervals(by IntervalSortField, n int) []IntervalExecSnapsh
 		result = append(result, s.intervalSnapshotLocked(id, interval))
 	}
 
-	switch by {
-	case SortIntervalByTime:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].AvgTimeMs*float64(result[i].Executions) >
-				result[j].AvgTimeMs*float64(result[j].Executions)
-		})
-	case SortIntervalByExecs:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].Executions > result[j].Executions
-		})
-	case SortIntervalBySlow:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].SlowCount > result[j].SlowCount
-		})
-	case SortIntervalByErrors:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].Errors > result[j].Errors
-		})
-	case SortIntervalByErrorRate:
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].ErrorPercent > result[j].ErrorPercent
-		})
-	}
-
-	if n > 0 && len(result) > n {
-		result = result[:n]
-	}
-	return result
+	sortSnapshots(result, by)
+	return limitSlice(result, n)
 }
 
 func (s *JSStats) intervalSnapshotLocked(id string, interval *IntervalExecStats) IntervalExecSnapshot {
-	var avgTimeMs, minTimeMs, slowPercent, errorPercent float64
-	if interval.Executions > 0 {
-		avgTimeMs = float64(interval.TotalTimeNs) / float64(interval.Executions) / 1e6
-		minTimeMs = float64(interval.MinTimeNs) / 1e6
-		slowPercent = float64(interval.SlowCount) / float64(interval.Executions) * 100
-		errorPercent = float64(interval.Errors) / float64(interval.Executions) * 100
-	}
-
-	// Copy error maps
-	byCategory := maps.Clone(interval.ByCategory)
-	byLocation := maps.Clone(interval.ByLocation)
+	m := calcExecMetrics(interval.Executions, interval.TotalTimeNs, interval.MinTimeNs,
+		interval.MaxTimeNs, interval.SlowCount, interval.Errors)
 
 	return IntervalExecSnapshot{
 		IntervalID:    id,
 		ObjectID:      interval.ObjectID,
 		EventName:     interval.EventName,
 		Executions:    interval.Executions,
-		AvgTimeMs:     avgTimeMs,
-		MinTimeMs:     minTimeMs,
-		MaxTimeMs:     float64(interval.MaxTimeNs) / 1e6,
+		AvgTimeMs:     m.avgTimeMs,
+		MinTimeMs:     m.minTimeMs,
+		MaxTimeMs:     m.maxTimeMs,
 		SlowCount:     interval.SlowCount,
-		SlowPercent:   slowPercent,
+		SlowPercent:   m.slowPercent,
 		LastExecution: interval.LastExecution,
-		ExecRates: RateSnapshot{
-			PerSecond: interval.execRate.SecondRate,
-			PerMinute: interval.execRate.MinuteRate,
-			PerHour:   interval.execRate.HourRate,
-			PerDay:    interval.execRate.DayRate,
-		},
-		TimeRates: TimeRateSnapshot{
-			PerSecond: interval.timeRate.SecondRate,
-			PerMinute: interval.timeRate.MinuteRate,
-			PerHour:   interval.timeRate.HourRate,
-			PerDay:    interval.timeRate.DayRate,
-		},
-		Errors:       interval.Errors,
-		ErrorPercent: errorPercent,
-		LastError:    interval.LastError,
-		ByCategory:   byCategory,
-		ByLocation:   byLocation,
-		ErrorRates: RateSnapshot{
-			PerSecond: interval.errorRate.SecondRate,
-			PerMinute: interval.errorRate.MinuteRate,
-			PerHour:   interval.errorRate.HourRate,
-			PerDay:    interval.errorRate.DayRate,
-		},
+		ExecRates:     interval.execRate.snapshot(),
+		TimeRates:     interval.timeRate.snapshot(),
+		Errors:        interval.Errors,
+		ErrorPercent:  m.errorPercent,
+		LastError:     interval.LastError,
+		ByCategory:    maps.Clone(interval.ByCategory),
+		ByLocation:    maps.Clone(interval.ByLocation),
+		ErrorRates:    interval.errorRate.snapshot(),
 	}
 }
 
