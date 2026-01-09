@@ -340,6 +340,12 @@ func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Dur
 		return nil, juicemud.WithStack(err)
 	}
 
+	return rc.invokeCallback(ctx, caller)
+}
+
+// invokeCallback invokes a JavaScript callback if one is registered for the caller's event.
+// Returns the result with the callback's return value, or nil value if no callback was invoked.
+func (rc *RunContext) invokeCallback(ctx context.Context, caller structs.Caller) (*Result, error) {
 	if caller == nil {
 		return rc.collectResult(nil)
 	}
@@ -353,9 +359,11 @@ func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Dur
 		return rc.collectResult(nil)
 	}
 
-	if tags, found := rc.r.Callbacks[call.Name]; !found {
+	tags, found := rc.r.Callbacks[call.Name]
+	if !found {
 		return rc.collectResult(nil)
-	} else if _, found = tags[call.Tag]; !found {
+	}
+	if _, found = tags[call.Tag]; !found {
 		return rc.collectResult(nil)
 	}
 
@@ -364,24 +372,23 @@ func (t Target) Run(ctx context.Context, caller structs.Caller, timeout time.Dur
 		return rc.collectResult(nil)
 	}
 
-	var val *v8go.Value
+	var arg *v8go.Value
 	if call.Message != "" {
-		if val, err = v8go.JSONParse(rc.m.vctx, call.Message); err != nil {
+		if arg, err = v8go.JSONParse(rc.m.vctx, call.Message); err != nil {
 			return nil, juicemud.WithStack(err)
 		}
 	}
 
-	if val, err := rc.withTimeout(ctx, func() (*v8go.Value, error) {
-		if val != nil {
-			return jsCB.Call(rc.m.vctx.Global(), val)
-		} else {
-			return jsCB.Call(rc.m.vctx.Global())
+	val, err := rc.withTimeout(ctx, func() (*v8go.Value, error) {
+		if arg != nil {
+			return jsCB.Call(rc.m.vctx.Global(), arg)
 		}
-	}); err != nil {
+		return jsCB.Call(rc.m.vctx.Global())
+	})
+	if err != nil {
 		return nil, juicemud.WithStack(err)
-	} else {
-		return rc.collectResult(val)
 	}
+	return rc.collectResult(val)
 }
 
 var (
