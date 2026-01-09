@@ -17,6 +17,19 @@ import (
 	"github.com/zond/juicemud/structs"
 )
 
+// checkStatus converts a tkrzw status to an error. If the status is a NotFoundError,
+// it returns an error wrapping os.ErrNotExist with the provided message. If the status
+// is OK, it returns nil. Otherwise, it returns the status as an error.
+func checkStatus(stat *tkrzw.Status, notFoundMsg string) error {
+	if stat.GetCode() == tkrzw.StatusNotFoundError {
+		return juicemud.WithStack(fmt.Errorf("%s: %w", notFoundMsg, os.ErrNotExist))
+	}
+	if !stat.IsOK() {
+		return juicemud.WithStack(stat)
+	}
+	return nil
+}
+
 // Hash wraps a tkrzw hash database for unordered key-value storage.
 // All operations are thread-safe via internal mutex.
 type Hash struct {
@@ -79,10 +92,8 @@ func (h *Hash) Get(k string) ([]byte, error) {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
 	b, stat := h.dbm.Get(k)
-	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(fmt.Errorf("key %q: %w", k, os.ErrNotExist))
-	} else if !stat.IsOK() {
-		return nil, juicemud.WithStack(stat)
+	if err := checkStatus(stat, fmt.Sprintf("key %q", k)); err != nil {
+		return nil, err
 	}
 	return b, nil
 }
@@ -101,12 +112,7 @@ func (h *Hash) Set(k string, v []byte, overwrite bool) error {
 func (h *Hash) Del(k string) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
-	if stat := h.dbm.Remove(k); stat.GetCode() == tkrzw.StatusNotFoundError {
-		return juicemud.WithStack(fmt.Errorf("key %q: %w", k, os.ErrNotExist))
-	} else if !stat.IsOK() {
-		return juicemud.WithStack(stat)
-	}
-	return nil
+	return checkStatus(h.dbm.Remove(k), fmt.Sprintf("key %q", k))
 }
 
 // GetMulti retrieves multiple values atomically. Missing keys are omitted from result.
@@ -153,10 +159,7 @@ func (h *FlushHealth) recordError(err error) time.Duration {
 	h.LastError = err
 	h.LastErrorAt = time.Now()
 	h.ConsecErrors++
-	h.CurrentBackoff = min(h.CurrentBackoff*2, flushMaxBackoff)
-	if h.CurrentBackoff < flushBaseInterval {
-		h.CurrentBackoff = flushBaseInterval
-	}
+	h.CurrentBackoff = max(min(h.CurrentBackoff*2, flushMaxBackoff), flushBaseInterval)
 	return h.CurrentBackoff
 }
 
@@ -213,7 +216,6 @@ func (l *LiveTypeHash[T, S]) Flush() error {
 
 	// Build delete operations
 	for key := range l.deletes {
-		key := key // capture for closure
 		procs = append(procs, l.hash.SProc(key, func(k string, v *T) (*T, error) {
 			return nil, nil
 		}))
@@ -637,7 +639,6 @@ func (h *Hash) Proc(pairs []Proc, write bool) error {
 	procs := make([]tkrzw.KeyProcPair, len(pairs)*2)
 	var abort error
 	for index, pair := range pairs {
-		index, pair := index, pair // Capture loop variables for closure
 		procs[index] = tkrzw.KeyProcPair{
 			Key: pair.Key(),
 			Proc: func(key []byte, value []byte) any {
@@ -655,7 +656,6 @@ func (h *Hash) Proc(pairs []Proc, write bool) error {
 		}
 	}
 	for index, pair := range pairs {
-		index := index // Capture loop variable for closure
 		procs[index+len(pairs)] = tkrzw.KeyProcPair{
 			Key: pair.Key(),
 			Proc: func(key []byte, value []byte) any {
@@ -709,17 +709,12 @@ func (t *Tree) First() ([]byte, []byte, error) {
 	defer t.mutex.RUnlock()
 	iter := t.dbm.MakeIterator()
 	defer iter.Destruct()
-	if stat := iter.First(); !stat.IsOK() {
-		if stat.GetCode() == tkrzw.StatusNotFoundError {
-			return nil, nil, juicemud.WithStack(fmt.Errorf("tree is empty: %w", os.ErrNotExist))
-		}
-		return nil, nil, juicemud.WithStack(stat)
+	if err := checkStatus(iter.First(), "tree is empty"); err != nil {
+		return nil, nil, err
 	}
 	k, v, stat := iter.Get()
-	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, nil, juicemud.WithStack(fmt.Errorf("tree is empty: %w", os.ErrNotExist))
-	} else if !stat.IsOK() {
-		return nil, nil, juicemud.WithStack(stat)
+	if err := checkStatus(stat, "tree is empty"); err != nil {
+		return nil, nil, err
 	}
 	return k, v, nil
 }
@@ -753,12 +748,7 @@ func (t *Tree) SubDel(set string, key string) error {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 	completeKey := appendKey(nil, set, key)
-	if stat := t.Hash.dbm.Remove(completeKey); stat.GetCode() == tkrzw.StatusNotFoundError {
-		return juicemud.WithStack(fmt.Errorf("set %q key %q: %w", set, key, os.ErrNotExist))
-	} else if !stat.IsOK() {
-		return juicemud.WithStack(stat)
-	}
-	return nil
+	return checkStatus(t.Hash.dbm.Remove(completeKey), fmt.Sprintf("set %q key %q", set, key))
 }
 
 // SubGet retrieves a value under a hierarchical key (set, key).
@@ -767,10 +757,8 @@ func (t *Tree) SubGet(set string, key string) ([]byte, error) {
 	defer t.mutex.RUnlock()
 	completeKey := appendKey(nil, set, key)
 	b, stat := t.Hash.dbm.Get(completeKey)
-	if stat.GetCode() == tkrzw.StatusNotFoundError {
-		return nil, juicemud.WithStack(fmt.Errorf("set %q key %q: %w", set, key, os.ErrNotExist))
-	} else if !stat.IsOK() {
-		return nil, juicemud.WithStack(stat)
+	if err := checkStatus(stat, fmt.Sprintf("set %q key %q", set, key)); err != nil {
+		return nil, err
 	}
 	return b, nil
 }
