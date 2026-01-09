@@ -135,29 +135,69 @@ Last updated: 2026-01-09
 - Extract complex handlers to named methods
 - Use consistent argument parsing pattern
 
+### 10. storage/dbm/utils.go - Test helpers (~90 lines)
+**Priority: MEDIUM** - High impact, reduces duplication
+
+**Issues:**
+- 5 nearly identical `With*` functions (WithHash, WithTypeHash, WithLiveTypeHash, WithTree, WithTypeTree)
+- Each differs only in type and open function
+
+**Suggested fix:**
+- Create generic helper `withDB[T any](open, close func)` or table-driven approach
+- Could reduce to ~40 lines
+
+---
+
+### 11. storage/dbm/dbm.go - Status error handling pattern
+**Priority: MEDIUM** - Appears ~10 times
+
+**Issues:**
+- Same `if stat.GetCode() == tkrzw.StatusNotFoundError ... else if !stat.IsOK()` pattern repeated
+- ~50 lines scattered across file
+
+**Suggested fix:**
+- Create `checkStatus(stat, notFoundFormat, args...)` helper
+
+---
+
+### 12. js/js.go - Target.Run (~70 lines)
+**Priority: MEDIUM**
+
+**Issues:**
+- Large function: setup, script execution, callback lookup, result collection
+- Callback invocation block (lines 342-385) is distinct concern
+
+**Suggested fix:**
+- Extract `invokeCallback()` method
+- Could reduce to ~45 lines
+
 ---
 
 ## Low Priority
 
-### 10. game/connection.go - parseShellTokens (~60 lines)
+### 13. game/connection.go - parseShellTokens (~60 lines)
 **Issues:** Complex state machine, already using `shellwords` elsewhere
 **Suggested fix:** Replace with `shellwords` library or document edge cases
 
-### 11. storage/storage.go - MoveObject (~100 lines)
+### 14. storage/storage.go - MoveObject (~100 lines)
 **Issues:** TOCTOU prevention pattern, cycle detection
 **Suggested fix:** Document pattern, possibly extract helpers
 
-### 12. game/game.go - New constructor (~180 lines)
+### 15. game/game.go - New constructor (~180 lines)
 **Issues:** First startup vs normal startup branching, goroutine setup
 **Suggested fix:** Extract worker setup, separate initialization paths
 
-### 13. js/js.go - Target.Run (~70 lines)
-**Issues:** V8 pool management, callback invocation
-**Suggested fix:** Extract callback logic, document timeout pattern
-
-### 14. server/server.go - startWithListener (~115 lines)
+### 16. server/server.go - startWithListener (~115 lines)
 **Issues:** Complex startup sequence, directory creation
 **Suggested fix:** Extract source resolution, symlink creation
+
+### 17. storage/dbm/dbm.go - TypeHash.Each() (~30 lines)
+**Issues:** Deeply nested if/else with repeated `!yield()` calls
+**Suggested fix:** Refactor to early-return pattern
+
+### 18. structs/serverconfig.go - UnmarshalJSON (~25 lines)
+**Issues:** Repeated nil-check-then-assign for 4 maps
+**Suggested fix:** Use helper function or loop over map pointers
 
 ---
 
