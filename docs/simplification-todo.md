@@ -13,74 +13,35 @@ Last updated: 2026-01-09
   - Generic `parseSortArg` to consolidate 4 identical functions
   - Removed unused `help` field from dispatch map
 
----
+### jsstats.go - JSStats
+- **Before:** ~1655 lines with 4 duplicate Record* functions, 3 duplicate Top* functions
+- **After:** ~1490 lines (-160 lines)
+- **Changes:**
+  - Extracted `recordErrorInternal` helper with `errorRecordParams` struct
+  - Added `sortable` interface and generic `sortSnapshots[T]` helper
+  - Added `calcExecMetrics` for shared metric calculations
+  - Added `snapshot()` methods on RateStats/TimeRateStats
+  - Bug fix: RecordLoadError limitCountMap ordering
 
-## High Priority
+### lang/lang.go - Article function
+- **Before:** 20+ regex compilations inside function (recompiled every call)
+- **After:** All 18 regexes pre-compiled at package level
+- **Changes:**
+  - Moved `regexp.MustCompile` calls to package-level `var` block
+  - Significant performance improvement (compile once vs every call)
 
-### 1. jsstats.go - JSStats (~1655 lines)
-**Priority: HIGHEST** - Most significant opportunity for reduction
-
-**Issues:**
-- 4 nearly identical `Record*` functions (~280 lines total):
-  - `RecordError` (~95 lines)
-  - `RecordLoadError` (~55 lines)
-  - `RecordBootError` (~59 lines)
-  - `RecordRecoveryError` (~74 lines)
-- 3 identical `Top*` functions with same switch statements (~135 lines):
-  - `TopScripts`
-  - `TopObjects`
-  - `TopIntervals`
-- 3 identical `*SnapshotLocked` helpers (~165 lines):
-  - `scriptSnapshotLocked`
-  - `objectSnapshotLocked`
-  - `intervalSnapshotLocked`
-
-**Suggested fix:**
-- Extract generic `recordErrorInternal(source, objectID, intervalID string, err error, duration time.Duration)`
-- Create single generic `topEntities[T any]` with sort function parameter
-- Use interfaces or generics for snapshot creation
-
-**Estimated reduction:** ~300-400 lines
+### game/processing.go - addObjectCallbacks
+- **Before:** ~380-line monolithic function
+- **After:** Organized into focused helpers
+- **Changes:**
+  - Extracted `addEventCallbacks` (emit, emitToLocation)
+  - Extracted `addTimerCallbacks` (setTimeout, setInterval, clearInterval)
+  - Extracted `addLifecycleCallbacks` (getNeighbourhood, getId, createObject, removeObject, print)
+  - Pure refactoring, no behavioral changes
 
 ---
 
-### 2. lang/lang.go - Article function (~125 lines)
-**Priority: HIGH** - Easy win
-
-**Issues:**
-- 20+ `regexp.MustCompile` calls inside the function body
-- Regexes recompiled on every call
-- Performance impact on frequently-called function
-
-**Suggested fix:**
-- Move all regex compilations to package-level `var` block
-- Consider combining related patterns with alternation
-
-**Estimated reduction:** Minimal lines but significant performance improvement
-
----
-
-### 3. game/processing.go - addObjectCallbacks (~380 lines)
-**Priority: HIGH**
-
-**Issues:**
-- Single massive function registering 15+ JavaScript callbacks
-- Each callback has its own validation and error handling
-- Deeply nested closures capturing multiple variables
-- Mixed concerns: getters/setters, timers, events, lifecycle
-
-**Suggested fix:**
-- Group callbacks by category into separate functions:
-  - `addPropertyCallbacks()`
-  - `addTimerCallbacks()`
-  - `addEventCallbacks()`
-  - `addLifecycleCallbacks()`
-- Extract common validation into helpers
-- Consider table-driven approach for simple getters/setters
-
-**Estimated reduction:** ~50-100 lines, major readability improvement
-
----
+## Medium Priority
 
 ### 4. structs/combat.go - TakeDamage (~150 lines)
 **Priority: MEDIUM**
@@ -131,8 +92,6 @@ Last updated: 2026-01-09
 **Estimated reduction:** ~20 lines
 
 ---
-
-## Medium Priority
 
 ### 7. storage/dbm/dbm.go - LiveTypeHash (~325 lines)
 **Priority: MEDIUM** - Complex but necessary
