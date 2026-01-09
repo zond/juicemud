@@ -15,6 +15,8 @@ type ServerConfig struct {
 	spawn              string                    // Container ID for spawning new users
 	skillConfigs       map[string]SkillConfig    // Per-skill configs (Recharge, Reuse, Forget)
 	challengeDurations map[string]SkillDuration  // Per-skill-combo durations, keyed by SkillsKey()
+	bodyConfigs        map[string]BodyConfig     // Body type configs (humanoid, quadruped, etc.)
+	damageTypes        map[string]DamageTypeConfig // Damage type configs (slashing, piercing, etc.)
 }
 
 // NewServerConfig creates a new ServerConfig with initialized maps.
@@ -22,6 +24,8 @@ func NewServerConfig() *ServerConfig {
 	return &ServerConfig{
 		skillConfigs:       make(map[string]SkillConfig),
 		challengeDurations: make(map[string]SkillDuration),
+		bodyConfigs:        make(map[string]BodyConfig),
+		damageTypes:        make(map[string]DamageTypeConfig),
 	}
 }
 
@@ -97,6 +101,57 @@ func (c *ServerConfig) DeleteSkillConfig(name string) {
 	delete(c.skillConfigs, name)
 }
 
+// GetBodyConfig returns the body config for a type, or the default humanoid if not found.
+func (c *ServerConfig) GetBodyConfig(name string) BodyConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if cfg, ok := c.bodyConfigs[name]; ok {
+		return cfg
+	}
+	// Return default humanoid if not configured
+	defaults := DefaultBodyConfigs()
+	if cfg, ok := defaults[name]; ok {
+		return cfg
+	}
+	return defaults["humanoid"]
+}
+
+// SetBodyConfig sets a body config.
+func (c *ServerConfig) SetBodyConfig(name string, cfg BodyConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.bodyConfigs == nil {
+		c.bodyConfigs = make(map[string]BodyConfig)
+	}
+	c.bodyConfigs[name] = cfg
+}
+
+// GetDamageType returns the damage type config, or a default config if not found.
+func (c *ServerConfig) GetDamageType(name string) DamageTypeConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if cfg, ok := c.damageTypes[name]; ok {
+		return cfg
+	}
+	// Return default if configured
+	defaults := DefaultDamageTypes()
+	if cfg, ok := defaults[name]; ok {
+		return cfg
+	}
+	// Unknown damage type - return neutral defaults
+	return DamageTypeConfig{SeverMult: 0.5, BleedingMult: 0.5}
+}
+
+// SetDamageType sets a damage type config.
+func (c *ServerConfig) SetDamageType(name string, cfg DamageTypeConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.damageTypes == nil {
+		c.damageTypes = make(map[string]DamageTypeConfig)
+	}
+	c.damageTypes[name] = cfg
+}
+
 // ReplaceSkillConfigs replaces all skill configs atomically.
 // Makes a defensive copy of the provided map.
 func (c *ServerConfig) ReplaceSkillConfigs(configs map[string]SkillConfig) {
@@ -124,6 +179,8 @@ type serverConfigJSON struct {
 	}
 	SkillConfigs       map[string]SkillConfig
 	ChallengeDurations map[string]SkillDuration
+	BodyConfigs        map[string]BodyConfig
+	DamageTypes        map[string]DamageTypeConfig
 }
 
 // MarshalJSON implements json.Marshaler for ServerConfig.
@@ -134,6 +191,8 @@ func (c *ServerConfig) MarshalJSON() ([]byte, error) {
 	j := serverConfigJSON{
 		SkillConfigs:       maps.Clone(c.skillConfigs),
 		ChallengeDurations: maps.Clone(c.challengeDurations),
+		BodyConfigs:        maps.Clone(c.bodyConfigs),
+		DamageTypes:        maps.Clone(c.damageTypes),
 	}
 	j.Spawn.Container = c.spawn
 
@@ -160,6 +219,16 @@ func (c *ServerConfig) UnmarshalJSON(data []byte) error {
 		c.challengeDurations = make(map[string]SkillDuration)
 	} else {
 		c.challengeDurations = j.ChallengeDurations
+	}
+	if j.BodyConfigs == nil {
+		c.bodyConfigs = make(map[string]BodyConfig)
+	} else {
+		c.bodyConfigs = j.BodyConfigs
+	}
+	if j.DamageTypes == nil {
+		c.damageTypes = make(map[string]DamageTypeConfig)
+	} else {
+		c.damageTypes = j.DamageTypes
 	}
 
 	return nil

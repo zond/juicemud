@@ -934,3 +934,112 @@ func TestIsAlive(t *testing.T) {
 		})
 	}
 }
+
+func TestBodyConfig(t *testing.T) {
+	cfg := NewServerConfig()
+
+	t.Run("returns default humanoid config", func(t *testing.T) {
+		body := cfg.GetBodyConfig("humanoid")
+		if body.Parts == nil {
+			t.Fatal("expected Parts to be non-nil")
+		}
+		if _, ok := body.Parts["head"]; !ok {
+			t.Error("expected humanoid to have 'head' part")
+		}
+		if _, ok := body.Parts["torso"]; !ok {
+			t.Error("expected humanoid to have 'torso' part")
+		}
+	})
+
+	t.Run("unknown body type falls back to humanoid", func(t *testing.T) {
+		body := cfg.GetBodyConfig("unknown_type")
+		if body.Parts == nil {
+			t.Fatal("expected Parts to be non-nil")
+		}
+		// Should return humanoid as default
+		if _, ok := body.Parts["head"]; !ok {
+			t.Error("expected fallback to have 'head' part")
+		}
+	})
+
+	t.Run("custom body config overrides default", func(t *testing.T) {
+		customBody := BodyConfig{
+			Parts: map[string]BodyPartConfig{
+				"tentacle": {HealthFraction: 0.5, HitWeight: 0.5},
+			},
+		}
+		cfg.SetBodyConfig("octopus", customBody)
+
+		body := cfg.GetBodyConfig("octopus")
+		if _, ok := body.Parts["tentacle"]; !ok {
+			t.Error("expected custom body to have 'tentacle' part")
+		}
+		if _, ok := body.Parts["head"]; ok {
+			t.Error("custom body should not have 'head' from humanoid")
+		}
+	})
+
+	t.Run("vital and central properties", func(t *testing.T) {
+		body := cfg.GetBodyConfig("humanoid")
+		head := body.Parts["head"]
+		if !head.Vital {
+			t.Error("head should be vital")
+		}
+		if head.Central {
+			t.Error("head should not be central")
+		}
+
+		torso := body.Parts["torso"]
+		if !torso.Vital {
+			t.Error("torso should be vital")
+		}
+		if !torso.Central {
+			t.Error("torso should be central")
+		}
+
+		arm := body.Parts["leftArm"]
+		if arm.Vital {
+			t.Error("arm should not be vital")
+		}
+	})
+}
+
+func TestDamageTypeConfig(t *testing.T) {
+	cfg := NewServerConfig()
+
+	t.Run("returns default damage types", func(t *testing.T) {
+		slashing := cfg.GetDamageType("slashing")
+		if slashing.SeverMult != 1.0 {
+			t.Errorf("slashing SeverMult = %v, want 1.0", slashing.SeverMult)
+		}
+		if slashing.BleedingMult != 1.0 {
+			t.Errorf("slashing BleedingMult = %v, want 1.0", slashing.BleedingMult)
+		}
+
+		fire := cfg.GetDamageType("fire")
+		if fire.BleedingMult != 0 {
+			t.Errorf("fire BleedingMult = %v, want 0 (cauterizes)", fire.BleedingMult)
+		}
+	})
+
+	t.Run("unknown damage type returns neutral defaults", func(t *testing.T) {
+		unknown := cfg.GetDamageType("psychic")
+		if unknown.SeverMult != 0.5 {
+			t.Errorf("unknown SeverMult = %v, want 0.5", unknown.SeverMult)
+		}
+		if unknown.BleedingMult != 0.5 {
+			t.Errorf("unknown BleedingMult = %v, want 0.5", unknown.BleedingMult)
+		}
+	})
+
+	t.Run("custom damage type overrides default", func(t *testing.T) {
+		cfg.SetDamageType("psychic", DamageTypeConfig{
+			SeverMult:    0,
+			BleedingMult: 0,
+		})
+		psychic := cfg.GetDamageType("psychic")
+		if psychic.SeverMult != 0 {
+			t.Errorf("psychic SeverMult = %v, want 0", psychic.SeverMult)
+		}
+	})
+}
