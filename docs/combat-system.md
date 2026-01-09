@@ -272,7 +272,8 @@ type ObjectDO struct {
     GuardingExit string  // Direction being guarded (empty = not guarding)
 
     // Room/container effects
-    RoomStatusEffects []string  // StatusEffectConfig IDs applied while in this room/container
+    RoomStatusEffects []string        // StatusEffectConfig IDs applied while in this room/container
+    Terrain           []TerrainEffect // Terrain affecting movement speed (swamp, water, etc.)
 
     // Event tracking (for restart behavior)
     LastEventTime uint64  // Nanoseconds, used to detect first event after restart
@@ -306,9 +307,10 @@ type StatusEffect struct {
 **Timing patterns in combat:**
 | Pattern | Use Case | Persistence | Examples |
 |---------|----------|-------------|----------|
-| Intervals | Persistent scheduled events | Survives restart | StatusEffect ticks (poison damage, buff expiry) |
-| Goroutines + sleep | Ephemeral timers | Lost on restart | Attack timers, movement delays, reload/unjam |
-| Lazy timestamps | Values changing over time | Computed on access | Resource regen, aim bonus, bleeding severity |
+| Go tickers | Frequent periodic events with messages | State survives, ticker restarts on first event | Bleeding ticks, health regeneration |
+| Goroutines + sleep | Variable-duration timers | State survives, goroutine restarts on trigger | Attack timers, movement delays, reload/unjam |
+| Lazy timestamps | Values computed on access, no events needed | Computed on access | Aim bonus buildup |
+| Intervals (queue) | Infrequent persistent events | Fully survives restart | Status effect expiry, long-duration buffs |
 
 ### BodyPartState
 
@@ -419,6 +421,14 @@ type BodyConfig struct {
     BleedingDamagePerTick [4]float64   // Health loss per tick for light/moderate/heavy/critical
     BleedingTickInterval  time.Duration // How often bleeding ticks (e.g., 5s)
     BleedingHealTime      time.Duration // Time for bleeding to naturally reduce one level
+
+    // Movement (body-type specific)
+    MovementSkills             map[string]bool  // Skills affecting base movement speed, e.g., {"agility": true}
+    BaseMovementDelay          time.Duration    // Base time to move one room (e.g., 2s for humanoid)
+    MinMovementDelay           time.Duration    // Fastest possible with max skills (e.g., 0.5s)
+    GuardSkills                map[string]bool  // Skills for blocking exits, e.g., {"blocking": true}
+    MovementType               string           // "walk", "slither", "fly", "swim" - for messages
+    CombatMovementDodgePenalty float64          // Penalty to dodge while moving in combat
 }
 
 type BodyPart struct {
@@ -2098,24 +2108,70 @@ addCallback('objectLeftRoom', ['emit'], (event) => {
 
 This allows wizard-customizable chase behavior: chase range limits, give-up conditions, different AI per NPC type.
 
-### MovementConfig
+### Movement
+
+Movement configuration is in **BodyConfig** (base skills, delays, dodge penalty) and **CombatConfig** (sigmoid tuning). Terrain effects are defined per-room.
+
+#### TerrainEffect
+
+Rooms/containers can have terrain that affects movement speed based on skills:
 
 ```go
-type MovementConfig struct {
-    // Movement timing
-    MovementSkills    map[string]bool  // Higher skill = less delay
-    BaseMovementDelay time.Duration    // e.g., 2s
-    MinMovementDelay  time.Duration    // e.g., 0.5s
+// In ObjectDO (rooms/containers)
+Terrain []TerrainEffect
 
-    // Combat movement
-    CombatMovementDodgePenalty float64  // Penalty to dodge while moving in combat
-
-    // Exit guarding
-    GuardSkills map[string]bool  // Skills for guard vs force-through
+type TerrainEffect struct {
+    Name           string           // For messages: "wading through swamp"
+    Skills         map[string]bool  // Skills that reduce the delay (swimming, climbing, etc.)
+    BaseMultiplier float64          // Delay multiplier before skills (2.0 = twice as slow)
 }
 ```
 
-Movement delay uses goroutines with sleep. Final delay is `baseDelay / SpeedFactor` (from status effects).
+**Examples:**
+```go
+// Deep swamp room
+Terrain: []TerrainEffect{{
+    Name:           "swamp",
+    Skills:         {"trudging": true, "swampLore": true},
+    BaseMultiplier: 2.0,  // Twice as slow without skills
+}}
+
+// Underwater room
+Terrain: []TerrainEffect{{
+    Name:           "underwater",
+    Skills:         {"swimming": true},
+    BaseMultiplier: 3.0,  // Very slow without swimming
+}}
+// Plus RoomStatusEffects: ["drowning"] for non-swimmers
+```
+
+#### Movement Delay Calculation
+
+```go
+func calculateMovementDelay(ctx Context, mover *Object, room *Object,
+                            bodyConfig *BodyConfig, combatConfig *CombatConfig) time.Duration {
+    // 1. Base delay from body type and skills
+    speedResult := mover.EffectiveSkills(ctx, bodyConfig.MovementSkills)
+    sigmoid := 1.0 / (1.0 + math.Exp(-speedResult / combatConfig.SigmoidDivisor))
+    delay := bodyConfig.MinMovementDelay + (bodyConfig.BaseMovementDelay - bodyConfig.MinMovementDelay) * (1 - sigmoid)
+
+    // 2. Apply terrain effects
+    for _, terrain := range room.Terrain {
+        terrainResult := mover.EffectiveSkills(ctx, terrain.Skills)
+        terrainSigmoid := 1.0 / (1.0 + math.Exp(-terrainResult / combatConfig.SigmoidDivisor))
+        // Good skill reduces multiplier toward 1.0, poor skill keeps it high
+        effectiveMult := 1.0 + (terrain.BaseMultiplier - 1.0) * (1 - terrainSigmoid)
+        delay = time.Duration(float64(delay) * effectiveMult)
+    }
+
+    // 3. Apply status effect speed modifiers
+    delay = time.Duration(float64(delay) / mover.SpeedFactor())
+
+    return delay
+}
+```
+
+Movement uses goroutines with sleep. State survives restart, goroutine restarts on trigger.
 
 ---
 
@@ -2232,7 +2288,9 @@ type StatusEffectConfig struct { ... }
 
 // Global tuning
 type CombatConfig struct { ... }
-type MovementConfig struct { ... }
+
+// Terrain (stored in ObjectDO, not a separate config type)
+type TerrainEffect struct { ... }
 ```
 
 **Testing:**
@@ -2300,7 +2358,8 @@ AimingSince uint64  // Nanoseconds, 0 = not aiming
 GrappledBy, Grappling string
 
 // Room effects (for rooms/containers)
-RoomStatusEffects []string  // StatusEffectConfig IDs applied while in this room
+RoomStatusEffects []string        // StatusEffectConfig IDs applied while in this room
+Terrain           []TerrainEffect // Terrain affecting movement speed
 
 // Movement
 GuardingExit string
@@ -3045,10 +3104,18 @@ game/processing.go     - JS callbacks (startCombat, stopCombat, etc.)
 game/game.go           - Combat restart hook (check CombatTargets on object load?)
 ```
 
-**Restart behavior:** Combat resumes through visibility checks:
+**Restart behavior:** Combat, bleeding, and healing resume on first event after restart:
 1. **Movement triggers**: When an object moves to a room, it checks if any objects in CombatTargets are present → resumes combat
 2. **Movement events**: When receiving a movement event, check if the arriving object is in CombatTargets → resumes combat
-3. **Lazy first-event check**: On first event after server restart, check if object has non-empty CombatTargets and target is visible → resume combat
+3. **Lazy first-event check**: On first event after server restart, check and restart:
+   - **Combat**: If CombatTargets non-empty and any target visible → start attack goroutine
+   - **Bleeding**: If BleedingLevel > 0 → start bleeding ticker goroutine
+   - **Healing**: If Health < MaxHealth → start regeneration ticker goroutine (if object has regen)
+
+**Why Go tickers instead of queue events:** Bleeding and healing tick frequently (every few seconds). Using the queue system would create thousands of persistent events for each bleeding creature. Go tickers are:
+- More efficient (no serialization/storage per tick)
+- Simpler (no event handler dispatch)
+- Lost on restart (acceptable - state is preserved, only ticker needs restart)
 
 Implementation for lazy first-event:
 ```go
@@ -3057,13 +3124,22 @@ type Game struct {
 }
 
 // In event handler, before running JS:
-if obj.LastEventTime < uint64(g.startupTime) && len(obj.CombatTargets) > 0 {
-    // First event since restart, has combat state - check for visible targets
+if obj.LastEventTime < uint64(g.startupTime) {
+    // First event since restart - check what needs restarting
+    if len(obj.CombatTargets) > 0 {
+        // Check for visible targets → resume combat
+    }
+    if obj.BleedingLevel > 0 {
+        // Start bleeding ticker goroutine
+    }
+    if obj.Health < obj.MaxHealth && obj.HasRegeneration() {
+        // Start regeneration ticker goroutine
+    }
 }
 obj.LastEventTime = uint64(ctx.Now())
 ```
 
-This avoids iterating all objects at startup. Dormant objects that never receive events won't resume combat, but that's acceptable since nothing is happening to them anyway.
+This avoids iterating all objects at startup. Dormant objects that never receive events won't resume combat/bleeding/healing, but that's acceptable since nothing is happening to them anyway. Bleeding damage will "catch up" on first event based on elapsed time since BleedingSince.
 
 **Locking strategy:** When resolving attack:
 ```go

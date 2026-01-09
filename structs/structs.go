@@ -149,6 +149,181 @@ func (o *Object) IsAlive() bool {
 	return o.Unsafe.Health > 0
 }
 
+// SetBodyType sets the body type, max health, and initializes body parts.
+// This clears any existing body parts and reinitializes them from the config.
+// Health is set to maxHealth (full health on body type change).
+// Use this from JS via setBodyType("humanoid", 100) in created event handlers.
+// Returns an error if the body config is not found.
+// This method is thread-safe.
+func (o *Object) SetBodyType(ctx Context, bodyConfigID string, maxHealth float32) error {
+	if bodyConfigID == "" {
+		return errors.New("bodyConfigID cannot be empty")
+	}
+	if maxHealth <= 0 {
+		return errors.New("maxHealth must be positive")
+	}
+
+	cfg, ok := ctx.ServerConfig().GetBodyConfig(bodyConfigID)
+	if !ok {
+		return errors.Errorf("body config %q not found", bodyConfigID)
+	}
+
+	o.Lock()
+	defer o.Unlock()
+
+	// Set body config and health
+	o.Unsafe.BodyConfigID = bodyConfigID
+	o.Unsafe.MaxHealth = maxHealth
+	o.Unsafe.Health = maxHealth
+
+	// Clear and reinitialize body parts
+	o.Unsafe.BodyParts = make(map[string]BodyPartState)
+	for partID, partCfg := range cfg.Parts {
+		partHealth := float32(partCfg.HealthFraction * float64(maxHealth))
+		o.Unsafe.BodyParts[partID] = BodyPartState{
+			Health:  partHealth,
+			Severed: false,
+		}
+	}
+
+	return nil
+}
+
+// ClearBodyType removes the body type and all body parts, making the object
+// non-combatant. Use this to convert a combat object back to a prop.
+// This method is thread-safe.
+func (o *Object) ClearBodyType() {
+	o.Lock()
+	defer o.Unlock()
+	o.Unsafe.BodyConfigID = ""
+	o.Unsafe.MaxHealth = 0
+	o.Unsafe.Health = 0
+	o.Unsafe.BodyParts = nil
+}
+
+// BodyPartsInitialized returns true if body parts have been initialized.
+func (o *Object) BodyPartsInitialized() bool {
+	o.RLock()
+	defer o.RUnlock()
+	return len(o.Unsafe.BodyParts) > 0
+}
+
+// SetHealthScaled sets the central health and scales all body part health proportionally.
+// For example, healing to 100% health heals all body parts to 100%.
+// Setting to 50% health sets all body parts to 50% of their max.
+// Severed body parts remain severed (health stays 0).
+// This method is thread-safe.
+func (o *Object) SetHealthScaled(ctx Context, health float32) {
+	o.Lock()
+	defer o.Unlock()
+
+	if o.Unsafe.MaxHealth <= 0 {
+		o.Unsafe.Health = health
+		return
+	}
+
+	// Clamp health to valid range
+	if health < 0 {
+		health = 0
+	} else if health > o.Unsafe.MaxHealth {
+		health = o.Unsafe.MaxHealth
+	}
+
+	// Calculate health ratio for scaling body parts
+	ratio := float64(health) / float64(o.Unsafe.MaxHealth)
+	o.Unsafe.Health = health
+
+	// Scale body part health (skip severed parts)
+	if o.Unsafe.BodyConfigID != "" && ctx != nil && o.Unsafe.BodyParts != nil {
+		cfg, ok := ctx.ServerConfig().GetBodyConfig(o.Unsafe.BodyConfigID)
+		if ok {
+			for partID, partCfg := range cfg.Parts {
+				state, exists := o.Unsafe.BodyParts[partID]
+				if !exists {
+					continue
+				}
+				if !state.Severed {
+					partMax := partCfg.HealthFraction * float64(o.Unsafe.MaxHealth)
+					state.Health = float32(partMax * ratio)
+					o.Unsafe.BodyParts[partID] = state
+				}
+			}
+		}
+	}
+}
+
+// SetMaxHealthScaled sets the max health and scales current health and body parts proportionally.
+// For example, doubling max health doubles current health and all body part health.
+// The health percentage is preserved (if at 50% health, stays at 50%).
+// This method is thread-safe.
+func (o *Object) SetMaxHealthScaled(ctx Context, maxHealth float32) {
+	o.Lock()
+	defer o.Unlock()
+
+	if maxHealth <= 0 {
+		maxHealth = 0
+		o.Unsafe.MaxHealth = 0
+		o.Unsafe.Health = 0
+		// Clear body part health since max health is 0
+		for partID, state := range o.Unsafe.BodyParts {
+			if !state.Severed {
+				state.Health = 0
+				o.Unsafe.BodyParts[partID] = state
+			}
+		}
+		return
+	}
+
+	// Calculate ratio for scaling (use float64 for precision)
+	var ratio float64 = 1.0
+	if o.Unsafe.MaxHealth > 0 {
+		ratio = float64(maxHealth) / float64(o.Unsafe.MaxHealth)
+	}
+
+	// Scale current health
+	o.Unsafe.Health = float32(float64(o.Unsafe.Health) * ratio)
+	o.Unsafe.MaxHealth = maxHealth
+
+	// Clamp health to max
+	if o.Unsafe.Health > o.Unsafe.MaxHealth {
+		o.Unsafe.Health = o.Unsafe.MaxHealth
+	}
+
+	// Scale body part health (skip severed parts)
+	if o.Unsafe.BodyConfigID != "" && ctx != nil && o.Unsafe.BodyParts != nil {
+		cfg, ok := ctx.ServerConfig().GetBodyConfig(o.Unsafe.BodyConfigID)
+		if ok {
+			for partID, partCfg := range cfg.Parts {
+				state, exists := o.Unsafe.BodyParts[partID]
+				if !exists {
+					continue
+				}
+				if !state.Severed {
+					// New max for this part
+					partMax := partCfg.HealthFraction * float64(maxHealth)
+					// Scale current health
+					state.Health = float32(float64(state.Health) * ratio)
+					if state.Health > float32(partMax) {
+						state.Health = float32(partMax)
+					}
+					o.Unsafe.BodyParts[partID] = state
+				}
+			}
+		}
+	}
+}
+
+// HealFull restores health and all body parts to maximum.
+// Severed body parts remain severed.
+// This method is thread-safe.
+func (o *Object) HealFull(ctx Context) {
+	// Get max health under lock to avoid race condition
+	o.RLock()
+	maxHealth := o.Unsafe.MaxHealth
+	o.RUnlock()
+	o.SetHealthScaled(ctx, maxHealth)
+}
+
 func (o *Object) HasCallback(name string, tag string) bool {
 	callbacks := o.GetCallbacks()
 	tags, found := callbacks[name]
