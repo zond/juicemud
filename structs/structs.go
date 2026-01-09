@@ -134,12 +134,18 @@ func (o *Object) Indef() string {
 // CanCombat returns true if the object can participate in combat.
 // Combat requires BodyConfigID to be set and MaxHealth > 0.
 func (o *Object) CanCombat() bool {
+	o.RLock()
+	defer o.RUnlock()
 	return o.Unsafe.BodyConfigID != "" && o.Unsafe.MaxHealth > 0
 }
 
 // IsAlive returns true if the object has positive health.
-// Only meaningful for objects that CanCombat().
+// Only meaningful for objects that CanCombat(). For non-combat objects
+// (where CanCombat() returns false), this will typically return false
+// since Health defaults to 0.
 func (o *Object) IsAlive() bool {
+	o.RLock()
+	defer o.RUnlock()
 	return o.Unsafe.Health > 0
 }
 
