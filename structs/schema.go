@@ -1059,27 +1059,180 @@ func (statusEffect *StatusEffect) UnmarshalPlain(tn int, b []byte) (n int, err e
     return
 }
 
+// Struct - Wound
+type Wound struct {
+    BodyPartID string
+    Level int32
+    AppliedAt uint64
+    LastTickAt uint64
+}
+
+// Reserved Ids - Wound
+var woundRIds = []uint16{}
+
+// Size - Wound
+func (wound *Wound) Size() int {
+    return wound.size(0)
+}
+
+// Nested Size - Wound
+func (wound *Wound) size(id uint16) (s int) {
+    s += bstd.SizeString(wound.BodyPartID) + 2
+    s += bstd.SizeInt32() + 2
+    s += bstd.SizeUint64() + 2
+    s += bstd.SizeUint64() + 2
+
+    if id > 255 {
+        s += 5
+        return
+    }
+    s += 4
+    return
+}
+
+// SizePlain - Wound
+func (wound *Wound) SizePlain() (s int) {
+    s += bstd.SizeString(wound.BodyPartID)
+    s += bstd.SizeInt32()
+    s += bstd.SizeUint64()
+    s += bstd.SizeUint64()
+    return
+}
+
+// Marshal - Wound
+func (wound *Wound) Marshal(b []byte) {
+    wound.marshal(0, b, 0)
+}
+
+// Nested Marshal - Wound
+func (wound *Wound) marshal(tn int, b []byte, id uint16) (n int) {
+    n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 1)
+    n = bstd.MarshalString(n, b, wound.BodyPartID)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 2)
+    n = bstd.MarshalInt32(n, b, wound.Level)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 3)
+    n = bstd.MarshalUint64(n, b, wound.AppliedAt)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 4)
+    n = bstd.MarshalUint64(n, b, wound.LastTickAt)
+
+    n += 2
+    b[n-2] = 1
+    b[n-1] = 1
+    return
+}
+
+// MarshalPlain - Wound
+func (wound *Wound) MarshalPlain(tn int, b []byte) (n int) {
+    n = tn
+    n = bstd.MarshalString(n, b, wound.BodyPartID)
+    n = bstd.MarshalInt32(n, b, wound.Level)
+    n = bstd.MarshalUint64(n, b, wound.AppliedAt)
+    n = bstd.MarshalUint64(n, b, wound.LastTickAt)
+    return n
+}
+
+// Unmarshal - Wound
+func (wound *Wound) Unmarshal(b []byte) (err error) {
+    _, err = wound.unmarshal(0, b, []uint16{}, 0)
+    return
+}
+
+// Nested Unmarshal - Wound
+func (wound *Wound) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err error) {
+    var ok bool
+    if n, ok, err = bgenimpl.HandleCompatibility(tn, b, r, id); !ok {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, woundRIds, 1); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, wound.BodyPartID, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, woundRIds, 2); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, wound.Level, err = bstd.UnmarshalInt32(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, woundRIds, 3); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, wound.AppliedAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, woundRIds, 4); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, wound.LastTickAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+            return
+        }
+    }
+    n += 2
+    return
+}
+
+// UnmarshalPlain - Wound
+func (wound *Wound) UnmarshalPlain(tn int, b []byte) (n int, err error) {
+    n = tn
+    if n, wound.BodyPartID, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, wound.Level, err = bstd.UnmarshalInt32(n, b); err != nil {
+        return
+    }
+    if n, wound.AppliedAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+        return
+    }
+    if n, wound.LastTickAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+        return
+    }
+    return
+}
+
 // Struct - ObjectDO
 type ObjectDO struct {
     Id string
-    Callbacks map[string]map[string]bool
     State string
-    Location string
-    Content map[string]bool
-    Learning bool
-    Skills map[string]Skill
-    Descriptions []Description
-    Exits []Exit
     SourcePath string
     SourceModTime int64
+    Location string
+    Content map[string]bool
+    Callbacks map[string]map[string]bool
+    Descriptions []Description
+    Exits []Exit
+    Learning bool
+    Skills map[string]Skill
     Movement Movement
     Health float32
     MaxHealth float32
     BodyConfigID string
     BodyParts map[string]BodyPartState
     StatusEffects []StatusEffect
-    BleedingLevel int32
-    BleedingSince uint64
+    Wounds []Wound
 }
 
 // Reserved Ids - ObjectDO
@@ -1093,24 +1246,23 @@ func (objectDO *ObjectDO) Size() int {
 // Nested Size - ObjectDO
 func (objectDO *ObjectDO) size(id uint16) (s int) {
     s += bstd.SizeString(objectDO.Id) + 2
-    s += bstd.SizeMap(objectDO.Callbacks, bstd.SizeString, func (s map[string]bool) int { return bstd.SizeMap(s, bstd.SizeString, bstd.SizeBool) }) + 2
     s += bstd.SizeString(objectDO.State) + 2
-    s += bstd.SizeString(objectDO.Location) + 2
-    s += bstd.SizeMap(objectDO.Content, bstd.SizeString, bstd.SizeBool) + 2
-    s += bstd.SizeBool() + 2
-    s += bstd.SizeMap(objectDO.Skills, bstd.SizeString, func (s Skill) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(objectDO.Descriptions, func (s Description) int { return s.SizePlain() }) + 2
-    s += bstd.SizeSlice(objectDO.Exits, func (s Exit) int { return s.SizePlain() }) + 2
     s += bstd.SizeString(objectDO.SourcePath) + 2
     s += bstd.SizeInt64() + 2
+    s += bstd.SizeString(objectDO.Location) + 2
+    s += bstd.SizeMap(objectDO.Content, bstd.SizeString, bstd.SizeBool) + 2
+    s += bstd.SizeMap(objectDO.Callbacks, bstd.SizeString, func (s map[string]bool) int { return bstd.SizeMap(s, bstd.SizeString, bstd.SizeBool) }) + 2
+    s += bstd.SizeSlice(objectDO.Descriptions, func (s Description) int { return s.SizePlain() }) + 2
+    s += bstd.SizeSlice(objectDO.Exits, func (s Exit) int { return s.SizePlain() }) + 2
+    s += bstd.SizeBool() + 2
+    s += bstd.SizeMap(objectDO.Skills, bstd.SizeString, func (s Skill) int { return s.SizePlain() }) + 2
     s += objectDO.Movement.size(12)
     s += bstd.SizeFloat32() + 2
     s += bstd.SizeFloat32() + 2
     s += bstd.SizeString(objectDO.BodyConfigID) + 2
     s += bstd.SizeMap(objectDO.BodyParts, bstd.SizeString, func (s BodyPartState) int { return s.SizePlain() }) + 2
     s += bstd.SizeSlice(objectDO.StatusEffects, func (s StatusEffect) int { return s.SizePlain() }) + 2
-    s += bstd.SizeInt32() + 2
-    s += bstd.SizeUint64() + 2
+    s += bstd.SizeSlice(objectDO.Wounds, func (s Wound) int { return s.SizePlain() }) + 2
 
     if id > 255 {
         s += 5
@@ -1123,24 +1275,23 @@ func (objectDO *ObjectDO) size(id uint16) (s int) {
 // SizePlain - ObjectDO
 func (objectDO *ObjectDO) SizePlain() (s int) {
     s += bstd.SizeString(objectDO.Id)
-    s += bstd.SizeMap(objectDO.Callbacks, bstd.SizeString, func (s map[string]bool) int { return bstd.SizeMap(s, bstd.SizeString, bstd.SizeBool) })
     s += bstd.SizeString(objectDO.State)
-    s += bstd.SizeString(objectDO.Location)
-    s += bstd.SizeMap(objectDO.Content, bstd.SizeString, bstd.SizeBool)
-    s += bstd.SizeBool()
-    s += bstd.SizeMap(objectDO.Skills, bstd.SizeString, func (s Skill) int { return s.SizePlain() })
-    s += bstd.SizeSlice(objectDO.Descriptions, func (s Description) int { return s.SizePlain() })
-    s += bstd.SizeSlice(objectDO.Exits, func (s Exit) int { return s.SizePlain() })
     s += bstd.SizeString(objectDO.SourcePath)
     s += bstd.SizeInt64()
+    s += bstd.SizeString(objectDO.Location)
+    s += bstd.SizeMap(objectDO.Content, bstd.SizeString, bstd.SizeBool)
+    s += bstd.SizeMap(objectDO.Callbacks, bstd.SizeString, func (s map[string]bool) int { return bstd.SizeMap(s, bstd.SizeString, bstd.SizeBool) })
+    s += bstd.SizeSlice(objectDO.Descriptions, func (s Description) int { return s.SizePlain() })
+    s += bstd.SizeSlice(objectDO.Exits, func (s Exit) int { return s.SizePlain() })
+    s += bstd.SizeBool()
+    s += bstd.SizeMap(objectDO.Skills, bstd.SizeString, func (s Skill) int { return s.SizePlain() })
     s += objectDO.Movement.SizePlain()
     s += bstd.SizeFloat32()
     s += bstd.SizeFloat32()
     s += bstd.SizeString(objectDO.BodyConfigID)
     s += bstd.SizeMap(objectDO.BodyParts, bstd.SizeString, func (s BodyPartState) int { return s.SizePlain() })
     s += bstd.SizeSlice(objectDO.StatusEffects, func (s StatusEffect) int { return s.SizePlain() })
-    s += bstd.SizeInt32()
-    s += bstd.SizeUint64()
+    s += bstd.SizeSlice(objectDO.Wounds, func (s Wound) int { return s.SizePlain() })
     return
 }
 
@@ -1154,26 +1305,26 @@ func (objectDO *ObjectDO) marshal(tn int, b []byte, id uint16) (n int) {
     n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 1)
     n = bstd.MarshalString(n, b, objectDO.Id)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 2)
-    n = bstd.MarshalMap(n, b, objectDO.Callbacks, bstd.MarshalString, func (n int, b []byte, s map[string]bool) int { return bstd.MarshalMap(n, b, s, bstd.MarshalString, bstd.MarshalBool) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 3)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 2)
     n = bstd.MarshalString(n, b, objectDO.State)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 4)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 3)
+    n = bstd.MarshalString(n, b, objectDO.SourcePath)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 4)
+    n = bstd.MarshalInt64(n, b, objectDO.SourceModTime)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 5)
     n = bstd.MarshalString(n, b, objectDO.Location)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 5)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 6)
     n = bstd.MarshalMap(n, b, objectDO.Content, bstd.MarshalString, bstd.MarshalBool)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed8, 6)
-    n = bstd.MarshalBool(n, b, objectDO.Learning)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 7)
-    n = bstd.MarshalMap(n, b, objectDO.Skills, bstd.MarshalString, func (n int, b []byte, s Skill) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalMap(n, b, objectDO.Callbacks, bstd.MarshalString, func (n int, b []byte, s map[string]bool) int { return bstd.MarshalMap(n, b, s, bstd.MarshalString, bstd.MarshalBool) })
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 8)
     n = bstd.MarshalSlice(n, b, objectDO.Descriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 9)
     n = bstd.MarshalSlice(n, b, objectDO.Exits, func (n int, b []byte, s Exit) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 10)
-    n = bstd.MarshalString(n, b, objectDO.SourcePath)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 11)
-    n = bstd.MarshalInt64(n, b, objectDO.SourceModTime)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed8, 10)
+    n = bstd.MarshalBool(n, b, objectDO.Learning)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 11)
+    n = bstd.MarshalMap(n, b, objectDO.Skills, bstd.MarshalString, func (n int, b []byte, s Skill) int { return s.MarshalPlain(n, b) })
     n = objectDO.Movement.marshal(n, b, 12)
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 13)
     n = bstd.MarshalFloat32(n, b, objectDO.Health)
@@ -1185,10 +1336,8 @@ func (objectDO *ObjectDO) marshal(tn int, b []byte, id uint16) (n int) {
     n = bstd.MarshalMap(n, b, objectDO.BodyParts, bstd.MarshalString, func (n int, b []byte, s BodyPartState) int { return s.MarshalPlain(n, b) })
     n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 17)
     n = bstd.MarshalSlice(n, b, objectDO.StatusEffects, func (n int, b []byte, s StatusEffect) int { return s.MarshalPlain(n, b) })
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 18)
-    n = bstd.MarshalInt32(n, b, objectDO.BleedingLevel)
-    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 19)
-    n = bstd.MarshalUint64(n, b, objectDO.BleedingSince)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 18)
+    n = bstd.MarshalSlice(n, b, objectDO.Wounds, func (n int, b []byte, s Wound) int { return s.MarshalPlain(n, b) })
 
     n += 2
     b[n-2] = 1
@@ -1200,24 +1349,23 @@ func (objectDO *ObjectDO) marshal(tn int, b []byte, id uint16) (n int) {
 func (objectDO *ObjectDO) MarshalPlain(tn int, b []byte) (n int) {
     n = tn
     n = bstd.MarshalString(n, b, objectDO.Id)
-    n = bstd.MarshalMap(n, b, objectDO.Callbacks, bstd.MarshalString, func (n int, b []byte, s map[string]bool) int { return bstd.MarshalMap(n, b, s, bstd.MarshalString, bstd.MarshalBool) })
     n = bstd.MarshalString(n, b, objectDO.State)
-    n = bstd.MarshalString(n, b, objectDO.Location)
-    n = bstd.MarshalMap(n, b, objectDO.Content, bstd.MarshalString, bstd.MarshalBool)
-    n = bstd.MarshalBool(n, b, objectDO.Learning)
-    n = bstd.MarshalMap(n, b, objectDO.Skills, bstd.MarshalString, func (n int, b []byte, s Skill) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, objectDO.Descriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalSlice(n, b, objectDO.Exits, func (n int, b []byte, s Exit) int { return s.MarshalPlain(n, b) })
     n = bstd.MarshalString(n, b, objectDO.SourcePath)
     n = bstd.MarshalInt64(n, b, objectDO.SourceModTime)
+    n = bstd.MarshalString(n, b, objectDO.Location)
+    n = bstd.MarshalMap(n, b, objectDO.Content, bstd.MarshalString, bstd.MarshalBool)
+    n = bstd.MarshalMap(n, b, objectDO.Callbacks, bstd.MarshalString, func (n int, b []byte, s map[string]bool) int { return bstd.MarshalMap(n, b, s, bstd.MarshalString, bstd.MarshalBool) })
+    n = bstd.MarshalSlice(n, b, objectDO.Descriptions, func (n int, b []byte, s Description) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalSlice(n, b, objectDO.Exits, func (n int, b []byte, s Exit) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalBool(n, b, objectDO.Learning)
+    n = bstd.MarshalMap(n, b, objectDO.Skills, bstd.MarshalString, func (n int, b []byte, s Skill) int { return s.MarshalPlain(n, b) })
     n = objectDO.Movement.MarshalPlain(n, b)
     n = bstd.MarshalFloat32(n, b, objectDO.Health)
     n = bstd.MarshalFloat32(n, b, objectDO.MaxHealth)
     n = bstd.MarshalString(n, b, objectDO.BodyConfigID)
     n = bstd.MarshalMap(n, b, objectDO.BodyParts, bstd.MarshalString, func (n int, b []byte, s BodyPartState) int { return s.MarshalPlain(n, b) })
     n = bstd.MarshalSlice(n, b, objectDO.StatusEffects, func (n int, b []byte, s StatusEffect) int { return s.MarshalPlain(n, b) })
-    n = bstd.MarshalInt32(n, b, objectDO.BleedingLevel)
-    n = bstd.MarshalUint64(n, b, objectDO.BleedingSince)
+    n = bstd.MarshalSlice(n, b, objectDO.Wounds, func (n int, b []byte, s Wound) int { return s.MarshalPlain(n, b) })
     return n
 }
 
@@ -1254,7 +1402,7 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
         return
     }
     if ok {
-        if n, objectDO.Callbacks, err = bstd.UnmarshalMap[string, map[string]bool](n, b, bstd.UnmarshalString, func (n int, b []byte) (int, map[string]bool, error) { return bstd.UnmarshalMap[string, bool](n, b, bstd.UnmarshalString, bstd.UnmarshalBool) }); err != nil {
+        if n, objectDO.State, err = bstd.UnmarshalString(n, b); err != nil {
             return
         }
     }
@@ -1265,7 +1413,7 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
         return
     }
     if ok {
-        if n, objectDO.State, err = bstd.UnmarshalString(n, b); err != nil {
+        if n, objectDO.SourcePath, err = bstd.UnmarshalString(n, b); err != nil {
             return
         }
     }
@@ -1276,7 +1424,7 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
         return
     }
     if ok {
-        if n, objectDO.Location, err = bstd.UnmarshalString(n, b); err != nil {
+        if n, objectDO.SourceModTime, err = bstd.UnmarshalInt64(n, b); err != nil {
             return
         }
     }
@@ -1287,7 +1435,7 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
         return
     }
     if ok {
-        if n, objectDO.Content, err = bstd.UnmarshalMap[string, bool](n, b, bstd.UnmarshalString, bstd.UnmarshalBool); err != nil {
+        if n, objectDO.Location, err = bstd.UnmarshalString(n, b); err != nil {
             return
         }
     }
@@ -1298,7 +1446,7 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
         return
     }
     if ok {
-        if n, objectDO.Learning, err = bstd.UnmarshalBool(n, b); err != nil {
+        if n, objectDO.Content, err = bstd.UnmarshalMap[string, bool](n, b, bstd.UnmarshalString, bstd.UnmarshalBool); err != nil {
             return
         }
     }
@@ -1309,7 +1457,7 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
         return
     }
     if ok {
-        if n, objectDO.Skills, err = bstd.UnmarshalMap[string, Skill](n, b, bstd.UnmarshalString, func (n int, b []byte, s *Skill) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+        if n, objectDO.Callbacks, err = bstd.UnmarshalMap[string, map[string]bool](n, b, bstd.UnmarshalString, func (n int, b []byte) (int, map[string]bool, error) { return bstd.UnmarshalMap[string, bool](n, b, bstd.UnmarshalString, bstd.UnmarshalBool) }); err != nil {
             return
         }
     }
@@ -1342,7 +1490,7 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
         return
     }
     if ok {
-        if n, objectDO.SourcePath, err = bstd.UnmarshalString(n, b); err != nil {
+        if n, objectDO.Learning, err = bstd.UnmarshalBool(n, b); err != nil {
             return
         }
     }
@@ -1353,7 +1501,7 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
         return
     }
     if ok {
-        if n, objectDO.SourceModTime, err = bstd.UnmarshalInt64(n, b); err != nil {
+        if n, objectDO.Skills, err = bstd.UnmarshalMap[string, Skill](n, b, bstd.UnmarshalString, func (n int, b []byte, s *Skill) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
             return
         }
     }
@@ -1422,18 +1570,7 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
         return
     }
     if ok {
-        if n, objectDO.BleedingLevel, err = bstd.UnmarshalInt32(n, b); err != nil {
-            return
-        }
-    }
-    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectDORIds, 19); err != nil {
-        if err == bgenimpl.ErrEof {
-            return n, nil
-        }
-        return
-    }
-    if ok {
-        if n, objectDO.BleedingSince, err = bstd.UnmarshalUint64(n, b); err != nil {
+        if n, objectDO.Wounds, err = bstd.UnmarshalSlice[Wound](n, b, func (n int, b []byte, s *Wound) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
             return
         }
     }
@@ -1447,10 +1584,13 @@ func (objectDO *ObjectDO) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     if n, objectDO.Id, err = bstd.UnmarshalString(n, b); err != nil {
         return
     }
-    if n, objectDO.Callbacks, err = bstd.UnmarshalMap[string, map[string]bool](n, b, bstd.UnmarshalString, func (n int, b []byte) (int, map[string]bool, error) { return bstd.UnmarshalMap[string, bool](n, b, bstd.UnmarshalString, bstd.UnmarshalBool) }); err != nil {
+    if n, objectDO.State, err = bstd.UnmarshalString(n, b); err != nil {
         return
     }
-    if n, objectDO.State, err = bstd.UnmarshalString(n, b); err != nil {
+    if n, objectDO.SourcePath, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, objectDO.SourceModTime, err = bstd.UnmarshalInt64(n, b); err != nil {
         return
     }
     if n, objectDO.Location, err = bstd.UnmarshalString(n, b); err != nil {
@@ -1459,10 +1599,7 @@ func (objectDO *ObjectDO) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     if n, objectDO.Content, err = bstd.UnmarshalMap[string, bool](n, b, bstd.UnmarshalString, bstd.UnmarshalBool); err != nil {
         return
     }
-    if n, objectDO.Learning, err = bstd.UnmarshalBool(n, b); err != nil {
-        return
-    }
-    if n, objectDO.Skills, err = bstd.UnmarshalMap[string, Skill](n, b, bstd.UnmarshalString, func (n int, b []byte, s *Skill) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+    if n, objectDO.Callbacks, err = bstd.UnmarshalMap[string, map[string]bool](n, b, bstd.UnmarshalString, func (n int, b []byte) (int, map[string]bool, error) { return bstd.UnmarshalMap[string, bool](n, b, bstd.UnmarshalString, bstd.UnmarshalBool) }); err != nil {
         return
     }
     if n, objectDO.Descriptions, err = bstd.UnmarshalSlice[Description](n, b, func (n int, b []byte, s *Description) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
@@ -1471,10 +1608,10 @@ func (objectDO *ObjectDO) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     if n, objectDO.Exits, err = bstd.UnmarshalSlice[Exit](n, b, func (n int, b []byte, s *Exit) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
         return
     }
-    if n, objectDO.SourcePath, err = bstd.UnmarshalString(n, b); err != nil {
+    if n, objectDO.Learning, err = bstd.UnmarshalBool(n, b); err != nil {
         return
     }
-    if n, objectDO.SourceModTime, err = bstd.UnmarshalInt64(n, b); err != nil {
+    if n, objectDO.Skills, err = bstd.UnmarshalMap[string, Skill](n, b, bstd.UnmarshalString, func (n int, b []byte, s *Skill) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
         return
     }
     if n, err = objectDO.Movement.UnmarshalPlain(n, b); err != nil {
@@ -1495,10 +1632,7 @@ func (objectDO *ObjectDO) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     if n, objectDO.StatusEffects, err = bstd.UnmarshalSlice[StatusEffect](n, b, func (n int, b []byte, s *StatusEffect) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
         return
     }
-    if n, objectDO.BleedingLevel, err = bstd.UnmarshalInt32(n, b); err != nil {
-        return
-    }
-    if n, objectDO.BleedingSince, err = bstd.UnmarshalUint64(n, b); err != nil {
+    if n, objectDO.Wounds, err = bstd.UnmarshalSlice[Wound](n, b, func (n int, b []byte, s *Wound) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
         return
     }
     return

@@ -1228,289 +1228,293 @@ func TestBodyPartsInitialized(t *testing.T) {
 	})
 }
 
-func TestSetHealthScaled(t *testing.T) {
+func TestTakeDamage(t *testing.T) {
 	cfg := NewServerConfig()
 	for name, body := range DefaultBodyConfigs() {
 		cfg.SetBodyConfig(name, body)
 	}
-	ctx := newTestContext(cfg, time.Now())
-
-	t.Run("scales body parts proportionally", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				BodyConfigID: "humanoid",
-				MaxHealth:    100,
-				Health:       100,
-				BodyParts: map[string]BodyPartState{
-					"head":  {Health: 10, Severed: false},  // 10% of max
-					"torso": {Health: 40, Severed: false},  // 40% of max
-				},
-			},
-		}
-
-		obj.SetHealthScaled(ctx, 50) // Set to 50% health
-
-		if obj.Unsafe.Health != 50 {
-			t.Errorf("Health = %v, want 50", obj.Unsafe.Health)
-		}
-
-		// Body parts should be at 50% of their max (use float64 calc for accurate expected values)
-		expectedHead := float32(DefaultBodyConfigs()["humanoid"].Parts["head"].HealthFraction * 100 * 0.5)
-		assertClose(t, obj.Unsafe.BodyParts["head"].Health, expectedHead, 0.001)
-
-		expectedTorso := float32(DefaultBodyConfigs()["humanoid"].Parts["torso"].HealthFraction * 100 * 0.5)
-		assertClose(t, obj.Unsafe.BodyParts["torso"].Health, expectedTorso, 0.001)
-	})
-
-	t.Run("severed parts stay at zero", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				BodyConfigID: "humanoid",
-				MaxHealth:    100,
-				Health:       50,
-				BodyParts: map[string]BodyPartState{
-					"head":    {Health: 5, Severed: false},
-					"leftArm": {Health: 0, Severed: true},
-				},
-			},
-		}
-
-		obj.SetHealthScaled(ctx, 100) // Heal to full
-
-		// Head should be at full
-		expectedHeadMax := float32(DefaultBodyConfigs()["humanoid"].Parts["head"].HealthFraction) * 100
-		if obj.Unsafe.BodyParts["head"].Health != expectedHeadMax {
-			t.Errorf("head health = %v, want %v", obj.Unsafe.BodyParts["head"].Health, expectedHeadMax)
-		}
-
-		// Severed arm should stay at 0 and remain severed
-		arm := obj.Unsafe.BodyParts["leftArm"]
-		if arm.Health != 0 {
-			t.Errorf("severed arm health = %v, want 0", arm.Health)
-		}
-		if !arm.Severed {
-			t.Error("arm should remain severed")
-		}
-	})
-
-	t.Run("clamps health to valid range", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				BodyConfigID: "humanoid",
-				MaxHealth:    100,
-				Health:       50,
-				BodyParts:    map[string]BodyPartState{},
-			},
-		}
-
-		obj.SetHealthScaled(ctx, 150) // Above max
-		if obj.Unsafe.Health != 100 {
-			t.Errorf("Health = %v, want 100 (clamped to max)", obj.Unsafe.Health)
-		}
-
-		obj.SetHealthScaled(ctx, -10) // Below 0
-		if obj.Unsafe.Health != 0 {
-			t.Errorf("Health = %v, want 0 (clamped to min)", obj.Unsafe.Health)
-		}
-	})
-
-	t.Run("works without body config", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				MaxHealth: 100,
-				Health:    100,
-			},
-		}
-
-		obj.SetHealthScaled(ctx, 50)
-		if obj.Unsafe.Health != 50 {
-			t.Errorf("Health = %v, want 50", obj.Unsafe.Health)
-		}
-	})
-
-	t.Run("handles nil BodyParts map", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				BodyConfigID: "humanoid",
-				MaxHealth:    100,
-				Health:       50,
-				BodyParts:    nil, // nil, not empty
-			},
-		}
-		// Should not panic
-		obj.SetHealthScaled(ctx, 100)
-		if obj.Unsafe.Health != 100 {
-			t.Errorf("Health = %v, want 100", obj.Unsafe.Health)
-		}
-	})
-}
-
-func TestSetMaxHealthScaled(t *testing.T) {
-	cfg := NewServerConfig()
-	for name, body := range DefaultBodyConfigs() {
-		cfg.SetBodyConfig(name, body)
+	for name, dmgType := range DefaultDamageTypes() {
+		cfg.SetDamageType(name, dmgType)
 	}
-	ctx := newTestContext(cfg, time.Now())
 
-	t.Run("scales health and body parts proportionally", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				BodyConfigID: "humanoid",
-				MaxHealth:    100,
-				Health:       50, // 50%
-				BodyParts: map[string]BodyPartState{
-					"head":  {Health: 5, Severed: false},  // 50% of head max
-					"torso": {Health: 20, Severed: false}, // 50% of torso max
-				},
-			},
+	t.Run("applies damage to body part and central health equally", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
 		}
 
-		obj.SetMaxHealthScaled(ctx, 200) // Double max health
+		initialHealth := obj.Unsafe.Health
+		initialTorsoHealth := obj.Unsafe.BodyParts["torso"].Health
 
-		if obj.Unsafe.MaxHealth != 200 {
-			t.Errorf("MaxHealth = %v, want 200", obj.Unsafe.MaxHealth)
-		}
-		if obj.Unsafe.Health != 100 {
-			t.Errorf("Health = %v, want 100 (scaled from 50)", obj.Unsafe.Health)
+		result, err := obj.TakeDamage(ctx, "torso", 10, "slashing", Stamp(ctx.Now()))
+		if err != nil {
+			t.Fatalf("TakeDamage failed: %v", err)
 		}
 
-		// Body parts should double as well
-		if obj.Unsafe.BodyParts["head"].Health != 10 {
-			t.Errorf("head health = %v, want 10 (scaled from 5)", obj.Unsafe.BodyParts["head"].Health)
+		// Both should decrease by same amount
+		if obj.Unsafe.Health != initialHealth-10 {
+			t.Errorf("central health = %v, want %v", obj.Unsafe.Health, initialHealth-10)
 		}
-		if obj.Unsafe.BodyParts["torso"].Health != 40 {
-			t.Errorf("torso health = %v, want 40 (scaled from 20)", obj.Unsafe.BodyParts["torso"].Health)
+		if obj.Unsafe.BodyParts["torso"].Health != initialTorsoHealth-10 {
+			t.Errorf("torso health = %v, want %v", obj.Unsafe.BodyParts["torso"].Health, initialTorsoHealth-10)
+		}
+		if result.Died {
+			t.Error("should not be dead from 10 damage")
 		}
 	})
 
-	t.Run("severed parts stay at zero", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				BodyConfigID: "humanoid",
-				MaxHealth:    100,
-				Health:       50,
-				BodyParts: map[string]BodyPartState{
-					"head":    {Health: 5, Severed: false},
-					"leftArm": {Health: 0, Severed: true},
-				},
-			},
+	t.Run("returns error for severed body part", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
 		}
 
-		obj.SetMaxHealthScaled(ctx, 200)
-
+		// Sever the arm
 		arm := obj.Unsafe.BodyParts["leftArm"]
-		if arm.Health != 0 {
-			t.Errorf("severed arm health = %v, want 0", arm.Health)
-		}
-		if !arm.Severed {
-			t.Error("arm should remain severed")
+		arm.Severed = true
+		obj.Unsafe.BodyParts["leftArm"] = arm
+
+		_, err := obj.TakeDamage(ctx, "leftArm", 10, "slashing", Stamp(ctx.Now()))
+		if err == nil {
+			t.Error("expected error when hitting severed part")
 		}
 	})
 
-	t.Run("zero max health clears all", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				BodyConfigID: "humanoid",
-				MaxHealth:    100,
-				Health:       50,
-				BodyParts: map[string]BodyPartState{
-					"head": {Health: 5, Severed: false},
-				},
-			},
+	t.Run("returns error for non-combatant", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+
+		_, err := obj.TakeDamage(ctx, "torso", 10, "slashing", Stamp(ctx.Now()))
+		if err == nil {
+			t.Error("expected error for non-combatant")
+		}
+	})
+
+	t.Run("zero damage does nothing", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
 		}
 
-		obj.SetMaxHealthScaled(ctx, 0)
+		initialHealth := obj.Unsafe.Health
+		result, err := obj.TakeDamage(ctx, "torso", 0, "slashing", Stamp(ctx.Now()))
+		if err != nil {
+			t.Fatalf("TakeDamage failed: %v", err)
+		}
 
-		if obj.Unsafe.MaxHealth != 0 {
-			t.Errorf("MaxHealth = %v, want 0", obj.Unsafe.MaxHealth)
+		if obj.Unsafe.Health != initialHealth {
+			t.Errorf("health changed from %v to %v", initialHealth, obj.Unsafe.Health)
+		}
+		if result.Died || result.Incapacitated || result.Severance != nil || result.WoundInflicted != nil {
+			t.Error("zero damage should have no effects")
+		}
+	})
+
+	t.Run("death when central health reaches zero", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
+		}
+
+		result, err := obj.TakeDamage(ctx, "torso", 150, "slashing", Stamp(ctx.Now()))
+		if err != nil {
+			t.Fatalf("TakeDamage failed: %v", err)
+		}
+
+		if !result.Died {
+			t.Error("should be dead")
 		}
 		if obj.Unsafe.Health != 0 {
-			t.Errorf("Health = %v, want 0", obj.Unsafe.Health)
+			t.Errorf("health = %v, want 0", obj.Unsafe.Health)
+		}
+	})
+
+	t.Run("incapacitation when vital part reaches zero", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
+		}
+
+		// Head is vital with 10% health fraction (10 HP)
+		result, err := obj.TakeDamage(ctx, "head", 15, "slashing", Stamp(ctx.Now()))
+		if err != nil {
+			t.Fatalf("TakeDamage failed: %v", err)
+		}
+
+		if !result.Incapacitated {
+			t.Error("should be incapacitated (head at 0)")
 		}
 		if obj.Unsafe.BodyParts["head"].Health != 0 {
 			t.Errorf("head health = %v, want 0", obj.Unsafe.BodyParts["head"].Health)
 		}
 	})
 
-	t.Run("from zero max health", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				BodyConfigID: "humanoid",
-				MaxHealth:    0,
-				Health:       0,
-				BodyParts:    map[string]BodyPartState{},
-			},
+	t.Run("creates wound on bleeding damage", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
 		}
 
-		obj.SetMaxHealthScaled(ctx, 100)
-
-		if obj.Unsafe.MaxHealth != 100 {
-			t.Errorf("MaxHealth = %v, want 100", obj.Unsafe.MaxHealth)
+		// 20 damage = 20% of max health, slashing has BleedingMult=1.0
+		// So bleedFraction = 0.20 -> WoundLevelCritical
+		result, err := obj.TakeDamage(ctx, "torso", 20, "slashing", Stamp(ctx.Now()))
+		if err != nil {
+			t.Fatalf("TakeDamage failed: %v", err)
 		}
-		// Health should be scaled from 0 with ratio 1.0 (default)
-		if obj.Unsafe.Health != 0 {
-			t.Errorf("Health = %v, want 0 (scaled from 0)", obj.Unsafe.Health)
+
+		if result.WoundInflicted == nil {
+			t.Fatal("expected wound to be inflicted")
+		}
+		if result.WoundInflicted.Level != WoundLevelCritical {
+			t.Errorf("wound level = %v, want %v", result.WoundInflicted.Level, WoundLevelCritical)
+		}
+		if result.WoundInflicted.BodyPartID != "torso" {
+			t.Errorf("wound body part = %q, want torso", result.WoundInflicted.BodyPartID)
+		}
+
+		// Check wound was added to object
+		if len(obj.Unsafe.Wounds) != 1 {
+			t.Fatalf("expected 1 wound, got %d", len(obj.Unsafe.Wounds))
+		}
+	})
+
+	t.Run("no wound from non-bleeding damage type", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
+		}
+
+		// Fire has BleedingMult=0 (cauterizes)
+		result, err := obj.TakeDamage(ctx, "torso", 20, "fire", Stamp(ctx.Now()))
+		if err != nil {
+			t.Fatalf("TakeDamage failed: %v", err)
+		}
+
+		if result.WoundInflicted != nil {
+			t.Error("fire damage should not cause bleeding")
+		}
+		if len(obj.Unsafe.Wounds) != 0 {
+			t.Errorf("expected 0 wounds, got %d", len(obj.Unsafe.Wounds))
 		}
 	})
 
-	t.Run("handles nil BodyParts map", func(t *testing.T) {
-		obj := &Object{
-			Unsafe: &ObjectDO{
-				BodyConfigID: "humanoid",
-				MaxHealth:    100,
-				Health:       50,
-				BodyParts:    nil, // nil, not empty
-			},
+	t.Run("wound level scales with damage", func(t *testing.T) {
+		tests := []struct {
+			damage        float32
+			expectedLevel int32
+		}{
+			{2, WoundLevelLight},    // 2% of 100 = 0.02
+			{5, WoundLevelModerate}, // 5% of 100 = 0.05
+			{10, WoundLevelHeavy},   // 10% of 100 = 0.10
+			{20, WoundLevelCritical}, // 20% of 100 = 0.20
 		}
-		// Should not panic
-		obj.SetMaxHealthScaled(ctx, 200)
-		if obj.Unsafe.MaxHealth != 200 {
-			t.Errorf("MaxHealth = %v, want 200", obj.Unsafe.MaxHealth)
-		}
-		if obj.Unsafe.Health != 100 {
-			t.Errorf("Health = %v, want 100 (scaled from 50)", obj.Unsafe.Health)
+
+		for _, tt := range tests {
+			ctx := newTestContext(cfg, time.Now())
+			obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+			if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := obj.TakeDamage(ctx, "torso", tt.damage, "slashing", Stamp(ctx.Now()))
+			if err != nil {
+				t.Fatalf("TakeDamage failed: %v", err)
+			}
+
+			if result.WoundInflicted == nil {
+				t.Fatalf("damage=%v: expected wound", tt.damage)
+			}
+			if result.WoundInflicted.Level != tt.expectedLevel {
+				t.Errorf("damage=%v: wound level = %v, want %v", tt.damage, result.WoundInflicted.Level, tt.expectedLevel)
+			}
 		}
 	})
-}
 
-func TestHealFull(t *testing.T) {
-	cfg := NewServerConfig()
-	for name, body := range DefaultBodyConfigs() {
-		cfg.SetBodyConfig(name, body)
-	}
-	ctx := newTestContext(cfg, time.Now())
+	t.Run("severing removes wounds and adds severance wound", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
+		}
 
-	obj := &Object{
-		Unsafe: &ObjectDO{
-			BodyConfigID: "humanoid",
-			MaxHealth:    100,
-			Health:       25,
-			BodyParts: map[string]BodyPartState{
-				"head":    {Health: 2, Severed: false},
-				"torso":   {Health: 10, Severed: false},
-				"leftArm": {Health: 0, Severed: true},
+		// Add a wound to the arm first
+		obj.Unsafe.Wounds = []Wound{{BodyPartID: "leftArm", Level: WoundLevelModerate}}
+
+		// leftArm has HealthFraction=0.10 (10 HP) and SeverThreshold=1.0
+		// Need overkill * SeverMult > partMaxHealth * SeverThreshold
+		// 10 + overkill where overkill * 1.0 > 10 * 1.0
+		// So we need >20 damage total (10 to deplete, >10 overkill)
+		result, err := obj.TakeDamage(ctx, "leftArm", 25, "slashing", Stamp(ctx.Now()))
+		if err != nil {
+			t.Fatalf("TakeDamage failed: %v", err)
+		}
+
+		if result.Severance == nil {
+			t.Fatal("expected arm to be severed")
+		}
+		if !obj.Unsafe.BodyParts["leftArm"].Severed {
+			t.Error("arm should be marked severed")
+		}
+
+		// Original arm wound should be removed, severance wound added to torso
+		if len(obj.Unsafe.Wounds) != 1 {
+			t.Fatalf("expected 1 wound (severance), got %d", len(obj.Unsafe.Wounds))
+		}
+		if obj.Unsafe.Wounds[0].BodyPartID != "torso" {
+			t.Errorf("severance wound on %q, want torso", obj.Unsafe.Wounds[0].BodyPartID)
+		}
+		if obj.Unsafe.Wounds[0].Level != WoundLevelCritical {
+			t.Errorf("severance wound level = %v, want critical", obj.Unsafe.Wounds[0].Level)
+		}
+		if result.Severance.Wound == nil {
+			t.Error("expected severance wound in result")
+		}
+	})
+
+	t.Run("severing vital part causes death", func(t *testing.T) {
+		ctx := newTestContext(cfg, time.Now())
+		obj := &Object{Unsafe: &ObjectDO{Id: "test"}}
+		if err := obj.SetBodyType(ctx, "humanoid", 100); err != nil {
+			t.Fatal(err)
+		}
+
+		// Head is vital with HealthFraction=0.10 (10 HP) and SeverThreshold=1.5
+		// Need overkill * 1.0 > 10 * 1.5 = 15
+		// So >25 damage (10 to deplete + >15 overkill)
+		result, err := obj.TakeDamage(ctx, "head", 30, "slashing", Stamp(ctx.Now()))
+		if err != nil {
+			t.Fatalf("TakeDamage failed: %v", err)
+		}
+
+		if result.Severance == nil {
+			t.Fatal("expected head to be severed")
+		}
+		if !result.Died {
+			t.Error("severing vital part should cause death")
+		}
+	})
+
+	t.Run("TotalBleedingLevel sums all wounds", func(t *testing.T) {
+		obj := &Object{
+			Unsafe: &ObjectDO{
+				Wounds: []Wound{
+					{Level: WoundLevelLight},
+					{Level: WoundLevelModerate},
+					{Level: WoundLevelHeavy},
+				},
 			},
-		},
-	}
+		}
 
-	obj.HealFull(ctx)
-
-	if obj.Unsafe.Health != 100 {
-		t.Errorf("Health = %v, want 100", obj.Unsafe.Health)
-	}
-
-	// Non-severed parts should be at full
-	expectedHeadMax := float32(DefaultBodyConfigs()["humanoid"].Parts["head"].HealthFraction) * 100
-	if obj.Unsafe.BodyParts["head"].Health != expectedHeadMax {
-		t.Errorf("head health = %v, want %v", obj.Unsafe.BodyParts["head"].Health, expectedHeadMax)
-	}
-
-	// Severed parts remain severed
-	arm := obj.Unsafe.BodyParts["leftArm"]
-	if arm.Health != 0 {
-		t.Errorf("severed arm health = %v, want 0", arm.Health)
-	}
-	if !arm.Severed {
-		t.Error("arm should remain severed")
-	}
+		expected := WoundLevelLight + WoundLevelModerate + WoundLevelHeavy
+		if got := obj.TotalBleedingLevel(); got != expected {
+			t.Errorf("TotalBleedingLevel() = %v, want %v", got, expected)
+		}
+	})
 }

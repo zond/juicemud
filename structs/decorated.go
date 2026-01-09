@@ -107,16 +107,6 @@ func (v *Object) SetId(p string) {
 	defer v.Unlock()
 	v.Unsafe.Id = p
 }
-func (v *Object) GetCallbacks() map[string]map[string]bool {
-	v.RLock()
-	defer v.RUnlock()
-	return v.Unsafe.Callbacks
-}
-func (v *Object) SetCallbacks(p map[string]map[string]bool) {
-	v.Lock()
-	defer v.Unlock()
-	v.Unsafe.Callbacks = p
-}
 func (v *Object) GetState() string {
 	v.RLock()
 	defer v.RUnlock()
@@ -126,6 +116,26 @@ func (v *Object) SetState(p string) {
 	v.Lock()
 	defer v.Unlock()
 	v.Unsafe.State = p
+}
+func (v *Object) GetSourcePath() string {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.SourcePath
+}
+func (v *Object) SetSourcePath(p string) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.SourcePath = p
+}
+func (v *Object) GetSourceModTime() int64 {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.SourceModTime
+}
+func (v *Object) SetSourceModTime(p int64) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.SourceModTime = p
 }
 func (v *Object) GetLocation() string {
 	v.RLock()
@@ -147,25 +157,15 @@ func (v *Object) SetContent(p map[string]bool) {
 	defer v.Unlock()
 	v.Unsafe.Content = p
 }
-func (v *Object) GetLearning() bool {
+func (v *Object) GetCallbacks() map[string]map[string]bool {
 	v.RLock()
 	defer v.RUnlock()
-	return v.Unsafe.Learning
+	return v.Unsafe.Callbacks
 }
-func (v *Object) SetLearning(p bool) {
+func (v *Object) SetCallbacks(p map[string]map[string]bool) {
 	v.Lock()
 	defer v.Unlock()
-	v.Unsafe.Learning = p
-}
-func (v *Object) GetSkills() map[string]Skill {
-	v.RLock()
-	defer v.RUnlock()
-	return v.Unsafe.Skills
-}
-func (v *Object) SetSkills(p map[string]Skill) {
-	v.Lock()
-	defer v.Unlock()
-	v.Unsafe.Skills = p
+	v.Unsafe.Callbacks = p
 }
 func (v *Object) GetDescriptions() []Description {
 	v.RLock()
@@ -187,25 +187,25 @@ func (v *Object) SetExits(p []Exit) {
 	defer v.Unlock()
 	v.Unsafe.Exits = p
 }
-func (v *Object) GetSourcePath() string {
+func (v *Object) GetLearning() bool {
 	v.RLock()
 	defer v.RUnlock()
-	return v.Unsafe.SourcePath
+	return v.Unsafe.Learning
 }
-func (v *Object) SetSourcePath(p string) {
+func (v *Object) SetLearning(p bool) {
 	v.Lock()
 	defer v.Unlock()
-	v.Unsafe.SourcePath = p
+	v.Unsafe.Learning = p
 }
-func (v *Object) GetSourceModTime() int64 {
+func (v *Object) GetSkills() map[string]Skill {
 	v.RLock()
 	defer v.RUnlock()
-	return v.Unsafe.SourceModTime
+	return v.Unsafe.Skills
 }
-func (v *Object) SetSourceModTime(p int64) {
+func (v *Object) SetSkills(p map[string]Skill) {
 	v.Lock()
 	defer v.Unlock()
-	v.Unsafe.SourceModTime = p
+	v.Unsafe.Skills = p
 }
 func (v *Object) GetMovement() Movement {
 	v.RLock()
@@ -267,23 +267,13 @@ func (v *Object) SetStatusEffects(p []StatusEffect) {
 	defer v.Unlock()
 	v.Unsafe.StatusEffects = p
 }
-func (v *Object) GetBleedingLevel() int32 {
+func (v *Object) GetWounds() []Wound {
 	v.RLock()
 	defer v.RUnlock()
-	return v.Unsafe.BleedingLevel
+	return v.Unsafe.Wounds
 }
-func (v *Object) SetBleedingLevel(p int32) {
+func (v *Object) SetWounds(p []Wound) {
 	v.Lock()
 	defer v.Unlock()
-	v.Unsafe.BleedingLevel = p
-}
-func (v *Object) GetBleedingSince() uint64 {
-	v.RLock()
-	defer v.RUnlock()
-	return v.Unsafe.BleedingSince
-}
-func (v *Object) SetBleedingSince(p uint64) {
-	v.Lock()
-	defer v.Unlock()
-	v.Unsafe.BleedingSince = p
+	v.Unsafe.Wounds = p
 }
