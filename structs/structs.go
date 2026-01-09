@@ -131,6 +131,18 @@ func (o *Object) Indef() string {
 	return lang.Indef(name)
 }
 
+// CanCombat returns true if the object can participate in combat.
+// Combat requires BodyConfigID to be set and MaxHealth > 0.
+func (o *Object) CanCombat() bool {
+	return o.Unsafe.BodyConfigID != "" && o.Unsafe.MaxHealth > 0
+}
+
+// IsAlive returns true if the object has positive health.
+// Only meaningful for objects that CanCombat().
+func (o *Object) IsAlive() bool {
+	return o.Unsafe.Health > 0
+}
+
 func (o *Object) HasCallback(name string, tag string) bool {
 	callbacks := o.GetCallbacks()
 	tags, found := callbacks[name]
@@ -191,6 +203,9 @@ func (o *ObjectDO) PostUnmarshal() {
 	}
 	if o.Skills == nil {
 		o.Skills = map[string]Skill{}
+	}
+	if o.BodyParts == nil {
+		o.BodyParts = map[string]BodyPartState{}
 	}
 }
 

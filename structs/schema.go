@@ -771,6 +771,294 @@ func (movement *Movement) UnmarshalPlain(tn int, b []byte) (n int, err error) {
     return
 }
 
+// Struct - BodyPartState
+type BodyPartState struct {
+    Health float32
+    Severed bool
+}
+
+// Reserved Ids - BodyPartState
+var bodyPartStateRIds = []uint16{}
+
+// Size - BodyPartState
+func (bodyPartState *BodyPartState) Size() int {
+    return bodyPartState.size(0)
+}
+
+// Nested Size - BodyPartState
+func (bodyPartState *BodyPartState) size(id uint16) (s int) {
+    s += bstd.SizeFloat32() + 2
+    s += bstd.SizeBool() + 2
+
+    if id > 255 {
+        s += 5
+        return
+    }
+    s += 4
+    return
+}
+
+// SizePlain - BodyPartState
+func (bodyPartState *BodyPartState) SizePlain() (s int) {
+    s += bstd.SizeFloat32()
+    s += bstd.SizeBool()
+    return
+}
+
+// Marshal - BodyPartState
+func (bodyPartState *BodyPartState) Marshal(b []byte) {
+    bodyPartState.marshal(0, b, 0)
+}
+
+// Nested Marshal - BodyPartState
+func (bodyPartState *BodyPartState) marshal(tn int, b []byte, id uint16) (n int) {
+    n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 1)
+    n = bstd.MarshalFloat32(n, b, bodyPartState.Health)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed8, 2)
+    n = bstd.MarshalBool(n, b, bodyPartState.Severed)
+
+    n += 2
+    b[n-2] = 1
+    b[n-1] = 1
+    return
+}
+
+// MarshalPlain - BodyPartState
+func (bodyPartState *BodyPartState) MarshalPlain(tn int, b []byte) (n int) {
+    n = tn
+    n = bstd.MarshalFloat32(n, b, bodyPartState.Health)
+    n = bstd.MarshalBool(n, b, bodyPartState.Severed)
+    return n
+}
+
+// Unmarshal - BodyPartState
+func (bodyPartState *BodyPartState) Unmarshal(b []byte) (err error) {
+    _, err = bodyPartState.unmarshal(0, b, []uint16{}, 0)
+    return
+}
+
+// Nested Unmarshal - BodyPartState
+func (bodyPartState *BodyPartState) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err error) {
+    var ok bool
+    if n, ok, err = bgenimpl.HandleCompatibility(tn, b, r, id); !ok {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, bodyPartStateRIds, 1); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, bodyPartState.Health, err = bstd.UnmarshalFloat32(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, bodyPartStateRIds, 2); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, bodyPartState.Severed, err = bstd.UnmarshalBool(n, b); err != nil {
+            return
+        }
+    }
+    n += 2
+    return
+}
+
+// UnmarshalPlain - BodyPartState
+func (bodyPartState *BodyPartState) UnmarshalPlain(tn int, b []byte) (n int, err error) {
+    n = tn
+    if n, bodyPartState.Health, err = bstd.UnmarshalFloat32(n, b); err != nil {
+        return
+    }
+    if n, bodyPartState.Severed, err = bstd.UnmarshalBool(n, b); err != nil {
+        return
+    }
+    return
+}
+
+// Struct - StatusEffect
+type StatusEffect struct {
+    Id string
+    ConfigID string
+    AppliedAt uint64
+    ExpiresAt uint64
+    LastTickAt uint64
+}
+
+// Reserved Ids - StatusEffect
+var statusEffectRIds = []uint16{}
+
+// Size - StatusEffect
+func (statusEffect *StatusEffect) Size() int {
+    return statusEffect.size(0)
+}
+
+// Nested Size - StatusEffect
+func (statusEffect *StatusEffect) size(id uint16) (s int) {
+    s += bstd.SizeString(statusEffect.Id) + 2
+    s += bstd.SizeString(statusEffect.ConfigID) + 2
+    s += bstd.SizeUint64() + 2
+    s += bstd.SizeUint64() + 2
+    s += bstd.SizeUint64() + 2
+
+    if id > 255 {
+        s += 5
+        return
+    }
+    s += 4
+    return
+}
+
+// SizePlain - StatusEffect
+func (statusEffect *StatusEffect) SizePlain() (s int) {
+    s += bstd.SizeString(statusEffect.Id)
+    s += bstd.SizeString(statusEffect.ConfigID)
+    s += bstd.SizeUint64()
+    s += bstd.SizeUint64()
+    s += bstd.SizeUint64()
+    return
+}
+
+// Marshal - StatusEffect
+func (statusEffect *StatusEffect) Marshal(b []byte) {
+    statusEffect.marshal(0, b, 0)
+}
+
+// Nested Marshal - StatusEffect
+func (statusEffect *StatusEffect) marshal(tn int, b []byte, id uint16) (n int) {
+    n = bgenimpl.MarshalTag(tn, b, bgenimpl.Container, id)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 1)
+    n = bstd.MarshalString(n, b, statusEffect.Id)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 2)
+    n = bstd.MarshalString(n, b, statusEffect.ConfigID)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 3)
+    n = bstd.MarshalUint64(n, b, statusEffect.AppliedAt)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 4)
+    n = bstd.MarshalUint64(n, b, statusEffect.ExpiresAt)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 5)
+    n = bstd.MarshalUint64(n, b, statusEffect.LastTickAt)
+
+    n += 2
+    b[n-2] = 1
+    b[n-1] = 1
+    return
+}
+
+// MarshalPlain - StatusEffect
+func (statusEffect *StatusEffect) MarshalPlain(tn int, b []byte) (n int) {
+    n = tn
+    n = bstd.MarshalString(n, b, statusEffect.Id)
+    n = bstd.MarshalString(n, b, statusEffect.ConfigID)
+    n = bstd.MarshalUint64(n, b, statusEffect.AppliedAt)
+    n = bstd.MarshalUint64(n, b, statusEffect.ExpiresAt)
+    n = bstd.MarshalUint64(n, b, statusEffect.LastTickAt)
+    return n
+}
+
+// Unmarshal - StatusEffect
+func (statusEffect *StatusEffect) Unmarshal(b []byte) (err error) {
+    _, err = statusEffect.unmarshal(0, b, []uint16{}, 0)
+    return
+}
+
+// Nested Unmarshal - StatusEffect
+func (statusEffect *StatusEffect) unmarshal(tn int, b []byte, r []uint16, id uint16) (n int, err error) {
+    var ok bool
+    if n, ok, err = bgenimpl.HandleCompatibility(tn, b, r, id); !ok {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, statusEffectRIds, 1); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, statusEffect.Id, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, statusEffectRIds, 2); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, statusEffect.ConfigID, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, statusEffectRIds, 3); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, statusEffect.AppliedAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, statusEffectRIds, 4); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, statusEffect.ExpiresAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, statusEffectRIds, 5); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, statusEffect.LastTickAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+            return
+        }
+    }
+    n += 2
+    return
+}
+
+// UnmarshalPlain - StatusEffect
+func (statusEffect *StatusEffect) UnmarshalPlain(tn int, b []byte) (n int, err error) {
+    n = tn
+    if n, statusEffect.Id, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, statusEffect.ConfigID, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, statusEffect.AppliedAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+        return
+    }
+    if n, statusEffect.ExpiresAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+        return
+    }
+    if n, statusEffect.LastTickAt, err = bstd.UnmarshalUint64(n, b); err != nil {
+        return
+    }
+    return
+}
+
 // Struct - ObjectDO
 type ObjectDO struct {
     Id string
@@ -785,6 +1073,13 @@ type ObjectDO struct {
     SourcePath string
     SourceModTime int64
     Movement Movement
+    Health float32
+    MaxHealth float32
+    BodyConfigID string
+    BodyParts map[string]BodyPartState
+    StatusEffects []StatusEffect
+    BleedingLevel int32
+    BleedingSince uint64
 }
 
 // Reserved Ids - ObjectDO
@@ -809,6 +1104,13 @@ func (objectDO *ObjectDO) size(id uint16) (s int) {
     s += bstd.SizeString(objectDO.SourcePath) + 2
     s += bstd.SizeInt64() + 2
     s += objectDO.Movement.size(12)
+    s += bstd.SizeFloat32() + 2
+    s += bstd.SizeFloat32() + 2
+    s += bstd.SizeString(objectDO.BodyConfigID) + 2
+    s += bstd.SizeMap(objectDO.BodyParts, bstd.SizeString, func (s BodyPartState) int { return s.SizePlain() }) + 2
+    s += bstd.SizeSlice(objectDO.StatusEffects, func (s StatusEffect) int { return s.SizePlain() }) + 2
+    s += bstd.SizeInt32() + 2
+    s += bstd.SizeUint64() + 2
 
     if id > 255 {
         s += 5
@@ -832,6 +1134,13 @@ func (objectDO *ObjectDO) SizePlain() (s int) {
     s += bstd.SizeString(objectDO.SourcePath)
     s += bstd.SizeInt64()
     s += objectDO.Movement.SizePlain()
+    s += bstd.SizeFloat32()
+    s += bstd.SizeFloat32()
+    s += bstd.SizeString(objectDO.BodyConfigID)
+    s += bstd.SizeMap(objectDO.BodyParts, bstd.SizeString, func (s BodyPartState) int { return s.SizePlain() })
+    s += bstd.SizeSlice(objectDO.StatusEffects, func (s StatusEffect) int { return s.SizePlain() })
+    s += bstd.SizeInt32()
+    s += bstd.SizeUint64()
     return
 }
 
@@ -866,6 +1175,20 @@ func (objectDO *ObjectDO) marshal(tn int, b []byte, id uint16) (n int) {
     n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 11)
     n = bstd.MarshalInt64(n, b, objectDO.SourceModTime)
     n = objectDO.Movement.marshal(n, b, 12)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 13)
+    n = bstd.MarshalFloat32(n, b, objectDO.Health)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 14)
+    n = bstd.MarshalFloat32(n, b, objectDO.MaxHealth)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Bytes, 15)
+    n = bstd.MarshalString(n, b, objectDO.BodyConfigID)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 16)
+    n = bstd.MarshalMap(n, b, objectDO.BodyParts, bstd.MarshalString, func (n int, b []byte, s BodyPartState) int { return s.MarshalPlain(n, b) })
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.ArrayMap, 17)
+    n = bstd.MarshalSlice(n, b, objectDO.StatusEffects, func (n int, b []byte, s StatusEffect) int { return s.MarshalPlain(n, b) })
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed32, 18)
+    n = bstd.MarshalInt32(n, b, objectDO.BleedingLevel)
+    n = bgenimpl.MarshalTag(n, b, bgenimpl.Fixed64, 19)
+    n = bstd.MarshalUint64(n, b, objectDO.BleedingSince)
 
     n += 2
     b[n-2] = 1
@@ -888,6 +1211,13 @@ func (objectDO *ObjectDO) MarshalPlain(tn int, b []byte) (n int) {
     n = bstd.MarshalString(n, b, objectDO.SourcePath)
     n = bstd.MarshalInt64(n, b, objectDO.SourceModTime)
     n = objectDO.Movement.MarshalPlain(n, b)
+    n = bstd.MarshalFloat32(n, b, objectDO.Health)
+    n = bstd.MarshalFloat32(n, b, objectDO.MaxHealth)
+    n = bstd.MarshalString(n, b, objectDO.BodyConfigID)
+    n = bstd.MarshalMap(n, b, objectDO.BodyParts, bstd.MarshalString, func (n int, b []byte, s BodyPartState) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalSlice(n, b, objectDO.StatusEffects, func (n int, b []byte, s StatusEffect) int { return s.MarshalPlain(n, b) })
+    n = bstd.MarshalInt32(n, b, objectDO.BleedingLevel)
+    n = bstd.MarshalUint64(n, b, objectDO.BleedingSince)
     return n
 }
 
@@ -1030,6 +1360,83 @@ func (objectDO *ObjectDO) unmarshal(tn int, b []byte, r []uint16, id uint16) (n 
     if n, err = objectDO.Movement.unmarshal(n, b, objectDORIds, 12); err != nil {
         return
     }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectDORIds, 13); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, objectDO.Health, err = bstd.UnmarshalFloat32(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectDORIds, 14); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, objectDO.MaxHealth, err = bstd.UnmarshalFloat32(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectDORIds, 15); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, objectDO.BodyConfigID, err = bstd.UnmarshalString(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectDORIds, 16); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, objectDO.BodyParts, err = bstd.UnmarshalMap[string, BodyPartState](n, b, bstd.UnmarshalString, func (n int, b []byte, s *BodyPartState) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectDORIds, 17); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, objectDO.StatusEffects, err = bstd.UnmarshalSlice[StatusEffect](n, b, func (n int, b []byte, s *StatusEffect) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectDORIds, 18); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, objectDO.BleedingLevel, err = bstd.UnmarshalInt32(n, b); err != nil {
+            return
+        }
+    }
+    if n, ok, err = bgenimpl.HandleCompatibility(n, b, objectDORIds, 19); err != nil {
+        if err == bgenimpl.ErrEof {
+            return n, nil
+        }
+        return
+    }
+    if ok {
+        if n, objectDO.BleedingSince, err = bstd.UnmarshalUint64(n, b); err != nil {
+            return
+        }
+    }
     n += 2
     return
 }
@@ -1071,6 +1478,27 @@ func (objectDO *ObjectDO) UnmarshalPlain(tn int, b []byte) (n int, err error) {
         return
     }
     if n, err = objectDO.Movement.UnmarshalPlain(n, b); err != nil {
+        return
+    }
+    if n, objectDO.Health, err = bstd.UnmarshalFloat32(n, b); err != nil {
+        return
+    }
+    if n, objectDO.MaxHealth, err = bstd.UnmarshalFloat32(n, b); err != nil {
+        return
+    }
+    if n, objectDO.BodyConfigID, err = bstd.UnmarshalString(n, b); err != nil {
+        return
+    }
+    if n, objectDO.BodyParts, err = bstd.UnmarshalMap[string, BodyPartState](n, b, bstd.UnmarshalString, func (n int, b []byte, s *BodyPartState) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+        return
+    }
+    if n, objectDO.StatusEffects, err = bstd.UnmarshalSlice[StatusEffect](n, b, func (n int, b []byte, s *StatusEffect) (int, error) { return s.UnmarshalPlain(n, b) }); err != nil {
+        return
+    }
+    if n, objectDO.BleedingLevel, err = bstd.UnmarshalInt32(n, b); err != nil {
+        return
+    }
+    if n, objectDO.BleedingSince, err = bstd.UnmarshalUint64(n, b); err != nil {
         return
     }
     return

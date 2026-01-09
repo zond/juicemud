@@ -217,3 +217,73 @@ func (v *Object) SetMovement(p Movement) {
 	defer v.Unlock()
 	v.Unsafe.Movement = p
 }
+func (v *Object) GetHealth() float32 {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.Health
+}
+func (v *Object) SetHealth(p float32) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.Health = p
+}
+func (v *Object) GetMaxHealth() float32 {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.MaxHealth
+}
+func (v *Object) SetMaxHealth(p float32) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.MaxHealth = p
+}
+func (v *Object) GetBodyConfigID() string {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.BodyConfigID
+}
+func (v *Object) SetBodyConfigID(p string) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.BodyConfigID = p
+}
+func (v *Object) GetBodyParts() map[string]BodyPartState {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.BodyParts
+}
+func (v *Object) SetBodyParts(p map[string]BodyPartState) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.BodyParts = p
+}
+func (v *Object) GetStatusEffects() []StatusEffect {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.StatusEffects
+}
+func (v *Object) SetStatusEffects(p []StatusEffect) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.StatusEffects = p
+}
+func (v *Object) GetBleedingLevel() int32 {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.BleedingLevel
+}
+func (v *Object) SetBleedingLevel(p int32) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.BleedingLevel = p
+}
+func (v *Object) GetBleedingSince() uint64 {
+	v.RLock()
+	defer v.RUnlock()
+	return v.Unsafe.BleedingSince
+}
+func (v *Object) SetBleedingSince(p uint64) {
+	v.Lock()
+	defer v.Unlock()
+	v.Unsafe.BleedingSince = p
+}

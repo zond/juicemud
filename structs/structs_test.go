@@ -844,3 +844,93 @@ func TestDuration(t *testing.T) {
 	// At multiple=3 (well past Duration): almost never same RNG
 	assertClose(t, testAt(3.0), 0.0, 0.02)
 }
+
+func TestCanCombat(t *testing.T) {
+	tests := []struct {
+		name         string
+		bodyConfigID string
+		maxHealth    float32
+		expected     bool
+	}{
+		{
+			name:         "no body, no health",
+			bodyConfigID: "",
+			maxHealth:    0,
+			expected:     false,
+		},
+		{
+			name:         "has body, no health",
+			bodyConfigID: "humanoid",
+			maxHealth:    0,
+			expected:     false,
+		},
+		{
+			name:         "no body, has health",
+			bodyConfigID: "",
+			maxHealth:    100,
+			expected:     false,
+		},
+		{
+			name:         "has body and health",
+			bodyConfigID: "humanoid",
+			maxHealth:    100,
+			expected:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			obj := &Object{
+				Unsafe: &ObjectDO{
+					BodyConfigID: tt.bodyConfigID,
+					MaxHealth:    tt.maxHealth,
+				},
+			}
+			if got := obj.CanCombat(); got != tt.expected {
+				t.Errorf("CanCombat() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsAlive(t *testing.T) {
+	tests := []struct {
+		name     string
+		health   float32
+		expected bool
+	}{
+		{
+			name:     "zero health",
+			health:   0,
+			expected: false,
+		},
+		{
+			name:     "negative health",
+			health:   -10,
+			expected: false,
+		},
+		{
+			name:     "positive health",
+			health:   50,
+			expected: true,
+		},
+		{
+			name:     "tiny positive health",
+			health:   0.001,
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			obj := &Object{
+				Unsafe: &ObjectDO{
+					Health: tt.health,
+				},
+			}
+			if got := obj.IsAlive(); got != tt.expected {
+				t.Errorf("IsAlive() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
