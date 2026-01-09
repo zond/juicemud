@@ -21,6 +21,167 @@ A flexible, wizard-configurable combat system that:
 
 ---
 
+## Minimal Setup
+
+The combat system works with minimal configuration. Go provides sensible defaults for all components.
+
+### Combat Eligibility
+
+An object can participate in combat (attack or be attacked) only if it has:
+- `BodyConfigID` set (references a BodyConfig)
+- `MaxHealth > 0`
+
+Objects without these are non-combatants. This means:
+- A rock or chair can't be attacked by default
+- To make destructible props (cars, doors, furniture), give them a BodyConfig with parts like "frame", "door", "engine"
+
+### Minimum Object Requirements
+
+| Field | Required | Default |
+|-------|----------|---------|
+| `MaxHealth`, `Health` | Yes | None - must be set |
+| `BodyConfigID` | Yes | "humanoid" (if not set, uses default) |
+| Skills | No | 0 = poor fighter, but works |
+| Weapons | No | Unarmed combat |
+| Armor | No | No protection |
+
+**Minimum setup:** Set `BodyConfigID` (or rely on default "humanoid"), `MaxHealth`, and `Health`. Combat works immediately.
+
+### Built-in Defaults
+
+Go provides these defaults when no wizard-defined config exists:
+
+**Default Body Type ("humanoid"):** Head, torso, arms, hands, legs, feet. All can bleed; limbs can be severed. See example in Data Model section.
+
+**Default Damage Types:**
+```go
+var DefaultDamageTypes = map[string]*DamageTypeConfig{
+    "slashing":    {SeverMult: 1.0, BleedingMult: 1.0},  // Swords, axes
+    "piercing":    {SeverMult: 0.5, BleedingMult: 1.2},  // Spears, arrows
+    "bludgeoning": {SeverMult: 0.2, BleedingMult: 0.5},  // Clubs, hammers
+    "fire":        {SeverMult: 0.8, BleedingMult: 0},    // Burns, cauterizes
+    "cold":        {SeverMult: 0.4, BleedingMult: 0},    // Frostbite, shatter
+    "electric":    {SeverMult: 0,   BleedingMult: 0.3},  // Shock
+}
+```
+
+**Default CombatConfig:** All tuning constants have sensible defaults (see CombatConfig section).
+
+### Default Combat Messages
+
+All combat events have default message templates. JS callbacks can override for custom flavor.
+
+```go
+var DefaultCombatMessages = map[string]string{
+    // Attack outcomes - use lang.ThirdPersonSingular(verb) for third person
+    // Template functions: {{possessive .Name}} for "John's" vs "James'"
+    "attackHit":       "{{.Attacker}} {{.Verb}} {{possessive .Defender}} {{.BodyPart}} for {{.Damage}} damage.",
+    "attackMissed":    "{{.Attacker}} {{.Verb}} at {{.Defender}} but misses.",
+    "attackParried":   "{{.Defender}} parries {{possessive .Attacker}} attack.",
+    "attackDodged":    "{{.Defender}} dodges {{possessive .Attacker}} attack.",
+    "attackBlocked":   "{{.Defender}} blocks {{possessive .Attacker}} attack.",
+
+    // Damage
+    "damageTaken":      "{{.Object}} takes {{.Damage}} damage to {{.BodyPart}}.",
+    "bodyPartDisabled": "{{possessive .Object}} {{.BodyPart}} is disabled!",
+    "bodyPartSevered":  "{{possessive .Object}} {{.BodyPart}} is severed!",
+    "cutInHalf":        "{{.Object}} is cut in half!",  // Central body part severed
+
+    // Bleeding
+    "bleedingStarted": "{{.Object}} starts bleeding {{.Level}}.",
+    "bleedingTick":    "{{.Object}} loses {{.Damage}} health from bleeding.",
+    "bleedingReduced": "{{possessive .Object}} bleeding subsides.",
+    "bleedingStopped": "{{possessive .Object}} bleeding has stopped.",
+
+    // Death/Incapacitation
+    "death":       "{{.Object}} has died.",
+    "unconscious": "{{.Object}} falls unconscious.",
+
+    // Equipment
+    "weaponBroken": "{{possessive .Object}} {{.Weapon}} breaks!",
+    "armorBroken":  "{{possessive .Object}} {{.Armor}} is destroyed!",
+
+    // Combat state
+    "combatStarted": "{{.Attacker}} attacks {{.Defender}}!",
+    "combatEnded":   "Combat has ended.",
+
+    // Ranged
+    "reload":         "{{.Object}} reloads {{.Weapon}}.",
+    "reloadComplete": "{{.Object}} finishes reloading.",
+    "weaponJammed":   "{{possessive .Object}} {{.Weapon}} jams!",
+    "unjamStart":     "{{.Object}} starts unjamming {{.Weapon}}.",
+    "unjamComplete":  "{{.Object}} clears the jam.",
+    "outOfAmmo":      "Click! {{possessive .Object}} {{.Weapon}} is empty.",
+
+    // Aiming
+    "aimStart":       "{{.Object}} takes aim at {{.Target}}.",
+    "aimInterrupted": "{{possessive .Object}} aim is disrupted.",
+
+    // Grappling
+    "grappleStart": "{{.Attacker}} grapples {{.Defender}}!",
+    "grappled":     "{{.Object}} is grappled by {{.Grappler}}!",
+    "grappleBreak": "{{.Object}} breaks free!",
+    "grappleHold":  "{{.Grappler}} tightens their hold on {{.Object}}.",
+    "grappleThrow": "{{.Attacker}} throws {{.Defender}}!",
+
+    // Movement/Positioning
+    "movementBlocked": "{{.Guard}} blocks {{possessive .Object}} path.",
+    "takeCover":       "{{.Object}} takes cover behind {{.Cover}}.",
+    "leaveCover":      "{{.Object}} leaves cover.",
+
+    // Flanking
+    "outnumbered":       "{{.Object}} is outnumbered!",
+    "badlyOutnumbered":  "{{.Object}} is badly outnumbered!",
+    "surrounded":        "{{.Object}} is surrounded!",
+
+    // Status effects
+    "statusApplied": "{{.Object}} is affected by {{.Effect}}.",
+    "statusExpired": "{{.Effect}} wears off from {{.Object}}.",
+    "statusTick":    "{{.Object}} suffers from {{.Effect}}.",
+}
+```
+
+### Message Rendering
+
+```go
+// Template functions available in combat messages
+var combatTemplateFuncs = template.FuncMap{
+    "possessive": lang.Possessive,  // "John" -> "John's", "James" -> "James'"
+}
+
+func (g *Game) renderCombatMessage(ctx context.Context, event string, obj *Object, payload map[string]any) string {
+    // 1. Try JS callback first (if exists)
+    if msg := g.tryJSCallback(obj, "render"+lang.Capitalize(event), payload); msg != "" {
+        return msg
+    }
+
+    // 2. Fall back to default template
+    tmpl := template.Must(template.New(event).Funcs(combatTemplateFuncs).Parse(DefaultCombatMessages[event]))
+    var buf bytes.Buffer
+    tmpl.Execute(&buf, payload)
+    return buf.String()
+}
+```
+
+### Config Lookup Order
+
+When looking up configs (BodyConfig, DamageTypeConfig, etc.):
+1. Check wizard-defined config (by ID in ServerConfig)
+2. Fall back to built-in default (if available)
+3. If no default exists and config is required, return error
+
+### Levels of Wizard Investment
+
+| Level | Effort | What You Get |
+|-------|--------|--------------|
+| 0 | Set BodyConfigID + Health | Combat works with defaults, generic messages |
+| 1 | Define BodyConfigs | Custom creatures (dragons, robots), destructible objects |
+| 2 | Define Weapon/ArmorConfigs | Custom equipment |
+| 3 | JS render callbacks | Custom flavor text ("The dragon's fiery maw snaps!") |
+| 4 | JS before/after callbacks | Special abilities, custom mechanics |
+
+---
+
 ## Data Model
 
 ### New ObjectDO Fields
@@ -82,6 +243,10 @@ type ObjectDO struct {
     // Status effects (lazily cleaned on access)
     StatusEffects []StatusEffect
 
+    // Bleeding state (managed by Go, not a status effect)
+    BleedingLevel int    // 0=none, 1=light, 2=moderate, 3=heavy, 4=critical
+    BleedingSince uint64 // When current level started (for natural healing)
+
     // Cover properties (default 0 = not useful as cover)
     CoverAbsorption      float64  // 0-1, damage absorbed when used as cover
     CoverAccuracyPenalty float64  // Accuracy penalty to hit someone behind this
@@ -98,6 +263,19 @@ type ObjectDO struct {
     // Aiming state (for combatants)
     AimingAt    string  // Target object ID being aimed at
     AimingSince uint64  // Timestamp when aiming started (0 = not aiming); bonus computed lazily
+
+    // Grappling state
+    GrappledBy string  // Object ID currently grappling this object (empty = not grappled)
+    Grappling  string  // Object ID this object is grappling (empty = not grappling)
+
+    // Movement control
+    GuardingExit string  // Direction being guarded (empty = not guarding)
+
+    // Room/container effects
+    RoomStatusEffects []string  // StatusEffectConfig IDs applied while in this room/container
+
+    // Event tracking (for restart behavior)
+    LastEventTime uint64  // Nanoseconds, used to detect first event after restart
 }
 ```
 
@@ -107,7 +285,7 @@ Effects that modify combat. Optional timeout allows permanent effects (implants)
 
 ```go
 type StatusEffect struct {
-    ID          string  // Unique ID for this effect instance
+    ID          string  // Unique ID for this effect instance (generated via juicemud.NextUniqueID())
     ConfigID    string  // References StatusEffectConfig
     AppliedAt   uint64  // Timestamp when effect was applied
     ExpiresAt   uint64  // Timestamp when effect expires (0 = permanent, e.g., implants)
@@ -143,11 +321,11 @@ type BodyPartState struct {
 }
 ```
 
-**Severing mechanics:**
-- Severing is handled via `ApplyStatusEffects` on weapons with severing capability
-- When the weapon's ApplyStatusEffect roll succeeds and conditions are met, the "severed" status effect is applied
-- JS handlers on the status effect check damage/overkill and mark body part as severed
-- Only weapons configured with a severing ApplyStatusEffect can sever
+**Severing mechanics (Go-managed):**
+- Severing check runs automatically after damage is applied
+- Requirements: `damageType.SeverMult > 0 && bodyPart.SeverThreshold > 0`
+- Threshold: `(overkill * damageType.SeverMult) > (bodyPartMaxHealth * bodyPart.SeverThreshold)`
+- Go sets `BodyPartState.Severed = true` and emits `bodyPartSevered` (or `cutInHalf` if Central)
 - When severed:
   - Emit `bodyPartSevered` event (different from `bodyPartDisabled`)
   - If `Vital: true`, instant death
@@ -225,8 +403,7 @@ type BodyConfig struct {
     ID          string  // "humanoid", "quadruped", "serpent", etc.
     Description string
 
-    Parts       []BodyPart
-    DefaultPart string  // Which part is targeted by default ("torso")
+    Parts []BodyPart
 
     // Multi-wielding penalty (wielding separate items in multiple body parts)
     // Skill result mapped via sigmoid to AmbidextrousPenaltyRange in CombatConfig
@@ -237,6 +414,11 @@ type BodyConfig struct {
     // Cover properties (used when taking cover behind creatures with this body type)
     CoverAbsorption      float64  // 0-1, damage absorbed
     CoverAccuracyPenalty float64  // Accuracy penalty to hit someone behind this body
+
+    // Bleeding behavior for this body type (empty BleedingDamagePerTick = no bleeding)
+    BleedingDamagePerTick [4]float64   // Health loss per tick for light/moderate/heavy/critical
+    BleedingTickInterval  time.Duration // How often bleeding ticks (e.g., 5s)
+    BleedingHealTime      time.Duration // Time for bleeding to naturally reduce one level
 }
 
 type BodyPart struct {
@@ -244,8 +426,10 @@ type BodyPart struct {
     Description      string   // For look output
 
     // Body part health (tracked in ObjectDO.BodyParts)
-    MaxHealth float64  // Maximum health for this body part; at 0 = disabled
-    Vital     bool     // If true: 0 health = unconscious, severed = instant death (head, torso)
+    // Actual max health = object.MaxHealth * HealthFraction
+    HealthFraction float64  // e.g., 0.3 = this part has 30% of object's total health
+    Vital          bool     // If true: 0 health = unconscious, severed = instant death
+    Central        bool     // If true: severing = "cut in half" message (torso); false = "X cut off" (limbs)
 
     // Combat targeting modifiers
     HitWeight        float64  // Relative chance to be hit (torso = 40, head = 10); modified by focus/defend
@@ -275,6 +459,15 @@ type BodyPart struct {
     // Empty map = cannot parry unarmed; non-empty = can attempt to deflect that damage type
     UnarmedParrySkills map[string]map[string]bool  // damage type -> skills for parry
     // Note: No unarmed blocking - blocking requires wielding something
+
+    // Severing threshold - 0 means this body part cannot be severed
+    // Severing check: (overkill * damageType.SeverMult) > (bodyPartMaxHealth * SeverThreshold)
+    SeverThreshold float64  // e.g., 1.0 = overkill must exceed max health; 0.5 = half that
+
+    // Bleeding - empty/all-zero means this body part cannot bleed (e.g., robot arm, horns)
+    // Values are damage thresholds as fraction of this body part's MaxHealth
+    // e.g., [0.1, 0.25, 0.5, 0.75] = 10%/25%/50%/75% for light/moderate/heavy/critical
+    BleedingDamageThresholds [4]float64
 }
 ```
 
@@ -282,25 +475,47 @@ type BodyPart struct {
 ```go
 BodyConfig{
     ID: "humanoid",
-    AmbidextrousSkills: map[string]bool{"ambidexterity": true},  // Dual-wielding requires this skill
+    AmbidextrousSkills: map[string]bool{"ambidexterity": true},  // Dual-wield penalty reduced by skill
+    BleedingDamagePerTick: [4]float64{1, 2, 4, 8},
+    BleedingTickInterval:  5 * time.Second,
+    BleedingHealTime:      30 * time.Second,
     Parts: []BodyPart{
-        {ID: "head", MaxHealth: 50, Vital: true, HitWeight: 10, DamageMultiplier: 1.5, CritBonus: 0.1},
-        {ID: "torso", MaxHealth: 100, Vital: true, HitWeight: 40, DamageMultiplier: 1.0},
-        {ID: "rightArm", MaxHealth: 60, HitWeight: 15, DamageMultiplier: 0.8, CanWield: true,
-         UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "right fist"},
-        {ID: "leftArm", MaxHealth: 60, HitWeight: 15, DamageMultiplier: 0.8, CanWield: true,
-         UnarmedDamage: map[string]float64{"physical": 5}, UnarmedDescription: "left fist"},
-        {ID: "rightLeg", MaxHealth: 70, HitWeight: 10, DamageMultiplier: 0.7,
-         UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "right kick"},
-        {ID: "leftLeg", MaxHealth: 70, HitWeight: 10, DamageMultiplier: 0.7,
-         UnarmedDamage: map[string]float64{"physical": 8}, UnarmedDescription: "left kick"},
+        {ID: "head", HealthFraction: 0.12, Vital: true, HitWeight: 8, DamageMultiplier: 1.5, CritBonus: 0.1,
+         SeverThreshold: 1.0, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
+        {ID: "torso", HealthFraction: 0.30, Vital: true, Central: true, HitWeight: 35, DamageMultiplier: 1.0,
+         SeverThreshold: 1.5, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
+        {ID: "rightArm", HealthFraction: 0.10, HitWeight: 10, DamageMultiplier: 0.8, GrappleEffectiveness: 0.4,
+         SeverThreshold: 0.8, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
+        {ID: "leftArm", HealthFraction: 0.10, HitWeight: 10, DamageMultiplier: 0.8, GrappleEffectiveness: 0.4,
+         SeverThreshold: 0.8, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
+        {ID: "rightHand", HealthFraction: 0.04, HitWeight: 4, DamageMultiplier: 0.6, CanWield: true,
+         UnarmedDamage: map[string]float64{"bludgeoning": 3}, UnarmedDescription: "punch",
+         SeverThreshold: 0.5, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
+        {ID: "leftHand", HealthFraction: 0.04, HitWeight: 4, DamageMultiplier: 0.6, CanWield: true,
+         UnarmedDamage: map[string]float64{"bludgeoning": 3}, UnarmedDescription: "punch",
+         SeverThreshold: 0.5, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
+        {ID: "rightLeg", HealthFraction: 0.10, HitWeight: 10, DamageMultiplier: 0.7, GrappleEffectiveness: 0.1,
+         SeverThreshold: 1.0, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
+        {ID: "leftLeg", HealthFraction: 0.10, HitWeight: 10, DamageMultiplier: 0.7, GrappleEffectiveness: 0.1,
+         SeverThreshold: 1.0, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
+        {ID: "rightFoot", HealthFraction: 0.05, HitWeight: 4, DamageMultiplier: 0.5,
+         UnarmedDamage: map[string]float64{"bludgeoning": 5}, UnarmedDescription: "kick",
+         SeverThreshold: 0.5, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
+        {ID: "leftFoot", HealthFraction: 0.05, HitWeight: 4, DamageMultiplier: 0.5,
+         UnarmedDamage: map[string]float64{"bludgeoning": 5}, UnarmedDescription: "kick",
+         SeverThreshold: 0.5, BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75}},
     },
-    DefaultPart: "torso",
 }
-// Total HitWeight: 100 (torso 40%, arms 15% each, legs 10% each, head 10%)
+// HealthFraction and HitWeight are normalized at runtime
+// Severed body parts are excluded from hit weight calculations
+// Grapple power: 2 arms * 0.4 + 2 legs * 0.1 = 1.0
 ```
 
 **Vital body parts:** Head and torso are `Vital: true`. If health reaches 0, the creature falls unconscious. If severed, instant death.
+
+**Central body parts:** Torso is `Central: true`. Severing produces "cut in half" message instead of "X cut off".
+
+**AmbidextrousSkills:** If empty/nil, creature is naturally ambidextrous (no dual-wield penalty). If set, the skill level determines how much the off-hand penalty is reduced.
 
 **Example dragon body config (natural armor provided via ArmorConfig worn on body parts):**
 ```go
@@ -308,18 +523,19 @@ BodyConfig{
     ID: "dragon",
     AmbidextrousSkills: map[string]bool{"dragonCoordination": true},  // Dragons are fairly coordinated
     Parts: []BodyPart{
-        {ID: "head", MaxHealth: 150, Vital: true, HitWeight: 10, DamageMultiplier: 2.0, CritBonus: 0.15,
-         UnarmedDamage: map[string]float64{"physical": 30, "fire": 15}, UnarmedDescription: "bite",
+        {ID: "head", HealthFraction: 0.15, Vital: true, HitWeight: 10, DamageMultiplier: 2.0, CritBonus: 0.15,
+         UnarmedDamage: map[string]float64{"piercing": 30, "fire": 15}, UnarmedDescription: "bite",
          ApplyStatusEffects: []ApplyStatusEffect{
-             {StatusEffectID: "burning", Skills: map[string]bool{"fireBreath": true}, Level: 20},
+             {StatusEffectID: "burning", Challenge: Challenge{
+                 Skills: map[string]bool{"fireBreath": true}, Level: 20,
+             }},
          }},
-        {ID: "body", MaxHealth: 300, Vital: true, HitWeight: 50, DamageMultiplier: 1.0},
-        {ID: "leftForeclaw", MaxHealth: 100, HitWeight: 10, DamageMultiplier: 1.2, CanWield: true,
-         UnarmedDamage: map[string]float64{"physical": 20}, UnarmedDescription: "left claw",
-         UnarmedParrySkills: map[string]map[string]bool{"physical": {"clawFighting": true}}},
-        // ... more parts: rightForeclaw (10), wings (10), tail (10) ...
+        {ID: "body", HealthFraction: 0.40, Vital: true, Central: true, HitWeight: 50, DamageMultiplier: 1.0},
+        {ID: "leftForeclaw", HealthFraction: 0.10, HitWeight: 10, DamageMultiplier: 1.2, CanWield: true,
+         UnarmedDamage: map[string]float64{"slashing": 20}, UnarmedDescription: "claw",
+         UnarmedParrySkills: map[string]map[string]bool{"slashing": {"clawFighting": true}}},
+        // ... more parts: rightForeclaw, wings, tail ...
     },
-    DefaultPart: "body",
 }
 // Dragon's natural armor (scales) is an ArmorConfig pre-equipped on all body parts
 ```
@@ -329,14 +545,15 @@ BodyConfig{
 BodyConfig{
     ID: "venomous_snake",
     Parts: []BodyPart{
-        {ID: "head", MaxHealth: 20, Vital: true, HitWeight: 20, DamageMultiplier: 1.5,
-         UnarmedDamage: map[string]float64{"piercing": 5}, UnarmedDescription: "fangs",
+        {ID: "head", HealthFraction: 0.30, Vital: true, HitWeight: 20, DamageMultiplier: 1.5,
+         UnarmedDamage: map[string]float64{"piercing": 5}, UnarmedDescription: "bite",
          ApplyStatusEffects: []ApplyStatusEffect{
-             {StatusEffectID: "deadly_venom", Skills: map[string]bool{"venomStrike": true}, Level: 15},
+             {StatusEffectID: "deadly_venom", Challenge: Challenge{
+                 Skills: map[string]bool{"venomStrike": true}, Level: 15,
+             }},
          }},
-        {ID: "body", MaxHealth: 30, Vital: true, HitWeight: 80, DamageMultiplier: 1.0},
+        {ID: "body", HealthFraction: 0.70, Vital: true, Central: true, HitWeight: 80, DamageMultiplier: 1.0},
     },
-    DefaultPart: "body",
 }
 ```
 
@@ -346,16 +563,15 @@ BodyConfig{
     ID: "octopus",
     // No AmbidextrousSkills = naturally ambidextrous, no dual-wield penalty
     Parts: []BodyPart{
-        {ID: "head", MaxHealth: 30, Vital: true, HitWeight: 10, DamageMultiplier: 1.5},
-        {ID: "body", MaxHealth: 50, Vital: true, HitWeight: 30, DamageMultiplier: 1.0},
-        {ID: "tentacle1", MaxHealth: 20, HitWeight: 7.5, DamageMultiplier: 0.5, CanWield: true,
-         UnarmedDamage: map[string]float64{"physical": 3}, UnarmedDescription: "tentacle",
+        {ID: "head", HealthFraction: 0.15, Vital: true, HitWeight: 10, DamageMultiplier: 1.5},
+        {ID: "body", HealthFraction: 0.25, Vital: true, Central: true, HitWeight: 30, DamageMultiplier: 1.0},
+        {ID: "tentacle1", HealthFraction: 0.075, HitWeight: 7.5, DamageMultiplier: 0.5, CanWield: true,
+         UnarmedDamage: map[string]float64{"bludgeoning": 3}, UnarmedDescription: "lash",
          GrappleEffectiveness: 0.5},
-        // ... tentacles 2-8, each with HitWeight: 7.5, CanWield: true, GrappleEffectiveness: 0.5 ...
+        // ... tentacles 2-8, same config ...
     },
-    DefaultPart: "body",
 }
-// Total HitWeight: 100 (body 30%, head 10%, 8 tentacles at 7.5% each)
+// 8 tentacles * 0.5 grapple = 4.0 total grapple power
 ```
 
 ### StanceConfig
@@ -411,15 +627,14 @@ Defines a status effect that can be applied when damage is dealt (by weapons/amm
 
 ```go
 type ApplyStatusEffect struct {
-    StatusEffectID string          // StatusEffectConfig ID to apply
-    Skills         map[string]bool // Skills used in the application check
-    Level          float32         // Difficulty - if roll vs Level > 0, effect applies
+    StatusEffectID string    // StatusEffectConfig ID to apply
+    Challenge      Challenge // Skills and Level for the application check
 }
 ```
 
-**For weapons/ammo/unarmed:** When damage is dealt, the attacker rolls using their `Skills` against `Level`. On success, the effect is applied to the target.
+**For weapons/ammo/unarmed:** When damage is dealt, `Challenge.Check()` is called for the attacker. If result > 0, the effect is applied to the target.
 
-**For armor:** When the armor absorbs any damage, the defender (armor wearer) rolls using their `Skills` against `Level`. On success, the effect is applied to the attacker.
+**For armor:** When the armor absorbs any damage, `Challenge.Check()` is called for the defender. If result > 0, the effect is applied to the attacker.
 
 **Event payload for `statusApplied`:**
 ```go
@@ -434,27 +649,29 @@ type ApplyStatusEffect struct {
 }
 ```
 
-The event payload provides enough information for JS handlers to implement effects like:
-- **Bleeding:** Scale intensity based on Damage and damage types
-- **Severing:** Check Overkill vs a threshold to sever the body part
-- **Poison:** Apply DOT based on the specific StatusEffectConfig
+The event payload provides context for JS handlers to customize status effect behavior.
+
+**Note:** Bleeding and severing are Go-managed (see Wound System), not status effects. ApplyStatusEffects is for other effects like poison, burning, curses, etc.
 
 **Examples:**
 ```go
-// Slashing sword that causes bleeding and can sever
-WeaponConfig{
-    DamageTypes: map[string]float64{"slashing": 15},
-    ApplyStatusEffects: []ApplyStatusEffect{
-        {StatusEffectID: "bleeding_wound", Skills: map[string]bool{"slashing": true}, Level: 10},
-        {StatusEffectID: "severing_strike", Skills: map[string]bool{"slashing": true}, Level: 30},
-    },
-}
-
 // Poisoned dagger
 WeaponConfig{
     DamageTypes: map[string]float64{"piercing": 8},
     ApplyStatusEffects: []ApplyStatusEffect{
-        {StatusEffectID: "weak_poison", Skills: map[string]bool{"poisoning": true}, Level: 15},
+        {StatusEffectID: "weak_poison", Challenge: Challenge{
+            Skills: map[string]bool{"poisoning": true}, Level: 15,
+        }},
+    },
+}
+
+// Flaming sword
+WeaponConfig{
+    DamageTypes: map[string]float64{"slashing": 12, "fire": 5},
+    ApplyStatusEffects: []ApplyStatusEffect{
+        {StatusEffectID: "burning", Challenge: Challenge{
+            Skills: map[string]bool{"fireMagic": true}, Level: 10,
+        }},
     },
 }
 
@@ -462,7 +679,9 @@ WeaponConfig{
 ArmorConfig{
     BaseReduction: map[string]float64{"physical": 0.3},
     ApplyStatusEffects: []ApplyStatusEffect{
-        {StatusEffectID: "stamina_drain", Skills: map[string]bool{"darkMagic": true}, Level: 25},
+        {StatusEffectID: "stamina_drain", Challenge: Challenge{
+            Skills: map[string]bool{"darkMagic": true}, Level: 25,
+        }},
     },
 }
 ```
@@ -475,6 +694,8 @@ Skills are specified as `map[string]bool` - the attacker's effective level acros
 type WeaponConfig struct {
     ID          string
     Description string
+    Verb        string  // Attack verb for messages: "slash", "stab", "crush", "shoot"
+                        // Used with lang.ThirdPersonSingular() for "John slashes you"
 
     // Equipment slot requirements
     SlotType      string  // Which slot type this uses: "wield" for weapons/shields/tools
@@ -589,14 +810,23 @@ func canWearOver(existingLayers []*ArmorConfig, newArmor *ArmorConfig) bool {
 type DamageTypeConfig struct {
     ID          string  // "slashing", "piercing", "bludgeoning", "fire", etc.
     Description string
-    // Note: Bleeding and severing are now handled via ApplyStatusEffects on weapons/ammo
+
+    // Wound effect multipliers - 0 = can't cause this effect
+    // Multiplied to damage before comparing to body part thresholds
+    SeverMult    float64  // For severing: higher = easier to sever
+    BleedingMult float64  // For bleeding: higher = easier to cause bleeding
 }
 ```
 
-**Wound effects via ApplyStatusEffects:** Instead of special-casing bleeding/severing in damage types, these are now handled through the `ApplyStatusEffects` system on weapons. This allows more flexibility:
-- A magical sword might cause bleeding even with fire damage
-- A blunt weapon might cause "crushing" wounds instead of bleeding
-- Severing can be a status effect that the JS handler interprets to actually sever the body part
+**Example damage types:**
+```go
+"slashing":    {SeverMult: 1.0, BleedingMult: 1.0}  // Swords, axes - clean cuts bleed freely
+"piercing":    {SeverMult: 0.5, BleedingMult: 1.2}  // Spears, arrows - deep wounds bleed well
+"bludgeoning": {SeverMult: 0.2, BleedingMult: 0.5}  // Clubs - crushing, internal bleeding
+"fire":        {SeverMult: 0.8, BleedingMult: 0}    // Can burn limbs off, cauterizes wounds
+"cold":        {SeverMult: 0.4, BleedingMult: 0}    // Frozen limbs can shatter, no bleeding
+"electric":    {SeverMult: 0,   BleedingMult: 0.3}  // Shock - some internal bleeding, no severing
+```
 
 ### CombatConfig
 
@@ -612,9 +842,6 @@ type CombatConfig struct {
     // Critical hits
     BaseCritChance       float64  // e.g., 0.05 (5%)
     CritDamageMultiplier float64  // e.g., 2.0
-
-    // Note: Severing and bleeding are now handled via ApplyStatusEffects on weapons
-    // The JS handler receives event data including Overkill for sever decisions
 
     // Resource regeneration (lazy computation)
     HealthRegenSkills       map[string]bool
@@ -673,7 +900,8 @@ type CombatConfig struct {
     AttackSpeedMultRange [2]float64  // Default: [0.0, 1.0] - maps to min/max attack interval
 
     // Reload/Unjam tuning
-    ReloadMultRange [2]float64  // Default: [0.5, 1.5] - time multiplier (lower = faster)
+    ReloadMultRange [2]float64  // Default: [0.5, 1.5] - reload time multiplier (lower = faster)
+    UnjamMultRange  [2]float64  // Default: [0.5, 1.5] - unjam time multiplier (lower = faster)
 
     // Aiming tuning
     AimMultRange [2]float64  // Default: [0.5, 1.5] - aim rate multiplier
@@ -688,8 +916,6 @@ type CombatConfig struct {
     // Status effect limits
     MaxStatusEffects int  // Default: 100 - max status effects per object
 }
-
-// BleedingThreshold removed - bleeding now handled via ApplyStatusEffects on weapons
 ```
 
 ---
@@ -829,15 +1055,15 @@ ServerConfig implements `MarshalJSON`/`UnmarshalJSON` to serialize the private f
 Health, Stamina, and Focus regenerate lazily - computed on access, not via timers:
 
 ```go
-func getResourceWithRegen(ctx Context, current, max float64, lastRegenAt time.Time,
+func getResourceWithRegen(ctx Context, current, max float64, lastRegenAt uint64,
                           regenEnabled bool, regenSkills map[string]bool,
-                          baseRegenPerSec float64, obj *Object) (newValue float64, newTimestamp time.Time) {
-    now := time.Now()
+                          baseRegenPerSec float64, obj *Object) (newValue float64, newTimestamp uint64) {
+    now := ctx.Now()  // Returns structs.Timestamp (uint64 nanoseconds)
     if !regenEnabled || current >= max {
-        return current, now
+        return current, uint64(now)
     }
 
-    elapsed := now.Sub(lastRegenAt).Seconds()
+    elapsed := now.Time().Sub(structs.Timestamp(lastRegenAt).Time()).Seconds()
     if elapsed <= 0 {
         return current, lastRegenAt
     }
@@ -849,7 +1075,7 @@ func getResourceWithRegen(ctx Context, current, max float64, lastRegenAt time.Ti
 
     regenRate := baseRegenPerSec * mult
     newValue = math.Min(max, current + elapsed*regenRate)
-    return newValue, now
+    return newValue, uint64(now)
 }
 ```
 
@@ -954,20 +1180,34 @@ Attacker's **to-hit result** is compared against each defense result. Stance and
 
 10. **Apply Damage** (to both body part and central health):
     - Reduce hit body part's health (`BodyParts[bodyPartID].Health`)
+    - Calculate overkill: `overkill = max(0, -newBodyPartHealth)`
     - **Body part disabled**: If body part health <= 0 (emit `bodyPartDisabled` event)
     - Reduce defender's central `Health` by same amount
 
-11. **Apply Status Effects** (weapons, ammo, unarmed attacks):
-    - For each `ApplyStatusEffect` on the damage source:
-      - Attacker rolls `Roll(Skills)` vs `Level`
-      - If roll > 0, apply the status effect to defender
-      - Status effect JS handler receives `{Damage, DamageTypes, Overkill, BodyPart}` to decide severity
-      - Severing/bleeding are just status effects configured on appropriate weapons
-    - For each `ApplyStatusEffect` on defender's armor:
-      - Defender rolls `Roll(Skills)` vs `Level`
-      - If roll > 0, apply the status effect to **attacker** (thorns, reflection, etc.)
+11. **Bleeding Check** (Go-managed):
+    - If `damageType.BleedingMult > 0` and body part has `BleedingDamageThresholds`:
+      - Calculate `effectiveDamage = damage * damageType.BleedingMult`
+      - Calculate `damagePercent = effectiveDamage / bodyPartMaxHealth`
+      - Find highest matching threshold level (4=critical down to 1=light)
+      - If level > current `BleedingLevel`, upgrade bleeding and emit `bleedingStarted`
 
-12. **Death Check**:
+12. **Severing Check** (Go-managed):
+    - If `damageType.SeverMult > 0` and `bodyPart.SeverThreshold > 0`:
+      - If `(overkill * damageType.SeverMult) > (bodyPartMaxHealth * bodyPart.SeverThreshold)`:
+        - Set `BodyPartState.Severed = true`
+        - Handle weapon drop / grip reduction
+        - Emit `bodyPartSevered` (or `cutInHalf` if `Central`)
+        - If `bodyPart.Vital`, trigger instant death
+
+13. **Apply Status Effects** (weapons, ammo, unarmed attacks):
+    - For each `ApplyStatusEffect` on the damage source:
+      - `Challenge.Check()` for the attacker
+      - If result > 0, apply the status effect to defender (poison, burning, etc.)
+    - For each `ApplyStatusEffect` on defender's armor:
+      - `Challenge.Check()` for the defender
+      - If result > 0, apply the status effect to **attacker** (thorns, reflection, etc.)
+
+14. **Death Check**:
     - If central Health <= 0:
       - Set `Active = false` (stops fighting, reacting, etc.)
       - Clear `CombatTargets` (stop attacking)
@@ -1215,43 +1455,91 @@ addCallback('beforeDamage', ['emit'], (req) => {
 
 ## Wound System
 
-Combat can inflict persistent wounds via status effects.
+Combat can inflict bleeding and severing wounds, both managed entirely by Go (not status effects).
 
-### Bleeding
+### Bleeding (Go-managed)
 
-Caused by weapons with bleeding `ApplyStatusEffects` (e.g., slashing swords, serrated blades). Bleeding naturally **heals over time** (clotting) via the `ReplacedBy` mechanism.
+Bleeding is checked automatically after damage is applied. Requirements:
+- `damageType.BleedingMult > 0`
+- `bodyPart.BleedingDamageThresholds` is non-empty (body part can bleed)
+- `bodyConfig.BleedingDamagePerTick` is non-empty (body type can bleed)
 
-**Example configs:**
+**Bleeding levels:** 1=light, 2=moderate, 3=heavy, 4=critical
+
+**Triggering bleeding:**
 ```go
-"bleeding_severe": {
-    DefaultDuration: 30 * time.Second,
-    TickInterval:    3 * time.Second,
-    ChallengeModifiers: map[string]float64{"accuracy": -10, "dodge": -10},
-    ReplacedBy: "bleeding_moderate",
-}
-"bleeding_moderate": {
-    DefaultDuration: 30 * time.Second,
-    TickInterval:    5 * time.Second,
-    ChallengeModifiers: map[string]float64{"accuracy": -5},
-    ReplacedBy: "bleeding_light",
-}
-"bleeding_light": {
-    DefaultDuration: 60 * time.Second,
-    TickInterval:    10 * time.Second,
-    ChallengeModifiers: map[string]float64{"accuracy": -2},
-    // No ReplacedBy - just expires (healed)
+// After damage to a body part
+bodyPartMaxHealth := object.MaxHealth * bodyPart.HealthFraction
+effectiveDamage := damage * damageType.BleedingMult
+damagePercent := effectiveDamage / bodyPartMaxHealth
+for level := 4; level >= 1; level-- {
+    if damagePercent >= bodyPart.BleedingDamageThresholds[level-1] {
+        if level > defender.BleedingLevel {
+            defender.BleedingLevel = level
+            defender.BleedingSince = ctx.Now()
+            emit("bleedingStarted", {Level: level, BodyPart: partID})
+        }
+        break
+    }
 }
 ```
 
-**Downgrade timeline (severe wound):**
-- 0-30s: `bleeding_severe` (3s ticks, heavy penalties)
-- 30s: expires → Go applies `bleeding_moderate`
-- 30-60s: `bleeding_moderate` (5s ticks, moderate penalties)
-- 60s: expires → Go applies `bleeding_light`
-- 60-120s: `bleeding_light` (10s ticks, minor penalties)
-- 120s: expires → healed
+**Bleeding ticks:** Go schedules ticks at `bodyConfig.BleedingTickInterval`:
+```go
+// Every tick while BleedingLevel > 0
+damage := bodyConfig.BleedingDamagePerTick[defender.BleedingLevel-1]
+defender.Health -= damage
+emit("bleedingTick", {Level: defender.BleedingLevel, Damage: damage})
+if defender.Health <= 0 {
+    emit("death", {Cause: "bleeding"})
+}
+```
 
-**Medical treatment:** First aid removes the bleeding effect entirely, stopping the cascade.
+**Natural healing:** After `bodyConfig.BleedingHealTime`, bleeding reduces one level:
+```go
+// Checked on each tick
+elapsed := ctx.Now() - defender.BleedingSince
+if elapsed >= bodyConfig.BleedingHealTime {
+    defender.BleedingLevel--
+    defender.BleedingSince = ctx.Now()
+    if defender.BleedingLevel > 0 {
+        emit("bleedingReduced", {Level: defender.BleedingLevel})
+    } else {
+        emit("bleedingStopped", {})
+    }
+}
+```
+
+**Medical treatment:** JS can set `BleedingLevel = 0` to stop bleeding immediately (first aid, bandages, etc.).
+
+**Example humanoid body config:**
+```go
+BodyConfig{
+    ID: "humanoid",
+    BleedingDamagePerTick: [4]float64{1, 3, 7, 15},  // HP per tick for light/moderate/heavy/critical
+    BleedingTickInterval:  5 * time.Second,
+    BleedingHealTime:      30 * time.Second,  // 30s to reduce one level
+    // ...
+}
+```
+
+**Example body part thresholds:**
+```go
+BodyPart{
+    ID: "arm", HealthFraction: 0.10,
+    BleedingDamageThresholds: [4]float64{0.1, 0.25, 0.5, 0.75},  // 10%/25%/50%/75% of part HP
+    SeverThreshold: 1.0,  // Can be severed with 100% overkill
+}
+BodyPart{
+    ID: "robotArm", HealthFraction: 0.12,
+    BleedingDamageThresholds: [4]float64{},  // Empty = can't bleed
+    SeverThreshold: 1.5,  // Harder to sever (150% overkill needed)
+}
+```
+
+### Severing (Go-managed)
+
+See **Severing mechanics** in the Body Part System section above. Severing is also Go-managed, not a status effect.
 
 ---
 
@@ -1318,9 +1606,9 @@ type RangedWeaponConfig struct {
     FireModes []FireModeConfig
 
     // Reliability
-    JamSkills   map[string]bool  // Higher skill = less jamming
-    UnjamTime   time.Duration    // Base unjam time (mechanical)
-    UnjamSkills map[string]bool  // Skill modifier (sigmoid: 0.5x to 1.5x of UnjamTime)
+    AvoidJamChallenge Challenge      // Skills + Level for avoiding jams (health penalty added to Level)
+    UnjamTime         time.Duration  // Base unjam time (mechanical)
+    UnjamSkills       map[string]bool // Skill modifier (sigmoid: 0.5x to 1.5x of UnjamTime)
 
     // Status effects applied when this weapon deals damage
     ApplyStatusEffects []ApplyStatusEffect
@@ -1379,10 +1667,8 @@ type AmmoConfig struct {
     // e.g., {"piercing": 0.3} = AP rounds ignore 30% of armor vs piercing
     ArmorPenetration map[string]float64
 
-    // Note: Bleeding is controlled by DamageTypeConfig, not ammo
-    // Ammo specifies DamageTypes which inherit bleeding properties from their DamageTypeConfig
-
     // Status effects applied when this ammo deals damage (burning, poison, etc.)
+    // Note: Bleeding/severing are Go-managed based on DamageTypeConfig, not status effects
     ApplyStatusEffects []ApplyStatusEffect
 }
 ```
@@ -1475,20 +1761,21 @@ func calculateReloadTime(ctx Context, weapon *RangedWeaponConfig, shooter *Objec
 Jamming is skill-based, not random chance:
 
 ```go
-// Jam check per shot (modified by weapon health)
-healthPenalty := (1 - weapon.Health/weapon.MaxHealth) * 50
-jamResult := shooter.EffectiveSkills(ctx, weapon.JamSkills) - healthPenalty
-if jamResult < 0 {
+// Jam check per shot - AvoidJamChallenge with health penalty added to Level
+healthPenalty := (1 - weapon.Health/weapon.MaxHealth) * config.JamHealthPenaltyMult
+jamChallenge := weapon.AvoidJamChallenge
+jamChallenge.Level += healthPenalty  // Damaged weapons jam more easily
+if jamChallenge.Check(ctx, shooter, "") < 0 {
     weapon.Jammed = true
 }
 
-// Unjam time: base time modified by skill (sigmoid: 0.5x to 1.5x)
+// Unjam time: base time modified by skill (sigmoid maps to UnjamMultRange)
 func calculateUnjamTime(ctx Context, weapon *RangedWeaponConfig, shooter *Object, config *CombatConfig) time.Duration {
     result := shooter.EffectiveSkills(ctx, weapon.UnjamSkills)
-    // sigmoid maps result to ReloadMultRange (same tuning as reload)
+    // sigmoid maps result to UnjamMultRange (separate from reload tuning)
     sigmoid := 1.0 / (1.0 + math.Exp(-result/config.SigmoidDivisor))
     // Invert: high sigmoid (good skill) = low mult (fast unjam)
-    mult := config.ReloadMultRange[1] - sigmoid*(config.ReloadMultRange[1]-config.ReloadMultRange[0])
+    mult := config.UnjamMultRange[1] - sigmoid*(config.UnjamMultRange[1]-config.UnjamMultRange[0])
     return time.Duration(float64(weapon.UnjamTime) * mult)
 }
 ```
@@ -1705,7 +1992,20 @@ Total grapple power = sum of `GrappleEffectiveness` for all body parts where:
 
 **Zero grapple power:** If total grapple power is 0 (no free grappling limbs, or body has no limbs with GrappleEffectiveness), grappling is impossible. The `grapple` action fails automatically.
 
-**Skill check:** Each challenge's Level is **divided by grapple power** before the Check. A humanoid (1.0 power) uses normal challenge levels; an octopus (4.0 power) faces challenges at 1/4 the difficulty (making grappling much easier).
+**Skill check:** Effective skill is **multiplied by grapple power** before Roll. A humanoid (1.0 power) rolls normally; an octopus (4.0 power) effectively quadruples their skill level; a one-armed human (0.5 power) is at half effectiveness.
+
+```go
+// Grapple roll with power multiplier
+myEffective := attacker.EffectiveSkills(ctx, config.GrappleSkills)
+theirEffective := defender.EffectiveSkills(ctx, config.GrappleSkills)
+
+// Multiply by grapple power for the roll
+myRoll := attacker.Roll(ctx, config.GrappleSkills, myEffective * myPower, theirEffective)
+theirRoll := defender.Roll(ctx, config.GrappleSkills, theirEffective * theirPower, myEffective)
+
+// NOTE: Pass opposing effective WITHOUT power multiplier for learning.
+// Learning should be based on actual skill comparison, not body advantage.
+```
 
 **Examples (humanoid: 2 arms @ 0.4, 2 legs @ 0.1 = 1.0 total):**
 - Unarmed: 1.0 grapple power (full skill)
@@ -1962,8 +2262,8 @@ Health, MaxHealth float64
 Stamina, MaxStamina float64
 Focus, MaxFocus float64
 
-// Regeneration timestamps (for lazy computation)
-HealthLastRegenAt, StaminaLastRegenAt, FocusLastRegenAt time.Time
+// Regeneration timestamps (for lazy computation, nanoseconds)
+HealthLastRegenAt, StaminaLastRegenAt, FocusLastRegenAt uint64
 HealthRegenEnabled, StaminaRegenEnabled, FocusRegenEnabled bool
 
 // Equipment
@@ -1994,7 +2294,7 @@ LoadedAmmoType string
 Jammed bool
 CurrentFireMode string
 AimingAt string
-AimingSince time.Time
+AimingSince uint64  // Nanoseconds, 0 = not aiming
 
 // Grappling
 GrappledBy, Grappling string
@@ -2232,11 +2532,10 @@ GuardingExit string
 - UnarmedParrySkills for parrying without weapon
 - No unarmed blocking
 
-**Wounds via ApplyStatusEffects:**
-- Weapons/ammo/body parts define ApplyStatusEffects for bleeding, severing, poison, etc.
-- Each effect has Skills and Level for the application check
-- JS handler receives event with Damage, DamageTypes, Overkill, BodyPart
-- JS implements the actual bleeding/severing logic based on event data
+**Wounds (Go-managed):**
+- Bleeding: checked after damage based on DamageTypeConfig.BleedingMult and body part thresholds
+- Severing: checked after damage based on DamageTypeConfig.SeverMult and overkill vs body part SeverThreshold
+- Other effects (poison, burning): via ApplyStatusEffects on weapons/ammo/body parts
 
 **Stances:**
 - StanceConfig modifiers apply to combat rolls
@@ -2402,7 +2701,7 @@ GuardingExit string
 
 **Grappling:**
 - Grapple power = sum of free GrappleEffectiveness
-- Challenge levels divided by grapple power
+- Effective skill multiplied by grapple power (octopus with 4.0 power has 4x effective skill)
 - Grappled: can't move, dodge fails, can only target grappler
 - Grappler: can't move, grappling limbs occupied
 - Actions: grapple, hold, choke, throw, break, reverse, release
@@ -2754,14 +3053,14 @@ game/game.go           - Combat restart hook (check CombatTargets on object load
 Implementation for lazy first-event:
 ```go
 type Game struct {
-    startupTime time.Time  // Set when server starts
+    startupTime structs.Timestamp  // Set when server starts from ctx.Now()
 }
 
 // In event handler, before running JS:
-if obj.LastEventTime.Before(g.startupTime) && len(obj.CombatTargets) > 0 {
+if obj.LastEventTime < uint64(g.startupTime) && len(obj.CombatTargets) > 0 {
     // First event since restart, has combat state - check for visible targets
 }
-obj.LastEventTime = time.Now()
+obj.LastEventTime = uint64(ctx.Now())
 ```
 
 This avoids iterating all objects at startup. Dormant objects that never receive events won't resume combat, but that's acceptable since nothing is happening to them anyway.
@@ -2823,17 +3122,16 @@ structs/structs.go     - BodyParts initialization helper
 - Each spawns independent attack goroutine with own timing
 - AmbidextrousSkills check determines off-hand penalty (scaled via AmbidextrousPenaltyRange)
 
-**Wounds via ApplyStatusEffects:**
-- After damage, check weapon/ammo/body-part ApplyStatusEffects
-- For each ApplyStatusEffect: attacker rolls with Skills vs Level
-- On success, status effect applied to defender (bleeding, poison, etc.)
-- For armor ApplyStatusEffects: defender rolls with Skills vs Level to apply to attacker
-
-**Severing via Status Effects:**
-- Severing is a status effect like any other (configurable by wizards)
-- Applied via ApplyStatusEffects on weapons with severing capability
-- Status effect handler marks BodyParts[id].Severed = true
+**Wounds (Go-managed):**
+- Bleeding: Go checks DamageTypeConfig.BleedingMult + body part BleedingDamageThresholds
+- Severing: Go checks DamageTypeConfig.SeverMult + overkill vs SeverThreshold
 - Drop equipment from severed part (moveObject to room)
+
+**Other Status Effects via ApplyStatusEffects:**
+- After damage, check weapon/ammo/body-part ApplyStatusEffects
+- For each ApplyStatusEffect: Challenge.Check() for attacker
+- On success, status effect applied to defender (poison, burning, etc.)
+- For armor ApplyStatusEffects: Challenge.Check() for defender to apply to attacker
 
 **Stances:**
 - StanceConfig loaded, modifiers applied in attack resolution
@@ -2868,7 +3166,7 @@ game/equipment.go      - Drop equipment on sever
 1. RangedWeaponConfig on equipped weapon determines ranged behavior
 2. CurrentAmmo, LoadedAmmoType, Jammed stored on weapon object (not wielder)
 3. Reload: check free wield slot, spawn goroutine for reload delay
-4. Jam check: Roll(JamSkills) vs JamLevel on each shot
+4. Jam check: AvoidJamChallenge.Check() on each shot
 5. Damage calculation: weapon.DamageTypes + ammo.DamageTypes
 
 **How it fits with existing systems:**
@@ -3160,7 +3458,7 @@ integration_test/      - Combat tests
 39. **Chase in JS** - NPCs implement chase behavior via event callbacks
 40. **SpeedFactor on status effects** - Movement delay divided by SpeedFactor; 0 = immobile
 41. **Sigmoid for unbounded inputs** - Attack speed, armor soak, stance modifiers use sigmoid to map unbounded challenge results to bounded ranges
-42. **Grapple power divides difficulty** - Challenge levels divided by grapple power (octopus with 4.0 power faces 1/4 difficulty)
+42. **Grapple power multiplies effective skill** - Effective skill multiplied by grapple power before Roll (octopus with 4.0 power has 4x effective skill)
 43. **Three timing patterns** - Intervals for persistent events (status ticks), goroutines for ephemeral timers (attacks), lazy timestamps for continuous values (regen, aim)
 44. **Lazy resource regeneration** - Health/Stamina/Focus computed on access using elapsed time and skill-based rate
 45. **Regen enable flags** - Objects can disable natural regeneration (robots don't heal)

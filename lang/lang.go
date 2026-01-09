@@ -28,6 +28,9 @@ func Plural(s string) string {
 }
 
 func Capitalize(s string) string {
+	if s == "" {
+		return ""
+	}
 	return strings.ToUpper(s[0:1]) + s[1:]
 }
 
@@ -227,4 +230,49 @@ func Article(word string) string {
 
 	// Otherwise, guess "a".
 	return "a"
+}
+
+// ThirdPersonSingular conjugates a verb for third person singular present tense.
+// "slash" → "slashes", "stab" → "stabs", "carry" → "carries"
+func ThirdPersonSingular(verb string) string {
+	if verb == "" {
+		return ""
+	}
+
+	// Ends in -s, -x, -z, -ch, -sh: add -es
+	if strings.HasSuffix(verb, "s") || strings.HasSuffix(verb, "x") ||
+		strings.HasSuffix(verb, "z") || strings.HasSuffix(verb, "ch") ||
+		strings.HasSuffix(verb, "sh") {
+		return verb + "es"
+	}
+
+	// Ends in consonant + y: change to -ies
+	if strings.HasSuffix(verb, "y") && len(verb) >= 2 {
+		prev := verb[len(verb)-2]
+		if !strings.ContainsAny(string(prev), "aeiou") {
+			return verb[:len(verb)-1] + "ies"
+		}
+	}
+
+	// Special cases
+	if verb == "go" || verb == "do" {
+		return verb + "es"
+	}
+	if verb == "have" {
+		return "has"
+	}
+
+	return verb + "s"
+}
+
+// Possessive returns the possessive form of a name.
+// "John" → "John's", "James" → "James'"
+func Possessive(name string) string {
+	if name == "" {
+		return ""
+	}
+	if strings.HasSuffix(strings.ToLower(name), "s") {
+		return name + "'"
+	}
+	return name + "'s"
 }
