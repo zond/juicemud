@@ -15,7 +15,7 @@ Instructions for Claude Code when working with this repository.
 - Always make sure functions have doc comments, if they are too complex for their name to fully describe what they do.
   This will make sure readers and authors of our code know what they functions are supposed to do, and have an
   easier time learning about them.
-- Always ask your agent to review each new git commit.
+- Always ask your code simplifier agent to try to simplify, and then your code excellence review agent to review, before each new git commit.
 - Always make sure the README is up to date with relevant new information, and doesn't contain redundant or outdated
   information.
 - Always test functionality if reasonably possible.
@@ -23,6 +23,7 @@ Instructions for Claude Code when working with this repository.
   can be unset or nil, then omitempty is sensible.
 - When creating JSON from Go, always use proper Go structs, not just map[string]any, and as mentioned above, don't
   rename the JSON fields, leave them as the Go PascalCase names.
+- Commit reasonably often, not unnaturally often, but not so seldom that a commit is too big to understand easily.
 
 ### Integration tests
 - Integration tests should use the SSH interfaces for all interactions with the server, except when it's unreasonably
