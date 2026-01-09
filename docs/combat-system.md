@@ -1,5 +1,49 @@
 # Combat System for JuiceMUD
 
+## Implementation Status
+
+**Last updated:** 2026-01-09
+
+### Completed
+
+| Component | Location | Notes |
+|-----------|----------|-------|
+| BodyConfig, BodyPartConfig | `structs/combatconfig.go` | Body type definitions with parts, health scaling |
+| DamageTypeConfig | `structs/combatconfig.go` | Damage types with sever/bleed multipliers |
+| DefaultBodyConfigs | `structs/combatconfig.go` | Humanoid body type with all parts |
+| DefaultDamageTypes | `structs/combatconfig.go` | slashing, piercing, bludgeoning, fire, cold, electric |
+| BodyPartState, Wound | `structs/structs.go` | Per-part health, wounds, severed state |
+| SetBodyType | `structs/combat.go` | Initialize body parts from config |
+| TakeDamage | `structs/combat.go` | Apply damage with wounds, severing, death |
+| SelectBodyPart | `structs/combat.go` | Weighted random body part selection |
+| CanCombat, IsAlive | `structs/combat.go` | Combat eligibility checks |
+
+### In Progress
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| TickWounds | Not started | Bleeding damage over time |
+| HealWounds | Not started | Wound recovery mechanics |
+
+### Future (Not Started)
+
+| Phase | Components |
+|-------|------------|
+| Phase 1 | WeaponConfig, ArmorConfig, StanceConfig, CombatConfig |
+| Phase 3 | StatusEffectConfig, status effect application |
+| Phase 4 | Equipment system (equip/unequip, slots) |
+| Phase 5 | Stamina, Focus resource system |
+| Phase 6 | Basic attack cycle, hit/miss/parry/dodge |
+| Phase 7+ | Advanced melee, ranged, aiming, cover, movement |
+
+### Design Changes from Original Plan
+
+1. **Wound tracking**: Originally planned as single `BleedingLevel` on object; changed to per-wound tracking in `BodyPartState.Wounds[]` for more tactical depth
+2. **Body part selection**: Added `SelectBodyPart` with weighted random selection (not in original phases)
+3. **Severance cascading**: Severing a part that connects others (e.g., arm severs hand) - implemented in TakeDamage
+
+---
+
 ## Overview
 
 A flexible, wizard-configurable combat system that:
