@@ -575,50 +575,115 @@ func (g *Game) addGlobalCallbacks(ctx context.Context, callbacks js.Callbacks) {
 	}
 }
 
-func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, callbacks js.Callbacks) {
-	// --- Property getters/setters ---
-	// Location and Content are read-only - use moveObject() for safe modifications
-	addGetter("Location", &object.Unsafe.Location, object, callbacks)
-	addGetter("Content", &object.Unsafe.Content, object, callbacks)
-	addGetSetPair("Skills", &object.Unsafe.Skills, object, callbacks)
-	addGetSetPair("Descriptions", &object.Unsafe.Descriptions, object, callbacks)
-	addGetSetPair("Exits", &object.Unsafe.Exits, object, callbacks)
-	// SourcePath can be set to any value, but path traversal is prevented at load time
-	// by storage.safePath() which validates all paths stay within the sources directory.
-	// This allows wizards to reassign object sources while maintaining security.
-	addGetSetPair("SourcePath", &object.Unsafe.SourcePath, object, callbacks)
-	addGetSetPair("Learning", &object.Unsafe.Learning, object, callbacks)
-	addGetSetPair("Movement", &object.Unsafe.Movement, object, callbacks)
-
-	// --- Object movement ---
-	// moveObject(objectId, destinationId) - safely moves an object and emits movement events.
-	// If the moved object has an active connection, auto-look is triggered after the move.
-	callbacks["moveObject"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+// addEventCallbacks registers emit and emitToLocation.
+func (g *Game) addEventCallbacks(ctx context.Context, object *structs.Object, callbacks js.Callbacks) {
+	callbacks["emit"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
-		if len(args) != 2 || !args[0].IsString() || !args[1].IsString() {
-			return rc.Throw("moveObject takes [string, string] arguments (objectId, destinationId)")
+		// Accept 3 or 4 arguments
+		if len(args) < 3 || len(args) > 4 || !args[0].IsString() || !args[1].IsString() {
+			return rc.Throw("emit takes [string, string, any, challenges?] arguments")
 		}
-		objectId := args[0].String()
-		if objectId == "" {
-			return rc.Throw("moveObject: objectId cannot be empty")
+
+		targetId := args[0].String()
+		if targetId == "" {
+			return rc.Throw("emit: targetId cannot be empty")
 		}
-		destId := args[1].String()
-		if destId == "" {
-			return rc.Throw("moveObject: destinationId cannot be empty")
-		}
-		// Load the object to move
-		obj, err := g.storage.AccessObject(ctx, objectId, nil)
+		eventName := args[1].String()
+
+		message, err := v8go.JSONStringify(rc.Context(), args[2])
 		if err != nil {
-			return rc.Throw("moveObject: object %q not found: %v", objectId, err)
+			return rc.Throw("trying to serialize %v: %v", args[2], err)
 		}
-		// Use g.moveObject for safe movement (handles events and auto-look)
-		if err := g.moveObject(ctx, obj, destId); err != nil {
-			return rc.Throw("moveObject: %v", err)
+
+		// Parse optional challenge
+		var challenge structs.Challenge
+		if len(args) == 4 && !args[3].IsNullOrUndefined() {
+			if err := rc.Copy(&challenge, args[3]); err != nil {
+				return rc.Throw("invalid challenge: %v", err)
+			}
+		}
+
+		// Always load target to validate it exists (and for challenge checks)
+		recipient, err := g.storage.AccessObject(ctx, targetId, nil)
+		if err != nil {
+			return rc.Throw("target %q not found: %v", targetId, err)
+		}
+
+		// If challenge provided, check recipient's skills
+		// challenge.Check(recipient, emitterID) - can recipient perceive event from emitter?
+		if challenge.HasChallenge() {
+			if challenge.Check(g.Context(ctx), recipient, object.GetId(), nil) <= 0 {
+				// Recipient fails challenge - silently don't emit
+				return nil
+			}
+		}
+
+		if err := g.emitJSON(ctx, g.storage.Queue().After(defaultReactionDelay), targetId, eventName, message); err != nil {
+			return rc.Throw("trying to enqueue %v for %v: %v", message, targetId, err)
 		}
 		return nil
 	}
 
-	// --- Timers ---
+	callbacks["emitToLocation"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		// Accept 3 or 4 arguments
+		if len(args) < 3 || len(args) > 4 || !args[0].IsString() || !args[1].IsString() {
+			return rc.Throw("emitToLocation takes [string, string, any, challenge?] arguments")
+		}
+
+		locationId := args[0].String()
+		if locationId == "" {
+			return rc.Throw("emitToLocation: locationId cannot be empty")
+		}
+		eventName := args[1].String()
+
+		// Parse the message data
+		var messageData any
+		if err := rc.Copy(&messageData, args[2]); err != nil {
+			return rc.Throw("invalid message data: %v", err)
+		}
+
+		// Parse optional challenge
+		var challenge structs.Challenge
+		if len(args) == 4 && !args[3].IsNullOrUndefined() {
+			if err := rc.Copy(&challenge, args[3]); err != nil {
+				return rc.Throw("invalid challenge: %v", err)
+			}
+		}
+
+		// Load the deep neighbourhood (location + neighbours with content)
+		neighbourhood, err := g.loadDeepNeighbourhoodAt(ctx, locationId)
+		if err != nil {
+			return rc.Throw("location %q not found: %v", locationId, err)
+		}
+
+		at := g.storage.Queue().After(defaultReactionDelay)
+		emitterId := object.GetId()
+
+		// Iterate over all observers who pass the challenge
+		for obs := range neighbourhood.Observers(g.Context(ctx), emitterId, challenge) {
+			if err := g.storage.Queue().Push(ctx, &structs.AnyEvent{
+				At:     at,
+				Object: obs.Subject.GetId(),
+				Caller: &structs.AnyCall{
+					Name: eventName,
+					Tag:  emitEventTag,
+					Content: &structs.LocationEmit{
+						Data:        messageData,
+						Perspective: obs.Perspective,
+					},
+				},
+			}); err != nil {
+				return rc.Throw("emitting to %v: %v", obs.Subject.GetId(), err)
+			}
+		}
+
+		return nil
+	}
+}
+
+// addTimerCallbacks registers setTimeout, setInterval, and clearInterval.
+func (g *Game) addTimerCallbacks(ctx context.Context, object *structs.Object, callbacks js.Callbacks) {
 	callbacks["setTimeout"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		args := info.Args()
 		if len(args) != 3 || !args[1].IsString() {
@@ -710,112 +775,10 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		}
 		return nil
 	}
+}
 
-	// --- Events ---
-	callbacks["emit"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		args := info.Args()
-		// Accept 3 or 4 arguments
-		if len(args) < 3 || len(args) > 4 || !args[0].IsString() || !args[1].IsString() {
-			return rc.Throw("emit takes [string, string, any, challenges?] arguments")
-		}
-
-		targetId := args[0].String()
-		if targetId == "" {
-			return rc.Throw("emit: targetId cannot be empty")
-		}
-		eventName := args[1].String()
-
-		message, err := v8go.JSONStringify(rc.Context(), args[2])
-		if err != nil {
-			return rc.Throw("trying to serialize %v: %v", args[2], err)
-		}
-
-		// Parse optional challenge
-		var challenge structs.Challenge
-		if len(args) == 4 && !args[3].IsNullOrUndefined() {
-			if err := rc.Copy(&challenge, args[3]); err != nil {
-				return rc.Throw("invalid challenge: %v", err)
-			}
-		}
-
-		// Always load target to validate it exists (and for challenge checks)
-		recipient, err := g.storage.AccessObject(ctx, targetId, nil)
-		if err != nil {
-			return rc.Throw("target %q not found: %v", targetId, err)
-		}
-
-		// If challenge provided, check recipient's skills
-		// challenge.Check(recipient, emitterID) - can recipient perceive event from emitter?
-		if challenge.HasChallenge() {
-			if challenge.Check(g.Context(ctx), recipient, object.GetId(), nil) <= 0 {
-				// Recipient fails challenge - silently don't emit
-				return nil
-			}
-		}
-
-		if err := g.emitJSON(ctx, g.storage.Queue().After(defaultReactionDelay), targetId, eventName, message); err != nil {
-			return rc.Throw("trying to enqueue %v for %v: %v", message, targetId, err)
-		}
-		return nil
-	}
-	callbacks["emitToLocation"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
-		args := info.Args()
-		// Accept 3 or 4 arguments
-		if len(args) < 3 || len(args) > 4 || !args[0].IsString() || !args[1].IsString() {
-			return rc.Throw("emitToLocation takes [string, string, any, challenge?] arguments")
-		}
-
-		locationId := args[0].String()
-		if locationId == "" {
-			return rc.Throw("emitToLocation: locationId cannot be empty")
-		}
-		eventName := args[1].String()
-
-		// Parse the message data
-		var messageData any
-		if err := rc.Copy(&messageData, args[2]); err != nil {
-			return rc.Throw("invalid message data: %v", err)
-		}
-
-		// Parse optional challenge
-		var challenge structs.Challenge
-		if len(args) == 4 && !args[3].IsNullOrUndefined() {
-			if err := rc.Copy(&challenge, args[3]); err != nil {
-				return rc.Throw("invalid challenge: %v", err)
-			}
-		}
-
-		// Load the deep neighbourhood (location + neighbours with content)
-		neighbourhood, err := g.loadDeepNeighbourhoodAt(ctx, locationId)
-		if err != nil {
-			return rc.Throw("location %q not found: %v", locationId, err)
-		}
-
-		at := g.storage.Queue().After(defaultReactionDelay)
-		emitterId := object.GetId()
-
-		// Iterate over all observers who pass the challenge
-		for obs := range neighbourhood.Observers(g.Context(ctx), emitterId, challenge) {
-			if err := g.storage.Queue().Push(ctx, &structs.AnyEvent{
-				At:     at,
-				Object: obs.Subject.GetId(),
-				Caller: &structs.AnyCall{
-					Name: eventName,
-					Tag:  emitEventTag,
-					Content: &structs.LocationEmit{
-						Data:        messageData,
-						Perspective: obs.Perspective,
-					},
-				},
-			}); err != nil {
-				return rc.Throw("emitting to %v: %v", obs.Subject.GetId(), err)
-			}
-		}
-
-		return nil
-	}
-
-	// --- Object queries and lifecycle ---
+// addLifecycleCallbacks registers getNeighbourhood, getId, createObject, removeObject, and print.
+func (g *Game) addLifecycleCallbacks(ctx context.Context, object *structs.Object, callbacks js.Callbacks) {
 	callbacks["getNeighbourhood"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		_, neighbourhood, err := g.loadDeepNeighbourhoodOf(ctx, object.GetId())
 		if err != nil {
@@ -827,6 +790,7 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		}
 		return val
 	}
+
 	callbacks["getId"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
 		return rc.String(object.GetId())
 	}
@@ -953,6 +917,56 @@ func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, c
 		}
 		return nil
 	}
+}
+
+func (g *Game) addObjectCallbacks(ctx context.Context, object *structs.Object, callbacks js.Callbacks) {
+	// --- Property getters/setters ---
+	// Location and Content are read-only - use moveObject() for safe modifications
+	addGetter("Location", &object.Unsafe.Location, object, callbacks)
+	addGetter("Content", &object.Unsafe.Content, object, callbacks)
+	addGetSetPair("Skills", &object.Unsafe.Skills, object, callbacks)
+	addGetSetPair("Descriptions", &object.Unsafe.Descriptions, object, callbacks)
+	addGetSetPair("Exits", &object.Unsafe.Exits, object, callbacks)
+	// SourcePath can be set to any value, but path traversal is prevented at load time
+	// by storage.safePath() which validates all paths stay within the sources directory.
+	// This allows wizards to reassign object sources while maintaining security.
+	addGetSetPair("SourcePath", &object.Unsafe.SourcePath, object, callbacks)
+	addGetSetPair("Learning", &object.Unsafe.Learning, object, callbacks)
+	addGetSetPair("Movement", &object.Unsafe.Movement, object, callbacks)
+
+	// --- Object movement ---
+	// moveObject(objectId, destinationId) - safely moves an object and emits movement events.
+	// If the moved object has an active connection, auto-look is triggered after the move.
+	callbacks["moveObject"] = func(rc *js.RunContext, info *v8go.FunctionCallbackInfo) *v8go.Value {
+		args := info.Args()
+		if len(args) != 2 || !args[0].IsString() || !args[1].IsString() {
+			return rc.Throw("moveObject takes [string, string] arguments (objectId, destinationId)")
+		}
+		objectId := args[0].String()
+		if objectId == "" {
+			return rc.Throw("moveObject: objectId cannot be empty")
+		}
+		destId := args[1].String()
+		if destId == "" {
+			return rc.Throw("moveObject: destinationId cannot be empty")
+		}
+		// Load the object to move
+		obj, err := g.storage.AccessObject(ctx, objectId, nil)
+		if err != nil {
+			return rc.Throw("moveObject: object %q not found: %v", objectId, err)
+		}
+		// Use g.moveObject for safe movement (handles events and auto-look)
+		if err := g.moveObject(ctx, obj, destId); err != nil {
+			return rc.Throw("moveObject: %v", err)
+		}
+		return nil
+	}
+
+	g.addTimerCallbacks(ctx, object, callbacks)
+
+	g.addEventCallbacks(ctx, object, callbacks)
+
+	g.addLifecycleCallbacks(ctx, object, callbacks)
 }
 
 // run executes an object's JavaScript source with the given caller event.
