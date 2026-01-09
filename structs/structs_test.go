@@ -938,8 +938,16 @@ func TestIsAlive(t *testing.T) {
 func TestBodyConfig(t *testing.T) {
 	cfg := NewServerConfig()
 
-	t.Run("returns default humanoid config", func(t *testing.T) {
-		body := cfg.GetBodyConfig("humanoid")
+	// Initialize with defaults (simulating first startup)
+	for name, body := range DefaultBodyConfigs() {
+		cfg.SetBodyConfig(name, body)
+	}
+
+	t.Run("returns humanoid config after initialization", func(t *testing.T) {
+		body, ok := cfg.GetBodyConfig("humanoid")
+		if !ok {
+			t.Fatal("expected humanoid to be found")
+		}
 		if body.Parts == nil {
 			t.Fatal("expected Parts to be non-nil")
 		}
@@ -951,18 +959,14 @@ func TestBodyConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown body type falls back to humanoid", func(t *testing.T) {
-		body := cfg.GetBodyConfig("unknown_type")
-		if body.Parts == nil {
-			t.Fatal("expected Parts to be non-nil")
-		}
-		// Should return humanoid as default
-		if _, ok := body.Parts["head"]; !ok {
-			t.Error("expected fallback to have 'head' part")
+	t.Run("unknown body type returns not found", func(t *testing.T) {
+		_, ok := cfg.GetBodyConfig("unknown_type")
+		if ok {
+			t.Error("expected unknown_type to not be found")
 		}
 	})
 
-	t.Run("custom body config overrides default", func(t *testing.T) {
+	t.Run("custom body config can be set", func(t *testing.T) {
 		customBody := BodyConfig{
 			Parts: map[string]BodyPartConfig{
 				"tentacle": {HealthFraction: 0.5, HitWeight: 0.5},
@@ -970,7 +974,10 @@ func TestBodyConfig(t *testing.T) {
 		}
 		cfg.SetBodyConfig("octopus", customBody)
 
-		body := cfg.GetBodyConfig("octopus")
+		body, ok := cfg.GetBodyConfig("octopus")
+		if !ok {
+			t.Fatal("expected octopus to be found")
+		}
 		if _, ok := body.Parts["tentacle"]; !ok {
 			t.Error("expected custom body to have 'tentacle' part")
 		}
@@ -980,7 +987,7 @@ func TestBodyConfig(t *testing.T) {
 	})
 
 	t.Run("vital and central properties", func(t *testing.T) {
-		body := cfg.GetBodyConfig("humanoid")
+		body, _ := cfg.GetBodyConfig("humanoid")
 		head := body.Parts["head"]
 		if !head.Vital {
 			t.Error("head should be vital")
@@ -1007,8 +1014,16 @@ func TestBodyConfig(t *testing.T) {
 func TestDamageTypeConfig(t *testing.T) {
 	cfg := NewServerConfig()
 
-	t.Run("returns default damage types", func(t *testing.T) {
-		slashing := cfg.GetDamageType("slashing")
+	// Initialize with defaults (simulating first startup)
+	for name, dmg := range DefaultDamageTypes() {
+		cfg.SetDamageType(name, dmg)
+	}
+
+	t.Run("returns damage types after initialization", func(t *testing.T) {
+		slashing, ok := cfg.GetDamageType("slashing")
+		if !ok {
+			t.Fatal("expected slashing to be found")
+		}
 		if slashing.SeverMult != 1.0 {
 			t.Errorf("slashing SeverMult = %v, want 1.0", slashing.SeverMult)
 		}
@@ -1016,28 +1031,31 @@ func TestDamageTypeConfig(t *testing.T) {
 			t.Errorf("slashing BleedingMult = %v, want 1.0", slashing.BleedingMult)
 		}
 
-		fire := cfg.GetDamageType("fire")
+		fire, ok := cfg.GetDamageType("fire")
+		if !ok {
+			t.Fatal("expected fire to be found")
+		}
 		if fire.BleedingMult != 0 {
 			t.Errorf("fire BleedingMult = %v, want 0 (cauterizes)", fire.BleedingMult)
 		}
 	})
 
-	t.Run("unknown damage type returns neutral defaults", func(t *testing.T) {
-		unknown := cfg.GetDamageType("psychic")
-		if unknown.SeverMult != 0.5 {
-			t.Errorf("unknown SeverMult = %v, want 0.5", unknown.SeverMult)
-		}
-		if unknown.BleedingMult != 0.5 {
-			t.Errorf("unknown BleedingMult = %v, want 0.5", unknown.BleedingMult)
+	t.Run("unknown damage type returns not found", func(t *testing.T) {
+		_, ok := cfg.GetDamageType("psychic")
+		if ok {
+			t.Error("expected psychic to not be found")
 		}
 	})
 
-	t.Run("custom damage type overrides default", func(t *testing.T) {
+	t.Run("custom damage type can be set", func(t *testing.T) {
 		cfg.SetDamageType("psychic", DamageTypeConfig{
 			SeverMult:    0,
 			BleedingMult: 0,
 		})
-		psychic := cfg.GetDamageType("psychic")
+		psychic, ok := cfg.GetDamageType("psychic")
+		if !ok {
+			t.Fatal("expected psychic to be found after setting")
+		}
 		if psychic.SeverMult != 0 {
 			t.Errorf("psychic SeverMult = %v, want 0", psychic.SeverMult)
 		}

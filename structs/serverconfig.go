@@ -101,19 +101,12 @@ func (c *ServerConfig) DeleteSkillConfig(name string) {
 	delete(c.skillConfigs, name)
 }
 
-// GetBodyConfig returns the body config for a type, or the default humanoid if not found.
-func (c *ServerConfig) GetBodyConfig(name string) BodyConfig {
+// GetBodyConfig returns the body config for a type, or an empty config if not found.
+func (c *ServerConfig) GetBodyConfig(name string) (BodyConfig, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if cfg, ok := c.bodyConfigs[name]; ok {
-		return cfg
-	}
-	// Return default humanoid if not configured
-	defaults := DefaultBodyConfigs()
-	if cfg, ok := defaults[name]; ok {
-		return cfg
-	}
-	return defaults["humanoid"]
+	cfg, ok := c.bodyConfigs[name]
+	return cfg, ok
 }
 
 // SetBodyConfig sets a body config.
@@ -126,20 +119,12 @@ func (c *ServerConfig) SetBodyConfig(name string, cfg BodyConfig) {
 	c.bodyConfigs[name] = cfg
 }
 
-// GetDamageType returns the damage type config, or a default config if not found.
-func (c *ServerConfig) GetDamageType(name string) DamageTypeConfig {
+// GetDamageType returns the damage type config, or an empty config if not found.
+func (c *ServerConfig) GetDamageType(name string) (DamageTypeConfig, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if cfg, ok := c.damageTypes[name]; ok {
-		return cfg
-	}
-	// Return default if configured
-	defaults := DefaultDamageTypes()
-	if cfg, ok := defaults[name]; ok {
-		return cfg
-	}
-	// Unknown damage type - return neutral defaults
-	return DamageTypeConfig{SeverMult: 0.5, BleedingMult: 0.5}
+	cfg, ok := c.damageTypes[name]
+	return cfg, ok
 }
 
 // SetDamageType sets a damage type config.

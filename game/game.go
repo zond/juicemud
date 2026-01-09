@@ -418,6 +418,20 @@ func New(ctx context.Context, s *storage.Storage, firstStartup bool) (*Game, err
 		return nil, juicemud.WithStack(err)
 	}
 
+	// On first startup, initialize default combat configs
+	if firstStartup {
+		for name, cfg := range structs.DefaultBodyConfigs() {
+			g.serverConfig.SetBodyConfig(name, cfg)
+		}
+		for name, cfg := range structs.DefaultDamageTypes() {
+			g.serverConfig.SetDamageType(name, cfg)
+		}
+		if err := g.persistServerConfig(ctx); err != nil {
+			return nil, juicemud.WithStack(err)
+		}
+		log.Println("First startup: initialized default combat configs")
+	}
+
 	bootJS, _, err := g.storage.LoadSource(ctx, bootSource)
 	if err != nil {
 		return nil, juicemud.WithStack(err)
