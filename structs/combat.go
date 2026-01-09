@@ -1,7 +1,9 @@
 package structs
 
 import (
+	"cmp"
 	"math/rand/v2"
+	"slices"
 
 	"github.com/pkg/errors"
 )
@@ -158,6 +160,11 @@ func (o *Object) SelectBodyPart(ctx Context, rng *rand.Rand) (string, error) {
 	if len(parts) == 0 || totalWeight <= 0 {
 		return "", errors.New("no valid body parts to hit")
 	}
+
+	// Sort for deterministic selection (map iteration order is random)
+	slices.SortFunc(parts, func(a, b weightedPart) int {
+		return cmp.Compare(a.id, b.id)
+	})
 
 	// Select based on weighted roll
 	roll := rng.Float64()
