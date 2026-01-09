@@ -1,14 +1,22 @@
 package game
 
 import (
+	"cmp"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strconv"
 	"time"
 
 	"github.com/rodaine/table"
 	"github.com/zond/juicemud/storage"
 )
+
+// sortedKeys returns the keys of a map sorted in ascending order.
+func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
+	return slices.Sorted(maps.Keys(m))
+}
 
 // statsContext holds the context for stats subcommand execution.
 type statsContext struct {
@@ -20,26 +28,20 @@ type statsContext struct {
 // statsHandler is a function that handles a stats subcommand.
 type statsHandler func(ctx *statsContext) error
 
-// statsSubcommand defines a stats subcommand with its handler and help text.
-type statsSubcommand struct {
-	handler statsHandler
-	help    string
-}
-
 // statsSubcommands maps subcommand names to their handlers.
-var statsSubcommands = map[string]statsSubcommand{
-	"summary":   {handler: handleStatsSummary, help: "Dashboard view (default)"},
-	"dashboard": {handler: handleStatsSummary, help: "Dashboard view (alias for summary)"},
-	"errors":    {handler: handleStatsErrors, help: "Error stats (sub: summary|categories|locations|recent)"},
-	"perf":      {handler: handleStatsPerf, help: "Performance stats (sub: summary|scripts|slow)"},
-	"scripts":   {handler: handleStatsScripts, help: "Top n scripts (sort: time|execs|slow|errors|errorrate)"},
-	"script":    {handler: handleStatsScript, help: "Detailed stats for specific script"},
-	"objects":   {handler: handleStatsObjects, help: "Top n objects (sort: time|execs|slow|errors|errorrate)"},
-	"object":    {handler: handleStatsObject, help: "Detailed stats for specific object"},
-	"intervals": {handler: handleStatsIntervals, help: "Top n intervals (sort: time|execs|slow|errors|errorrate)"},
-	"users":     {handler: handleStatsUsers, help: "List users (filter: all|owners|wizards|players; sort: name|id|login|stale)"},
-	"flush":     {handler: handleStatsFlush, help: "Show database flush health status"},
-	"reset":     {handler: handleStatsReset, help: "Clear all statistics"},
+var statsSubcommands = map[string]statsHandler{
+	"summary":   handleStatsSummary,
+	"dashboard": handleStatsSummary,
+	"errors":    handleStatsErrors,
+	"perf":      handleStatsPerf,
+	"scripts":   handleStatsScripts,
+	"script":    handleStatsScript,
+	"objects":   handleStatsObjects,
+	"object":    handleStatsObject,
+	"intervals": handleStatsIntervals,
+	"users":     handleStatsUsers,
+	"flush":     handleStatsFlush,
+	"reset":     handleStatsReset,
 }
 
 // parseIntArg parses an integer argument from parts at the given index, returning defaultVal if not present or invalid.
@@ -52,38 +54,8 @@ func parseIntArg(parts []string, index int, defaultVal int) int {
 	return defaultVal
 }
 
-// parseScriptSortArg parses a script sort argument.
-func parseScriptSortArg(parts []string, index int, sortMap map[string]ScriptSortField, defaultSort ScriptSortField) ScriptSortField {
-	if len(parts) > index {
-		if sort, ok := sortMap[parts[index]]; ok {
-			return sort
-		}
-	}
-	return defaultSort
-}
-
-// parseObjectSortArg parses an object sort argument.
-func parseObjectSortArg(parts []string, index int, sortMap map[string]ObjectSortField, defaultSort ObjectSortField) ObjectSortField {
-	if len(parts) > index {
-		if sort, ok := sortMap[parts[index]]; ok {
-			return sort
-		}
-	}
-	return defaultSort
-}
-
-// parseIntervalSortArg parses an interval sort argument.
-func parseIntervalSortArg(parts []string, index int, sortMap map[string]IntervalSortField, defaultSort IntervalSortField) IntervalSortField {
-	if len(parts) > index {
-		if sort, ok := sortMap[parts[index]]; ok {
-			return sort
-		}
-	}
-	return defaultSort
-}
-
-// parseUserSortArg parses a user sort argument.
-func parseUserSortArg(parts []string, index int, sortMap map[string]storage.UserSortField, defaultSort storage.UserSortField) storage.UserSortField {
+// parseSortArg parses a sort argument from parts at the given index using the provided map.
+func parseSortArg[T any](parts []string, index int, sortMap map[string]T, defaultSort T) T {
 	if len(parts) > index {
 		if sort, ok := sortMap[parts[index]]; ok {
 			return sort
@@ -129,11 +101,11 @@ func handleStatsSummary(ctx *statsContext) error {
 	if len(g.ByCategory) > 0 {
 		fmt.Fprint(c.term, "  ")
 		first := true
-		for cat, count := range g.ByCategory {
+		for _, cat := range sortedKeys(g.ByCategory) {
 			if !first {
 				fmt.Fprint(c.term, ", ")
 			}
-			fmt.Fprintf(c.term, "%s: %d", cat, count)
+			fmt.Fprintf(c.term, "%s: %d", cat, g.ByCategory[cat])
 			first = false
 		}
 		fmt.Fprintln(c.term)
@@ -229,8 +201,8 @@ func handleErrorsSummary(ctx *statsContext, _ []string) error {
 	fmt.Fprintf(c.term, "Error Summary (total: %d, rate: %.2f%%)\n\n", g.TotalErrors, g.ErrorPercent)
 	if len(g.ByCategory) > 0 {
 		fmt.Fprintln(c.term, "By category:")
-		for cat, count := range g.ByCategory {
-			fmt.Fprintf(c.term, "  %s: %d\n", cat, count)
+		for _, cat := range sortedKeys(g.ByCategory) {
+			fmt.Fprintf(c.term, "  %s: %d\n", cat, g.ByCategory[cat])
 		}
 	}
 	fmt.Fprintf(c.term, "\nError rates: %.2f/s, %.1f/m, %.0f/h\n",
@@ -259,8 +231,8 @@ func handleErrorsCategories(ctx *statsContext, _ []string) error {
 		return nil
 	}
 	t := table.New("Category", "Count").WithWriter(ctx.c.term)
-	for cat, count := range g.ByCategory {
-		t.AddRow(string(cat), count)
+	for _, cat := range sortedKeys(g.ByCategory) {
+		t.AddRow(cat, g.ByCategory[cat])
 	}
 	t.Print()
 	return nil
@@ -360,7 +332,7 @@ var scriptSortMapFull = map[string]ScriptSortField{
 }
 
 func handlePerfScripts(ctx *statsContext, parts []string) error {
-	sortBy := parseScriptSortArg(parts, 3, scriptSortMap, SortScriptByTime)
+	sortBy := parseSortArg(parts, 3, scriptSortMap, SortScriptByTime)
 	n := parseIntArg(parts, 4, 20)
 
 	scripts := ctx.stats.TopScripts(sortBy, n)
@@ -413,7 +385,7 @@ func handlePerfSlow(ctx *statsContext, parts []string) error {
 // Scripts subcommand handler
 
 func handleStatsScripts(ctx *statsContext) error {
-	sortBy := parseScriptSortArg(ctx.parts, 2, scriptSortMapFull, SortScriptByTime)
+	sortBy := parseSortArg(ctx.parts, 2, scriptSortMapFull, SortScriptByTime)
 	n := parseIntArg(ctx.parts, 3, 20)
 
 	scripts := ctx.stats.TopScripts(sortBy, n)
@@ -473,14 +445,14 @@ func handleStatsScript(ctx *statsContext) error {
 		script.ErrorRates.PerSecond, script.ErrorRates.PerMinute, script.ErrorRates.PerHour)
 	if len(script.ByCategory) > 0 {
 		fmt.Fprintln(c.term, "\nErrors by category:")
-		for cat, count := range script.ByCategory {
-			fmt.Fprintf(c.term, "  %s: %d\n", cat, count)
+		for _, cat := range sortedKeys(script.ByCategory) {
+			fmt.Fprintf(c.term, "  %s: %d\n", cat, script.ByCategory[cat])
 		}
 	}
 	if len(script.ByLocation) > 0 {
 		fmt.Fprintln(c.term, "\nErrors by location:")
-		for loc, count := range script.ByLocation {
-			fmt.Fprintf(c.term, "  %s: %d\n", loc, count)
+		for _, loc := range sortedKeys(script.ByLocation) {
+			fmt.Fprintf(c.term, "  %s: %d\n", loc, script.ByLocation[loc])
 		}
 	}
 	if len(script.ImportChain) > 1 {
@@ -503,7 +475,7 @@ var objectSortMap = map[string]ObjectSortField{
 }
 
 func handleStatsObjects(ctx *statsContext) error {
-	sortBy := parseObjectSortArg(ctx.parts, 2, objectSortMap, SortObjectByTime)
+	sortBy := parseSortArg(ctx.parts, 2, objectSortMap, SortObjectByTime)
 	n := parseIntArg(ctx.parts, 3, 20)
 
 	objs := ctx.stats.TopObjects(sortBy, n)
@@ -564,20 +536,20 @@ func handleStatsObject(ctx *statsContext) error {
 		obj.ErrorRates.PerSecond, obj.ErrorRates.PerMinute, obj.ErrorRates.PerHour)
 	if len(obj.ByCategory) > 0 {
 		fmt.Fprintln(c.term, "\nErrors by category:")
-		for cat, count := range obj.ByCategory {
-			fmt.Fprintf(c.term, "  %s: %d\n", cat, count)
+		for _, cat := range sortedKeys(obj.ByCategory) {
+			fmt.Fprintf(c.term, "  %s: %d\n", cat, obj.ByCategory[cat])
 		}
 	}
 	if len(obj.ByLocation) > 0 {
 		fmt.Fprintln(c.term, "\nErrors by location:")
-		for loc, count := range obj.ByLocation {
-			fmt.Fprintf(c.term, "  %s: %d\n", loc, count)
+		for _, loc := range sortedKeys(obj.ByLocation) {
+			fmt.Fprintf(c.term, "  %s: %d\n", loc, obj.ByLocation[loc])
 		}
 	}
 	if len(obj.ByScript) > 0 {
 		fmt.Fprintln(c.term, "\nErrors by script:")
-		for script, count := range obj.ByScript {
-			fmt.Fprintf(c.term, "  %s: %d\n", script, count)
+		for _, script := range sortedKeys(obj.ByScript) {
+			fmt.Fprintf(c.term, "  %s: %d\n", script, obj.ByScript[script])
 		}
 	}
 	return nil
@@ -775,8 +747,8 @@ func executeStatsCommand(c *Connection, parts []string) error {
 		parts: parts,
 	}
 
-	if sub, ok := statsSubcommands[subcmd]; ok {
-		return sub.handler(ctx)
+	if handler, ok := statsSubcommands[subcmd]; ok {
+		return handler(ctx)
 	}
 
 	printStatsHelp(c.term)
